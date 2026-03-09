@@ -200,6 +200,7 @@ let bulkMonitorTimer = null;
 let editingUserId = "";
 let transferConversationId = "";
 let bulkMessagesDraft = [""];
+let pendingConversationRefresh = false;
 const PLAYER_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
 const PLAYER_PAUSE_ICON = '<i class="bi bi-pause-fill"></i>';
 const PREVIEW_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
@@ -2148,6 +2149,10 @@ function connectRealtime() {
     if (!payload || !payload.conversationId) return;
 
     if (state.currentView === "chats") {
+      if (state.loadingConversations) {
+        pendingConversationRefresh = true;
+        return;
+      }
       loadConversations().catch((error) => console.error(error));
       if (payload.conversationId === state.selectedConversationId) {
         loadMessages().catch((error) => console.error(error));
@@ -2217,6 +2222,10 @@ async function loadConversations() {
     console.error(error);
   } finally {
     state.loadingConversations = false;
+    if (pendingConversationRefresh && state.currentView === "chats") {
+      pendingConversationRefresh = false;
+      loadConversations().catch((error) => console.error(error));
+    }
   }
 }
 
