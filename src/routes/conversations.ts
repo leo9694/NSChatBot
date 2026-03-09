@@ -238,6 +238,37 @@ router.get("/summary", async (req, res) => {
   });
 });
 
+router.post("/finalize-pending-all", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const role = String(authReq.authUser?.role || "");
+  if (role !== "administrador") {
+    return res.status(403).json({ error: "Somente administrador pode executar esta acao." });
+  }
+
+  const accountJid = String(req.body?.account_jid || req.query.account_jid || "").trim();
+
+  const result = await pool.query(
+    `
+    UPDATE conversations c
+    SET
+      service_status = 'finalized',
+      assigned_user_id = NULL,
+      finalized_at = NOW(),
+      updated_at = NOW()
+    FROM whatsapp_accounts wa
+    WHERE wa.id = c.account_id
+      AND c.service_status = 'pending'
+      AND ($1::text = '' OR wa.wa_jid = $1)
+    `,
+    [accountJid],
+  );
+
+  return res.status(200).json({
+    status: "ok",
+    finalized_count: Number(result.rowCount || 0),
+  });
+});
+
 router.get("/:conversationId/messages", async (req, res) => {
   const { conversationId } = req.params;
   const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);

@@ -173,6 +173,8 @@ const settingsProfileNameEl = document.getElementById("settingsProfileName");
 const settingsProfileUsernameEl = document.getElementById("settingsProfileUsername");
 const settingsProfileRoleEl = document.getElementById("settingsProfileRole");
 const settingsProfileSectorEl = document.getElementById("settingsProfileSector");
+const settingsAdminActionsEl = document.getElementById("settingsAdminActions");
+const settingsFinalizePendingBtnEl = document.getElementById("settingsFinalizePendingBtn");
 const createUserFormEl = document.getElementById("createUserForm");
 const newUserNameEl = document.getElementById("newUserName");
 const newUserUsernameEl = document.getElementById("newUserUsername");
@@ -625,6 +627,7 @@ function renderSettingsHeader() {
     settingsProfileUsernameEl.textContent = "-";
     settingsProfileRoleEl.textContent = "-";
     settingsProfileSectorEl.textContent = "-";
+    settingsAdminActionsEl.hidden = true;
     return;
   }
   settingsHeaderEl.textContent = `Logado como ${user.name} (${user.role})`;
@@ -632,6 +635,7 @@ function renderSettingsHeader() {
   settingsProfileUsernameEl.textContent = user.username || "-";
   settingsProfileRoleEl.textContent = user.role || "-";
   settingsProfileSectorEl.textContent = user.sector_name || "-";
+  settingsAdminActionsEl.hidden = user.role !== "administrador";
 }
 
 function setSettingsTab(tab) {
@@ -2810,6 +2814,29 @@ settingsLogoutBtnEl.addEventListener("click", async () => {
   if (!confirmed) return;
   closeSettingsModal();
   await performLogout();
+});
+settingsFinalizePendingBtnEl.addEventListener("click", async () => {
+  if (state.currentUser?.role !== "administrador") return;
+  const confirmed = await showConfirm(
+    "Mover todas as conversas pendentes para finalizadas?",
+    "Finalizar pendentes",
+    "Finalizar",
+    "Cancelar",
+  );
+  if (!confirmed) return;
+
+  try {
+    const result = await api("/conversations/finalize-pending-all", {
+      method: "POST",
+      body: JSON.stringify({
+        account_jid: state.connectedAccountJid || "",
+      }),
+    });
+    await loadConversations();
+    await showAlert(`${Number(result.finalized_count || 0)} conversa(s) pendente(s) finalizada(s).`);
+  } catch (error) {
+    await showAlert(error.message || "Falha ao finalizar pendentes.");
+  }
 });
 createUserFormEl.addEventListener("submit", handleCreateUserSubmit);
 createSectorFormEl.addEventListener("submit", handleCreateSectorSubmit);
