@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+npm-debug.log*
+.baileys_auth/
+storage/media/
+*.log
+.tmp_*.log

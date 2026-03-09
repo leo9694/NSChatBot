@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NS Chat</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div id="loginScreen" class="login-screen">
+      <div class="login-card">
+        <h1>NS Chat</h1>
+        <p>Acesse com seu usuario para entrar no painel.</p>
+        <form id="loginForm" class="login-form">
+          <label>
+            Usuario
+            <input id="loginUsername" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            Senha
+            <input id="loginPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button id="loginSubmitBtn" type="submit" class="btn-primary">Entrar</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="profileOverlay" class="profile-overlay"></div>
+    <aside id="profilePanel" class="profile-panel">
+      <header class="profile-header">
+        <h2>Perfil</h2>
+        <button id="profileCloseBtn" class="profile-close" type="button">×</button>
+      </header>
+
+      <div class="profile-avatar" id="profileAvatar">NS</div>
+
+      <div class="profile-field">
+        <span class="profile-label">Nome</span>
+        <strong id="profileName">-</strong>
+      </div>
+
+      <div class="profile-field">
+        <span class="profile-label">Recado</span>
+        <strong id="profileStatus">Conectado</strong>
+      </div>
+
+      <div class="profile-field">
+        <span class="profile-label">Telefone</span>
+        <strong id="profilePhone">-</strong>
+      </div>
+
+      <div class="profile-field">
+        <span class="profile-label">Conta WhatsApp</span>
+        <strong id="profileJid">-</strong>
+      </div>
+
+      <div class="profile-actions">
+        <button id="disconnectBtn" type="button" class="btn-danger">Sair</button>
+        <button id="syncHistoryBtn" type="button" class="btn-secondary">Sincronizar</button>
+        <button id="connectBtn" type="button" class="btn-primary">Conectar</button>
+      </div>
+
+      <div id="historySyncPanel" class="history-sync-panel" hidden>
+        <div class="history-sync-head">
+          <span>Sincronizando historico</span>
+          <strong id="historySyncPercent">0%</strong>
+        </div>
+        <div class="history-sync-bar">
+          <span id="historySyncBar"></span>
+        </div>
+        <small id="historySyncMeta">0 mensagens importadas</small>
+      </div>
+      <div id="historySyncHint" class="history-sync-hint">
+        Para puxar historico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.
+      </div>
+
+      <div id="qrPanel" class="qr-panel" hidden>
+        <span class="profile-label">Escaneie o QR</span>
+        <div id="qrCodeBox" class="qr-code-box"></div>
+        <small id="qrHint">Abra o WhatsApp no telefone e escaneie.</small>
+      </div>
+    </aside>
+
+    <div class="layout">
+      <aside class="left-rail">
+        <div class="rail-top">
+          <button id="railChats" class="rail-icon active" type="button" title="Chats">
+            <i class="bi bi-chat-left-text-fill"></i>
+          </button>
+          <button id="railBulkCreate" class="rail-icon" type="button" title="Disparo em massa">
+            <i class="bi bi-megaphone-fill"></i>
+          </button>
+          <button id="railBulkMonitor" class="rail-icon" type="button" title="Monitorar envios">
+            <i class="bi bi-bar-chart-line-fill"></i>
+          </button>
+        </div>
+        <div class="rail-bottom">
+          <button id="settingsBtn" class="rail-icon" type="button" title="Configuracoes">
+            <i class="bi bi-gear-fill"></i>
+          </button>
+          <div id="connectedProfile" class="rail-icon profile" title="Telefone desconectado">NS</div>
+          <div id="connectedPhoneMini" class="rail-phone">offline</div>
+        </div>
+      </aside>
+
+      <aside id="chatSidebar" class="sidebar">
+        <div class="sidebar-header">
+          <h1>NS Chat</h1>
+          <span id="waStatus" class="wa-status">Offline</span>
+        </div>
+
+        <div class="filters top-actions">
+          <button id="allChatsBtn" class="chip active">Tudo</button>
+          <button id="newChatBtn" class="chip new-chat">Novo chat</button>
+        </div>
+
+        <div class="search-wrap">
+          <input id="searchInput" type="text" placeholder="Pesquisar ou comecar nova conversa" />
+        </div>
+
+        <div class="filters service-tabs">
+          <button id="tabPendingBtn" class="chip active">
+            Pendentes
+            <span id="tabPendingCount" class="chip-badge" hidden>0</span>
+          </button>
+          <button id="tabInProgressBtn" class="chip">
+            Atendimento
+            <span id="tabInProgressCount" class="chip-badge" hidden>0</span>
+          </button>
+          <button id="tabFinalizedBtn" class="chip">Finalizados</button>
+          <button id="tabBulkBtn" class="chip">
+            Disparo
+            <span id="tabBulkCount" class="chip-badge" hidden>0</span>
+          </button>
+        </div>
+
+        <div id="conversationList" class="conversation-list"></div>
+      </aside>
+
+      <main class="chat-main">
+        <div id="chatView" class="view view-chat active">
+          <header class="chat-header" id="chatHeader">
+            <div class="chat-contact">Selecione uma conversa</div>
+          </header>
+
+          <section id="messagesArea" class="messages-area"></section>
+
+          <footer class="composer">
+            <form id="sendForm" class="composer-form">
+              <div id="textComposer" class="text-composer">
+                <div class="attach-wrap">
+                  <button id="attachBtn" type="button" class="attach-btn" title="Anexar">
+                    <i class="bi bi-plus-lg"></i>
+                  </button>
+                  <div id="attachMenu" class="attach-menu">
+                    <button id="attachPhotoBtn" type="button"><i class="bi bi-image"></i>Fotos e videos</button>
+                    <button id="attachFileBtn" type="button"><i class="bi bi-file-earmark"></i>Documento</button>
+                  </div>
+                  <input id="attachPhotoInput" type="file" accept="image/*,video/*" hidden />
+                  <input id="attachFileInput" type="file" hidden />
+                </div>
+                <input id="messageInput" type="text" placeholder="Digite uma mensagem" autocomplete="off" />
+                <button id="composerActionBtn" type="button" class="composer-action mic" title="Gravar audio">
+                  <span class="icon-mic">Mic</span>
+                  <span class="icon-send"><i class="bi bi-send-fill"></i></span>
+                </button>
+              </div>
+
+              <div id="audioComposer" class="audio-composer" hidden>
+                <button id="audioDeleteBtn" type="button" class="audio-icon danger" title="Excluir">
+                  <i class="bi bi-trash3-fill"></i>
+                </button>
+                <button id="audioPreviewBtn" type="button" class="audio-icon" title="Ouvir">
+                  <i class="bi bi-play-fill"></i>
+                </button>
+                <div class="audio-wave">
+                  <span class="audio-dots">||||||||||||||||||</span>
+                  <strong id="audioTimer">00:00</strong>
+                </div>
+                <button id="audioCancelBtn" type="button" class="audio-icon" title="Pausar">
+                  <i class="bi bi-pause-fill"></i>
+                </button>
+                <button id="audioSendBtn" type="button" class="audio-send" title="Enviar audio">
+                  <i class="bi bi-send-fill"></i>
+                </button>
+                <audio id="audioReviewPlayer" hidden></audio>
+              </div>
+            </form>
+          </footer>
+        </div>
+
+        <div id="bulkCreateView" class="view view-bulk">
+          <header class="chat-header">
+            <div class="chat-contact">Disparo em massa</div>
+          </header>
+          <section class="bulk-create-body">
+            <div class="bulk-card">
+              <h3>Configurar envio</h3>
+              <form id="bulkCreateForm" class="bulk-form" novalidate>
+                <label>
+                  Lista de contatos (Excel .xlsx)
+                  <input id="bulkFile" type="file" accept=".xlsx,.xls,.csv" required />
+                  <small>Colunas aceitas: nome/name e telefone/phone/numero.</small>
+                </label>
+                <label>
+                  Intervalo inicial (segundos)
+                  <input id="bulkIntervalMin" type="number" max="3600" value="40" required />
+                </label>
+                <label>
+                  Intervalo final (segundos)
+                  <input id="bulkIntervalMax" type="number" max="3600" value="60" required />
+                </label>
+                <div class="bulk-messages-block">
+                  <div class="bulk-messages-head">
+                    <span>Mensagens do disparo</span>
+                    <button id="bulkAddMessageBtn" type="button" class="btn-secondary">+ Adicionar mensagem</button>
+                  </div>
+                  <div id="bulkMessagesContainer" class="bulk-messages-container">
+                    <label class="bulk-message-item">
+                      Mensagem 1
+                      <textarea class="bulk-message-input" rows="4" placeholder="Digite a mensagem do disparo"></textarea>
+                    </label>
+                  </div>
+                  <small>Variaveis: {{nome}}, {{telefone}}</small>
+                </div>
+                <div class="bulk-meta">
+                  <span id="bulkContactsCount">0 contatos carregados</span>
+                </div>
+                <button class="btn-primary" type="submit">Iniciar disparo</button>
+                <div class="bulk-contacts-panel">
+                  <div class="bulk-contacts-toolbar">
+                    <input id="bulkContactsSearch" type="text" placeholder="Buscar contato por nome ou numero" />
+                    <div class="bulk-contacts-actions">
+                      <button id="bulkSelectAllBtn" type="button" class="btn-secondary">Marcar todos</button>
+                      <button id="bulkClearAllBtn" type="button" class="btn-secondary">Desmarcar</button>
+                    </div>
+                  </div>
+                  <div id="bulkContactsList" class="bulk-contacts-list"></div>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+
+        <div id="bulkMonitorView" class="view view-monitor">
+          <header class="chat-header">
+            <div class="chat-contact">Monitorar envios</div>
+          </header>
+          <section class="bulk-monitor-body">
+            <div class="bulk-card">
+              <h3>Progresso dos disparos</h3>
+              <div id="bulkJobsList" class="bulk-jobs-list"></div>
+            </div>
+            <div id="bulkJobDetails" class="bulk-job-details" hidden>Selecione um disparo para ver detalhes.</div>
+          </section>
+        </div>
+
+        <div id="settingsView" class="view view-settings">
+          <header class="chat-header">
+            <div class="chat-contact">Configuracoes</div>
+          </header>
+          <section class="settings-body">
+            <div class="settings-shell">
+              <aside class="settings-nav">
+                <button id="settingsTabPerfil" type="button" class="settings-nav-item active">
+                  <i class="bi bi-person-circle"></i> Perfil
+                </button>
+                <button id="settingsTabCreate" type="button" class="settings-nav-item">
+                  <i class="bi bi-person-plus-fill"></i> Cadastrar usuario
+                </button>
+                <button id="settingsTabList" type="button" class="settings-nav-item">
+                  <i class="bi bi-people-fill"></i> Listar usuario
+                </button>
+                <button id="settingsTabSectors" type="button" class="settings-nav-item">
+                  <i class="bi bi-diagram-3-fill"></i> Setores
+                </button>
+              </aside>
+
+              <div class="settings-content">
+                <div id="settingsPanelPerfil" class="bulk-card settings-panel active">
+                  <h3>Perfil do usuario</h3>
+                  <div id="settingsHeader" class="settings-header"></div>
+                  <div class="settings-profile-grid">
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Nome</span>
+                      <strong id="settingsProfileName">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Usuario (login)</span>
+                      <strong id="settingsProfileUsername">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Cargo</span>
+                      <strong id="settingsProfileRole">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Setor</span>
+                      <strong id="settingsProfileSector">-</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="settingsPanelCreate" class="bulk-card settings-panel">
+                  <h3>Cadastrar usuario</h3>
+                  <div id="settingsAdminSection" class="settings-admin" hidden>
+                    <form id="createUserForm" class="new-chat-form">
+                      <label>
+                        Nome
+                        <input id="newUserName" type="text" required />
+                      </label>
+                      <label>
+                        Usuario (login)
+                        <input id="newUserUsername" type="text" required />
+                      </label>
+                      <label>
+                        Senha
+                        <input id="newUserPassword" type="password" minlength="6" required />
+                      </label>
+                      <label>
+                        Cargo
+                        <select id="newUserRole">
+                          <option value="operador">operador</option>
+                          <option value="administrador">administrador</option>
+                        </select>
+                      </label>
+                      <label>
+                        Setor
+                        <select id="newUserSector" required></select>
+                      </label>
+                      <button type="submit" class="btn-primary">Cadastrar usuario</button>
+                    </form>
+                  </div>
+                </div>
+
+                <div id="settingsPanelList" class="bulk-card settings-panel">
+                  <h3>Usuarios cadastrados</h3>
+                  <div id="settingsUsersList" class="settings-users-list"></div>
+                </div>
+
+                <div id="settingsPanelSectors" class="bulk-card settings-panel">
+                  <h3>Setores</h3>
+                  <form id="createSectorForm" class="new-chat-form">
+                    <label>
+                      Nome do setor
+                      <input id="newSectorName" type="text" required />
+                    </label>
+                    <button type="submit" class="btn-primary">Cadastrar setor</button>
+                  </form>
+                  <div id="settingsSectorsList" class="settings-users-list"></div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-footer-actions">
+              <button id="settingsLogoutBtn" type="button" class="btn-danger">Encerrar sessao</button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <template id="conversationItemTpl">
+      <button class="conversation-item">
+        <div class="avatar"></div>
+        <div class="conversation-body">
+          <div class="conversation-top">
+            <strong class="name"></strong>
+            <span class="time"></span>
+          </div>
+          <div class="conversation-bottom">
+            <span class="preview"></span>
+            <span class="badge"></span>
+          </div>
+        </div>
+      </button>
+    </template>
+
+    <div id="conversationMenu" class="conversation-menu">
+      <button id="deleteConversationBtn" type="button">Excluir conversa</button>
+      <button id="editConversationBtn" type="button">Editar contato</button>
+      <button id="transferConversationBtn" type="button">Transferir atendimento</button>
+    </div>
+
+    <div id="newChatOverlay" class="new-chat-overlay"></div>
+    <div id="newChatModal" class="new-chat-modal">
+      <h3>Novo Chat</h3>
+      <form id="newChatForm" class="new-chat-form">
+        <label>
+          Nome do contato
+          <input id="newChatName" type="text" required />
+        </label>
+        <label>
+          Telefone (com DDI)
+          <input id="newChatPhone" type="text" placeholder="5511999998888" required />
+        </label>
+        <label>
+          Primeira mensagem (opcional)
+          <textarea id="newChatMessage" rows="3" placeholder="Ola, tudo bem?"></textarea>
+        </label>
+        <div class="new-chat-actions">
+          <button id="newChatCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Salvar e iniciar</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="editUserOverlay" class="new-chat-overlay"></div>
+    <div id="editUserModal" class="new-chat-modal">
+      <h3>Editar usuario</h3>
+      <form id="editUserForm" class="new-chat-form">
+        <label>
+          Nome
+          <input id="editUserName" type="text" required />
+        </label>
+        <label>
+          Usuario (login)
+          <input id="editUserUsername" type="text" required />
+        </label>
+        <label>
+          Cargo
+          <select id="editUserRole" required>
+            <option value="operador">operador</option>
+            <option value="administrador">administrador</option>
+          </select>
+        </label>
+        <label>
+          Setor
+          <select id="editUserSector" required></select>
+        </label>
+        <label>
+          Nova senha (opcional)
+          <input id="editUserPassword" type="password" minlength="6" placeholder="Deixe em branco para nao alterar" />
+        </label>
+        <div class="new-chat-actions">
+          <button id="editUserCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Salvar alteracoes</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="transferOverlay" class="new-chat-overlay"></div>
+    <div id="transferModal" class="new-chat-modal">
+      <h3>Transferir atendimento</h3>
+      <form id="transferForm" class="new-chat-form">
+        <label>
+          Atendente
+          <select id="transferUserSelect" required></select>
+        </label>
+        <div class="new-chat-actions">
+          <button id="transferCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Transferir</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="uiDialogOverlay" class="ui-dialog-overlay">
+      <div id="uiDialogModal" class="ui-dialog-modal" role="dialog" aria-modal="true" aria-labelledby="uiDialogTitle">
+        <div class="ui-dialog-header">
+          <h3 id="uiDialogTitle">NS Chat</h3>
+        </div>
+        <div id="uiDialogMessage" class="ui-dialog-message"></div>
+        <label id="uiDialogInputWrap" class="ui-dialog-input-wrap" hidden>
+          <input id="uiDialogInput" type="text" />
+        </label>
+        <div class="ui-dialog-actions">
+          <button id="uiDialogCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button id="uiDialogConfirm" type="button" class="btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="syncOverlay" class="sync-overlay" hidden>
+      <div class="sync-overlay-card">
+        <div class="sync-overlay-title">Sincronizando mensagens</div>
+        <div id="syncOverlayMessage" class="sync-overlay-message">
+          Aguarde enquanto o app sincroniza as mensagens pendentes.
+        </div>
+        <div class="sync-overlay-progress">
+          <span id="syncOverlayBar"></span>
+        </div>
+        <div class="sync-overlay-meta">
+          <strong id="syncOverlayPercent">0%</strong>
+          <span id="syncOverlayMeta">0 mensagens importadas</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="bulkImportOverlay" class="sync-overlay" hidden>
+      <div class="sync-overlay-card">
+        <div class="sync-overlay-title">Carregando contatos</div>
+        <div id="bulkImportMessage" class="sync-overlay-message">
+          Processando arquivo e preparando lista de contatos...
+        </div>
+        <div class="sync-overlay-progress">
+          <span id="bulkImportBar"></span>
+        </div>
+        <div class="sync-overlay-meta">
+          <strong id="bulkImportPercent">0%</strong>
+          <span id="bulkImportMeta">Iniciando...</span>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script src="/app/app.js"></script>
+  </body>
+</html>
