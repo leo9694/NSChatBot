@@ -2013,16 +2013,19 @@ function openMediaModal(type, url, mimeType = "") {
   mediaModalOverlayEl.hidden = false;
 }
 
-function renderMessages(messages) {
-  const preservedAudio = captureActiveAudioState();
-  messagesAreaEl.innerHTML = "";
+function isMessagesAreaNearBottom(threshold = 80) {
+  const distance = messagesAreaEl.scrollHeight - messagesAreaEl.scrollTop - messagesAreaEl.clientHeight;
+  return distance <= threshold;
+}
 
-  if (!messages || messages.length === 0) {
-    messagesAreaEl.innerHTML = '<div class="empty-state">Sem mensagens nesta conversa.</div>';
-    return;
-  }
+function scheduleStickMessagesToBottom() {
+  requestAnimationFrame(() => {
+    messagesAreaEl.scrollTop = messagesAreaEl.scrollHeight;
+  });
+}
 
-  const orderedMessages = [...messages].sort((a, b) => {
+function getOrderedMessages(messages) {
+  return [...(Array.isArray(messages) ? messages : [])].sort((a, b) => {
     const aPrimary = new Date(a.sent_at || a.created_at || 0).getTime();
     const bPrimary = new Date(b.sent_at || b.created_at || 0).getTime();
     if (aPrimary !== bPrimary) {
@@ -2037,142 +2040,216 @@ function renderMessages(messages) {
 
     return String(a.id || "").localeCompare(String(b.id || ""));
   });
+}
+
+function getMessageDateKey(message) {
+  const messageDate = new Date(message?.sent_at || message?.created_at || Date.now());
+  if (Number.isNaN(messageDate.getTime())) return "";
+  return `${messageDate.getFullYear()}-${messageDate.getMonth()}-${messageDate.getDate()}`;
+}
+
+function createMessageDateDivider(message) {
+  const dividerRow = document.createElement("div");
+  dividerRow.className = "msg-date-divider-row";
+  dividerRow.dataset.dateKey = getMessageDateKey(message);
+
+  const divider = document.createElement("div");
+  divider.className = "msg-date-divider";
+  divider.textContent = fmtDateDivider(message.sent_at || message.created_at);
+
+  dividerRow.appendChild(divider);
+  return dividerRow;
+}
+
+function createMessageRow(message, options = {}) {
+  const preservedAudio = options.preservedAudio || null;
+  const shouldStickToBottom = Boolean(options.shouldStickToBottom);
+  const row = document.createElement("div");
+  row.className = `msg-row ${message.from_me ? "outbound" : "inbound"}`;
+  row.dataset.messageId = String(message.id || "");
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg-bubble";
+  const mediaType = String(message?.metadata?.media_type || "");
+  const mimeType = String(message?.metadata?.mime_type || "");
+  const imageUrl =
+    message?.metadata?.image_preview_url ||
+    ((mediaType === "image" || mimeType.startsWith("image/")) ? message?.metadata?.file_url || "" : "");
+  const videoUrl =
+    message?.metadata?.video_url || ((mediaType === "video" || mimeType.startsWith("video/")) ? message?.metadata?.file_url || "" : "");
+  const videoPreviewUrl = message?.metadata?.video_preview_url || message?.metadata?.image_preview_url || "";
+  const videoMimeType = message?.metadata?.video_mime_type || mimeType || "";
+  const audioUrl = message?.metadata?.audio_url || "";
+  const fileUrl = message?.metadata?.file_url || "";
+  const fileName = message?.metadata?.file_name || "Arquivo";
+  const rawBody = String(message.body || "").trim();
+  const isImagePlaceholder = /^\[imagem\]$/i.test(rawBody);
+  const isVideoPlaceholder = /^\[video\]$/i.test(rawBody);
+  const isAudioPlaceholder = /^\[audio\]$/i.test(rawBody);
+  const isFilePlaceholder = /^\[arquivo\]/i.test(rawBody) || /^\[documento\]$/i.test(rawBody);
+  const shouldRenderText =
+    Boolean(rawBody) &&
+    !(
+      (imageUrl && isImagePlaceholder) ||
+      (videoUrl && isVideoPlaceholder) ||
+      (audioUrl && isAudioPlaceholder) ||
+      (fileUrl && isFilePlaceholder)
+    );
+
+  if (imageUrl) {
+    const img = document.createElement("img");
+    img.className = "msg-image";
+    img.src = imageUrl;
+    img.alt = "Imagem recebida";
+    img.loading = "lazy";
+    if (shouldStickToBottom) {
+      img.addEventListener("load", scheduleStickMessagesToBottom, { once: true });
+    }
+    img.addEventListener("click", () => {
+      openMediaModal("image", imageUrl);
+    });
+    bubble.appendChild(img);
+  }
+
+  if (videoUrl) {
+    const videoWrap = document.createElement("button");
+    videoWrap.type = "button";
+    videoWrap.className = "msg-video-wrap";
+    const preview = document.createElement(videoPreviewUrl ? "img" : "div");
+    preview.className = "msg-video";
+    if (videoPreviewUrl) {
+      preview.src = videoPreviewUrl;
+      preview.alt = "Video recebido";
+      preview.loading = "lazy";
+      if (shouldStickToBottom) {
+        preview.addEventListener("load", scheduleStickMessagesToBottom, { once: true });
+      }
+    } else {
+      preview.classList.add("is-placeholder");
+    }
+
+    const playBadge = document.createElement("span");
+    playBadge.className = "msg-video-play";
+    playBadge.innerHTML = '<i class="bi bi-play-fill"></i>';
+
+    videoWrap.appendChild(preview);
+    videoWrap.appendChild(playBadge);
+    videoWrap.addEventListener("click", () => {
+      openMediaModal("video", videoUrl, videoMimeType);
+    });
+    bubble.appendChild(videoWrap);
+  }
+
+  if (audioUrl) {
+    const player = createCustomAudioPlayer(message.id, audioUrl, preservedAudio);
+    bubble.appendChild(player);
+  }
+
+  if (fileUrl && !imageUrl && !videoUrl && !audioUrl) {
+    const doc = document.createElement("a");
+    doc.className = "msg-file";
+    doc.href = fileUrl;
+    doc.target = "_blank";
+    doc.rel = "noopener noreferrer";
+    doc.download = fileName;
+    doc.innerHTML = `<i class="bi bi-file-earmark"></i><span>${fileName}</span>`;
+    bubble.appendChild(doc);
+  }
+
+  if (shouldRenderText) {
+    const text = document.createElement("div");
+    text.className = "msg-text";
+    text.textContent = rawBody;
+    bubble.appendChild(text);
+  }
+
+  if ((imageUrl || videoUrl || audioUrl) && !shouldRenderText) {
+    bubble.classList.add("media-only");
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "msg-meta";
+
+  const t = document.createElement("span");
+  t.textContent = fmtTime(message.sent_at || message.created_at);
+
+  const checksStatus = checksByStatus(message);
+  const checks = document.createElement("span");
+  checks.className = `checks ${checksStatus.type || ""}`.trim();
+  checks.textContent = checksStatus.text;
+
+  meta.appendChild(t);
+  if (message.from_me) {
+    meta.appendChild(checks);
+  }
+
+  bubble.appendChild(meta);
+  row.appendChild(bubble);
+  return row;
+}
+
+function appendMessageToDOM(message, previousLastMessage = null) {
+  const shouldStickToBottom = isMessagesAreaNearBottom();
+  const emptyState = messagesAreaEl.querySelector(".empty-state");
+  if (emptyState) {
+    messagesAreaEl.innerHTML = "";
+  }
+
+  const previousDateKey = previousLastMessage ? getMessageDateKey(previousLastMessage) : "";
+  const nextDateKey = getMessageDateKey(message);
+  if (nextDateKey && nextDateKey !== previousDateKey) {
+    messagesAreaEl.appendChild(createMessageDateDivider(message));
+  }
+
+  const row = createMessageRow(message, {
+    preservedAudio: captureActiveAudioState(),
+    shouldStickToBottom,
+  });
+  messagesAreaEl.appendChild(row);
+
+  if (shouldStickToBottom) {
+    messagesAreaEl.scrollTop = messagesAreaEl.scrollHeight;
+  }
+}
+
+function renderMessages(messages) {
+  const preservedAudio = captureActiveAudioState();
+  const previousScrollHeight = messagesAreaEl.scrollHeight;
+  const previousScrollTop = messagesAreaEl.scrollTop;
+  const distanceFromBottom = previousScrollHeight - previousScrollTop - messagesAreaEl.clientHeight;
+  const shouldStickToBottom = isMessagesAreaNearBottom();
+  messagesAreaEl.innerHTML = "";
+
+  if (!messages || messages.length === 0) {
+    messagesAreaEl.innerHTML = '<div class="empty-state">Sem mensagens nesta conversa.</div>';
+    return;
+  }
+
+  const orderedMessages = getOrderedMessages(messages);
 
   let lastDateKey = "";
   for (const message of orderedMessages) {
-    const messageDate = new Date(message.sent_at || message.created_at || Date.now());
-    const messageDateKey = Number.isNaN(messageDate.getTime())
-      ? ""
-      : `${messageDate.getFullYear()}-${messageDate.getMonth()}-${messageDate.getDate()}`;
+    const messageDateKey = getMessageDateKey(message);
 
     if (messageDateKey && messageDateKey !== lastDateKey) {
       lastDateKey = messageDateKey;
-      const dividerRow = document.createElement("div");
-      dividerRow.className = "msg-date-divider-row";
-
-      const divider = document.createElement("div");
-      divider.className = "msg-date-divider";
-      divider.textContent = fmtDateDivider(message.sent_at || message.created_at);
-
-      dividerRow.appendChild(divider);
-      messagesAreaEl.appendChild(dividerRow);
+      messagesAreaEl.appendChild(createMessageDateDivider(message));
     }
 
-    const row = document.createElement("div");
-    row.className = `msg-row ${message.from_me ? "outbound" : "inbound"}`;
-
-    const bubble = document.createElement("div");
-    bubble.className = "msg-bubble";
-    const mediaType = String(message?.metadata?.media_type || "");
-    const mimeType = String(message?.metadata?.mime_type || "");
-    const imageUrl =
-      message?.metadata?.image_preview_url ||
-      ((mediaType === "image" || mimeType.startsWith("image/")) ? message?.metadata?.file_url || "" : "");
-    const videoUrl =
-      message?.metadata?.video_url || ((mediaType === "video" || mimeType.startsWith("video/")) ? message?.metadata?.file_url || "" : "");
-    const videoMimeType = message?.metadata?.video_mime_type || mimeType || "";
-    const audioUrl = message?.metadata?.audio_url || "";
-    const fileUrl = message?.metadata?.file_url || "";
-    const fileName = message?.metadata?.file_name || "Arquivo";
-    const rawBody = String(message.body || "").trim();
-    const isImagePlaceholder = /^\[imagem\]$/i.test(rawBody);
-    const isVideoPlaceholder = /^\[video\]$/i.test(rawBody);
-    const isAudioPlaceholder = /^\[audio\]$/i.test(rawBody);
-    const isFilePlaceholder = /^\[arquivo\]/i.test(rawBody) || /^\[documento\]$/i.test(rawBody);
-    const shouldRenderText =
-      Boolean(rawBody) &&
-      !(
-        (imageUrl && isImagePlaceholder) ||
-        (videoUrl && isVideoPlaceholder) ||
-        (audioUrl && isAudioPlaceholder) ||
-        (fileUrl && isFilePlaceholder)
-      );
-
-    if (imageUrl) {
-      const img = document.createElement("img");
-      img.className = "msg-image";
-      img.src = imageUrl;
-      img.alt = "Imagem recebida";
-      img.loading = "lazy";
-      img.addEventListener("click", () => {
-        openMediaModal("image", imageUrl);
-      });
-      bubble.appendChild(img);
-    }
-
-    if (videoUrl) {
-      const videoWrap = document.createElement("button");
-      videoWrap.type = "button";
-      videoWrap.className = "msg-video-wrap";
-
-      const video = document.createElement("video");
-      video.className = "msg-video";
-      video.src = videoUrl;
-      video.preload = "metadata";
-      video.muted = true;
-      video.playsInline = true;
-
-      const playBadge = document.createElement("span");
-      playBadge.className = "msg-video-play";
-      playBadge.innerHTML = '<i class="bi bi-play-fill"></i>';
-
-      videoWrap.appendChild(video);
-      videoWrap.appendChild(playBadge);
-      videoWrap.addEventListener("click", () => {
-        openMediaModal("video", videoUrl, videoMimeType);
-      });
-      bubble.appendChild(videoWrap);
-    }
-
-    if (audioUrl) {
-      const player = createCustomAudioPlayer(message.id, audioUrl, preservedAudio);
-      bubble.appendChild(player);
-    }
-
-    if (fileUrl && !imageUrl && !videoUrl && !audioUrl) {
-      const doc = document.createElement("a");
-      doc.className = "msg-file";
-      doc.href = fileUrl;
-      doc.target = "_blank";
-      doc.rel = "noopener noreferrer";
-      doc.download = fileName;
-      doc.innerHTML = `<i class="bi bi-file-earmark"></i><span>${fileName}</span>`;
-      bubble.appendChild(doc);
-    }
-
-    if (shouldRenderText) {
-      const text = document.createElement("div");
-      text.className = "msg-text";
-      text.textContent = rawBody;
-      bubble.appendChild(text);
-    }
-
-    if ((imageUrl || videoUrl || audioUrl) && !shouldRenderText) {
-      bubble.classList.add("media-only");
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "msg-meta";
-
-    const t = document.createElement("span");
-    t.textContent = fmtTime(message.sent_at || message.created_at);
-
-    const checksStatus = checksByStatus(message);
-    const checks = document.createElement("span");
-    checks.className = `checks ${checksStatus.type || ""}`.trim();
-    checks.textContent = checksStatus.text;
-
-    meta.appendChild(t);
-    if (message.from_me) {
-      meta.appendChild(checks);
-    }
-
-    bubble.appendChild(meta);
-    row.appendChild(bubble);
-    messagesAreaEl.appendChild(row);
+    messagesAreaEl.appendChild(
+      createMessageRow(message, {
+        preservedAudio,
+        shouldStickToBottom,
+      }),
+    );
   }
 
-  messagesAreaEl.scrollTop = messagesAreaEl.scrollHeight;
+  if (shouldStickToBottom) {
+    messagesAreaEl.scrollTop = messagesAreaEl.scrollHeight;
+  } else if (previousScrollHeight > 0) {
+    const nextScrollTop = Math.max(0, messagesAreaEl.scrollHeight - messagesAreaEl.clientHeight - distanceFromBottom);
+    messagesAreaEl.scrollTop = Number.isFinite(nextScrollTop) ? nextScrollTop : previousScrollTop;
+  }
 }
 
 function scheduleRealtimeReconnect() {
@@ -2191,7 +2268,7 @@ function queueConversationRefresh() {
       pendingConversationRefresh = true;
       return;
     }
-    loadConversations().catch((error) => console.error(error));
+    loadConversations({ skipMessagesReload: true }).catch((error) => console.error(error));
   }, 120);
 }
 
@@ -2225,26 +2302,32 @@ function closeRealtime() {
 function upsertRealtimeMessage(message) {
   if (!message || !message.id) return;
   const current = Array.isArray(state.currentMessages) ? [...state.currentMessages] : [];
+  const orderedBefore = getOrderedMessages(current);
+  const lastBefore = orderedBefore.length ? orderedBefore[orderedBefore.length - 1] : null;
   const index = current.findIndex((item) => item.id === message.id);
   if (index >= 0) {
     current[index] = { ...current[index], ...message };
-  } else {
-    current.push(message);
+    state.currentMessages = getOrderedMessages(current);
+    renderMessages(state.currentMessages);
+    return;
   }
 
-  current.sort((a, b) => {
-    const aPrimary = new Date(a.sent_at || a.created_at || 0).getTime();
-    const bPrimary = new Date(b.sent_at || b.created_at || 0).getTime();
-    if (aPrimary !== bPrimary) return aPrimary - bPrimary;
+  current.push(message);
+  const orderedAfter = getOrderedMessages(current);
+  state.currentMessages = orderedAfter;
 
-    const aSecondary = new Date(a.created_at || a.sent_at || 0).getTime();
-    const bSecondary = new Date(b.created_at || b.sent_at || 0).getTime();
-    if (aSecondary !== bSecondary) return aSecondary - bSecondary;
+  const newLast = orderedAfter.length ? orderedAfter[orderedAfter.length - 1] : null;
+  const canAppendOnly =
+    Boolean(newLast) &&
+    newLast.id === message.id &&
+    orderedBefore.length + 1 === orderedAfter.length &&
+    orderedAfter.slice(0, -1).every((item, idx) => item.id === orderedBefore[idx]?.id);
 
-    return String(a.id || "").localeCompare(String(b.id || ""));
-  });
+  if (canAppendOnly) {
+    appendMessageToDOM(message, lastBefore);
+    return;
+  }
 
-  state.currentMessages = current;
   renderMessages(state.currentMessages);
 }
 
@@ -2267,10 +2350,11 @@ function handleRealtimePayload(payload, eventType = "message_saved") {
 
   if (state.currentView === "chats") {
     if (payload.conversationId === state.selectedConversationId) {
-      if (payload.message) {
+      if (payload.message && eventType === "message_saved") {
         upsertRealtimeMessage(payload.message);
+      } else {
+        queueMessageRefresh();
       }
-      queueMessageRefresh();
     }
     queueConversationRefresh();
   }
@@ -2408,7 +2492,8 @@ async function connectRealtime() {
   realtimePollController = null;
 }
 
-async function loadConversations() {
+async function loadConversations(options = {}) {
+  const skipMessagesReload = Boolean(options.skipMessagesReload);
   if (!state.isAuthenticated) return;
   if (!state.connectedAccountJid) {
     clearChatStateForDisconnected();
@@ -2443,7 +2528,9 @@ async function loadConversations() {
 
     if (selectedExists) {
       state.selectedConversation = selectedExists;
-      await loadMessages();
+      if (!skipMessagesReload) {
+        await loadMessages();
+      }
     } else if (state.conversations.length > 0) {
       state.selectedConversationId = state.conversations[0].id;
       state.selectedConversation = state.conversations[0];

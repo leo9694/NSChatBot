@@ -959,14 +959,22 @@ body.auth-lock {
 }
 
 .msg-video {
-  width: auto;
-  height: auto;
+  width: min(380px, 56vw);
+  aspect-ratio: 16 / 9;
   max-width: min(380px, 56vw);
   max-height: 380px;
   border-radius: 8px;
   display: block;
-  object-fit: contain;
+  object-fit: cover;
   background: #000;
+}
+
+.msg-video.is-placeholder {
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+    #0b1217;
 }
 
 .msg-video-play {
@@ -987,6 +995,7 @@ body.auth-lock {
   }
 
   .msg-video {
+    width: min(300px, 76vw);
     max-width: min(300px, 76vw);
     max-height: 300px;
   }

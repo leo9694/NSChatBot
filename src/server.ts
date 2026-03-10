@@ -13,6 +13,7 @@ import bulkDispatchRoutes from "./routes/bulk-dispatch";
 import messageRoutes from "./routes/messages";
 import realtimeRoutes from "./routes/realtime";
 import whatsappRoutes from "./routes/whatsapp";
+import { getMediaBlob, syncLocalMediaDirectoryToDatabase } from "./services/media.service";
 import { startWhatsAppSession } from "./services/whatsapp.service";
 import { resumePendingBulkDispatchJobs } from "./services/bulk-dispatch.service";
 
@@ -25,18 +26,33 @@ app.use(healthRoutes);
 app.use("/auth", authRoutes);
 app.use("/media", express.static(mediaDir));
 app.get("/media/:fileName", (req, res) => {
+  void (async () => {
   const fileName = path.basename(String(req.params.fileName || ""));
   const localPath = path.join(mediaDir, fileName);
 
   if (fs.existsSync(localPath)) {
-    return res.sendFile(localPath);
+      return res.sendFile(localPath);
   }
+
+    const blob = await getMediaBlob(fileName);
+    if (blob) {
+      if (blob.mimeType) {
+        res.setHeader("Content-Type", blob.mimeType);
+      }
+      return res.send(blob.content);
+    }
 
   if (env.mediaFallbackBaseUrl) {
-    return res.redirect(`${env.mediaFallbackBaseUrl}/media/${encodeURIComponent(fileName)}`);
+      return res.redirect(`${env.mediaFallbackBaseUrl}/media/${encodeURIComponent(fileName)}`);
   }
 
-  return res.status(404).json({ error: "Midia nao encontrada." });
+    return res.status(404).json({ error: "Midia nao encontrada." });
+  })().catch((error) => {
+    console.error("Erro ao servir midia:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Falha ao servir midia." });
+    }
+  });
 });
 app.use("/app", express.static(path.resolve(process.cwd(), "web")));
 app.get("/", (_, res) => {
@@ -56,6 +72,15 @@ app.listen(env.port, async () => {
     const cleanup = await cleanupInvalidConversations();
     await startWhatsAppSession();
     await resumePendingBulkDispatchJobs();
+    syncLocalMediaDirectoryToDatabase()
+      .then((result) => {
+        if (result.synced > 0) {
+          console.log(`Media sync: ${result.synced} arquivo(s) enviados para o banco.`);
+        }
+      })
+      .catch((error) => {
+        console.error("Falha ao sincronizar midia local para o banco:", error);
+      });
     console.log(`API running on port ${env.port}`);
     console.log("Database connection: OK");
     if (cleanup.conversations > 0 || cleanup.messages > 0) {

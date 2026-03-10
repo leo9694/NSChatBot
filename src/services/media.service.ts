@@ -1,7 +1,30 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pool } from "../db/pool";
 
 const MEDIA_DIR = path.resolve(process.cwd(), "storage", "media");
+let ensureMediaStoragePromise: Promise<void> | null = null;
+
+async function ensureMediaStorageSchema(): Promise<void> {
+  if (!ensureMediaStoragePromise) {
+    ensureMediaStoragePromise = pool
+      .query(`
+        CREATE TABLE IF NOT EXISTS media_files (
+          file_name TEXT PRIMARY KEY,
+          mime_type TEXT,
+          content BYTEA NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
+      .then(() => undefined)
+      .catch((error) => {
+        ensureMediaStoragePromise = null;
+        throw error;
+      });
+  }
+
+  await ensureMediaStoragePromise;
+}
 
 function extFromFileName(fileName: string): string {
   const ext = path.extname(String(fileName || "")).replace(".", "").toLowerCase();
@@ -39,6 +62,20 @@ function safeId(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
+async function persistMediaBlob(fileName: string, mimeType: string | null | undefined, buffer: Buffer): Promise<void> {
+  await ensureMediaStorageSchema();
+  await pool.query(
+    `
+    INSERT INTO media_files (file_name, mime_type, content)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (file_name) DO UPDATE
+      SET mime_type = COALESCE(EXCLUDED.mime_type, media_files.mime_type),
+          content = EXCLUDED.content
+    `,
+    [fileName, mimeType || null, buffer],
+  );
+}
+
 export async function saveImageBuffer(input: {
   buffer: Buffer;
   mimeType?: string | null;
@@ -64,5 +101,67 @@ export async function saveMediaBuffer(input: {
   const fullPath = path.join(MEDIA_DIR, fileName);
 
   await writeFile(fullPath, input.buffer);
+  await persistMediaBlob(fileName, input.mimeType || null, input.buffer);
   return `/media/${fileName}`;
+}
+
+export async function getMediaBlob(fileName: string): Promise<{ mimeType: string | null; content: Buffer } | null> {
+  await ensureMediaStorageSchema();
+  const result = await pool.query<{ mime_type: string | null; content: Buffer }>(
+    `
+    SELECT mime_type, content
+    FROM media_files
+    WHERE file_name = $1
+    LIMIT 1
+    `,
+    [fileName],
+  );
+  if (!result.rows.length) {
+    return null;
+  }
+  return {
+    mimeType: result.rows[0].mime_type || null,
+    content: result.rows[0].content,
+  };
+}
+
+export async function syncLocalMediaDirectoryToDatabase(): Promise<{ synced: number }> {
+  await ensureMediaStorageSchema();
+  await mkdir(MEDIA_DIR, { recursive: true });
+  const entries = await readdir(MEDIA_DIR, { withFileTypes: true });
+  let synced = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const fileName = entry.name;
+    const existing = await pool.query(`SELECT 1 FROM media_files WHERE file_name = $1 LIMIT 1`, [fileName]);
+    if (existing.rows.length > 0) continue;
+
+    const fullPath = path.join(MEDIA_DIR, fileName);
+    const buffer = await readFile(fullPath);
+    const ext = path.extname(fileName).replace(".", "").toLowerCase();
+    const mimeType =
+      ext === "jpg" || ext === "jpeg"
+        ? "image/jpeg"
+        : ext === "png"
+          ? "image/png"
+          : ext === "webp"
+            ? "image/webp"
+            : ext === "gif"
+              ? "image/gif"
+              : ext === "mp4"
+                ? "video/mp4"
+                : ext === "ogg"
+                  ? "audio/ogg"
+                  : ext === "mp3"
+                    ? "audio/mpeg"
+                    : ext === "pdf"
+                      ? "application/pdf"
+                      : "application/octet-stream";
+
+    await persistMediaBlob(fileName, mimeType, buffer);
+    synced += 1;
+  }
+
+  return { synced };
 }
