@@ -18,4 +18,5 @@ export const env = {
   port: Number(optional("PORT", "3000")),
   databaseUrl: required("DATABASE_URL"),
   whatsappSessionPath: optional("WHATSAPP_SESSION_PATH", "./.baileys_auth"),
+  mediaFallbackBaseUrl: optional("MEDIA_FALLBACK_BASE_URL", "").replace(/\/+$/, ""),
 };

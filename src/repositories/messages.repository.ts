@@ -46,6 +46,48 @@ interface UpdateOutboundMessageStatusInput {
 
 let ensureMessagesSchemaPromise: Promise<void> | null = null;
 
+interface RealtimeMessageRow {
+  id: string;
+  conversation_id: string;
+  direction: string;
+  from_me: boolean;
+  message_type: string;
+  body: string;
+  status: string | null;
+  metadata: Record<string, unknown> | null;
+  sent_at: Date | null;
+  delivered_at?: Date | null;
+  read_at?: Date | null;
+  failed_at?: Date | null;
+  created_at: Date;
+  updated_at?: Date;
+}
+
+function compactMetadata(metadata?: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(metadata || {}).filter(([, value]) => value !== null && value !== undefined && value !== ""),
+  );
+}
+
+function toRealtimeMessage(row: RealtimeMessageRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    conversation_id: row.conversation_id,
+    direction: row.direction,
+    from_me: row.from_me,
+    message_type: row.message_type,
+    body: row.body,
+    status: row.status,
+    metadata: row.metadata || {},
+    sent_at: row.sent_at ? row.sent_at.toISOString() : null,
+    delivered_at: row.delivered_at ? row.delivered_at.toISOString() : null,
+    read_at: row.read_at ? row.read_at.toISOString() : null,
+    failed_at: row.failed_at ? row.failed_at.toISOString() : null,
+    created_at: row.created_at.toISOString(),
+    updated_at: row.updated_at ? row.updated_at.toISOString() : row.created_at.toISOString(),
+  };
+}
+
 async function ensureMessagesSchema(): Promise<void> {
   if (!ensureMessagesSchemaPromise) {
     ensureMessagesSchemaPromise = (async () => {
@@ -66,6 +108,7 @@ async function ensureMessagesSchema(): Promise<void> {
 
 export async function saveOutboundMessage(input: SaveOutboundMessageInput): Promise<void> {
   await ensureMessagesSchema();
+  const cleanMetadata = compactMetadata(input.metadata);
   const account = await upsertWhatsAppAccount({
     waJid: input.accountJid,
     displayName: input.accountDisplayName || null,
@@ -91,9 +134,11 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
   };
 
   if (input.externalMessageId) {
-    const existingByExternalId = await pool.query<{ id: string; conversation_id: string }>(
+    const existingByExternalId = await pool.query<RealtimeMessageRow>(
       `
-      SELECT id, conversation_id
+      SELECT
+        id, conversation_id, direction, from_me, message_type, body, status,
+        metadata, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
       FROM messages
       WHERE account_id = $1
         AND external_message_id = $2
@@ -104,6 +149,40 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
 
     if (existingByExternalId.rows.length > 0) {
       await markConversationBulkInitiated(existingByExternalId.rows[0].conversation_id);
+      await pool.query(
+        `
+        UPDATE messages
+        SET
+          message_type = COALESCE($3::text, message_type),
+          body = CASE
+            WHEN COALESCE($4::text, '') <> '' THEN $4::text
+            ELSE body
+          END,
+          status = COALESCE($5::text, status),
+          provider_payload = CASE
+            WHEN $6::jsonb = '{}'::jsonb THEN provider_payload
+            ELSE COALESCE(provider_payload, '{}'::jsonb) || $6::jsonb
+          END,
+          metadata = CASE
+            WHEN $7::jsonb = '{}'::jsonb THEN metadata
+            ELSE COALESCE(metadata, '{}'::jsonb) || $7::jsonb
+          END,
+          sent_at = COALESCE($8::timestamptz, sent_at),
+          updated_at = NOW()
+        WHERE id = $1
+          AND conversation_id = $2
+        `,
+        [
+          existingByExternalId.rows[0].id,
+          existingByExternalId.rows[0].conversation_id,
+          input.messageType || null,
+          input.body || null,
+          input.status || null,
+          JSON.stringify(input.payload || {}),
+          JSON.stringify(cleanMetadata),
+          input.sentAt || null,
+        ],
+      );
       return;
     }
   }
@@ -141,7 +220,7 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
     }
   }
 
-  const inserted = await pool.query<{ id: string; created_at: Date }>(
+  const inserted = await pool.query<RealtimeMessageRow>(
     `
     INSERT INTO messages (
       account_id, conversation_id, client_id, campaign_id, phone, wa_jid,
@@ -154,7 +233,9 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
       'whatsapp_baileys', $10, $11::jsonb, $12::jsonb, $13
     )
     ON CONFLICT (account_id, external_message_id) WHERE external_message_id IS NOT NULL DO NOTHING
-    RETURNING id, created_at
+    RETURNING
+      id, conversation_id, direction, from_me, message_type, body, status,
+      metadata, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
     `,
     [
       account.id,
@@ -168,7 +249,7 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
       input.status || "sent",
       input.externalMessageId || null,
       JSON.stringify(input.payload || {}),
-      JSON.stringify(input.metadata || {}),
+      JSON.stringify(cleanMetadata),
       input.sentAt || new Date(),
     ],
   );
@@ -208,21 +289,25 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
       messageId: inserted.rows[0].id,
       direction: "outbound",
       createdAt: inserted.rows[0].created_at.toISOString(),
+      message: toRealtimeMessage(inserted.rows[0]),
     });
   }
 }
 
 export async function saveInboundMessage(input: SaveInboundMessageInput): Promise<boolean> {
   await ensureMessagesSchema();
+  const cleanMetadata = compactMetadata(input.metadata);
   const account = await upsertWhatsAppAccount({
     waJid: input.accountJid,
     displayName: input.accountDisplayName || null,
   });
 
   if (input.externalMessageId) {
-    const existingByExternalId = await pool.query<{ id: string }>(
+    const existingByExternalId = await pool.query<RealtimeMessageRow>(
       `
-      SELECT id
+      SELECT
+        id, conversation_id, direction, from_me, message_type, body, status,
+        metadata, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
       FROM messages
       WHERE account_id = $1
         AND external_message_id = $2
@@ -232,6 +317,46 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
     );
 
     if (existingByExternalId.rows.length > 0) {
+      await pool.query(
+        `
+        UPDATE messages
+        SET
+          message_type = COALESCE($3::text, message_type),
+          body = CASE
+            WHEN COALESCE($4::text, '') <> '' THEN $4::text
+            ELSE body
+          END,
+          provider_payload = CASE
+            WHEN $5::jsonb = '{}'::jsonb THEN provider_payload
+            ELSE COALESCE(provider_payload, '{}'::jsonb) || $5::jsonb
+          END,
+          metadata = CASE
+            WHEN $6::jsonb = '{}'::jsonb THEN metadata
+            ELSE COALESCE(metadata, '{}'::jsonb) || $6::jsonb
+          END,
+          sent_at = COALESCE($7::timestamptz, sent_at),
+          updated_at = NOW()
+        WHERE id = $1
+          AND conversation_id = $2
+        `,
+        [
+          existingByExternalId.rows[0].id,
+          existingByExternalId.rows[0].conversation_id,
+          input.messageType || null,
+          input.body || null,
+          JSON.stringify(input.payload || {}),
+          JSON.stringify(cleanMetadata),
+          input.sentAt || null,
+        ],
+      );
+      publishMessageSaved({
+        accountJid: input.accountJid,
+        conversationId: existingByExternalId.rows[0].conversation_id,
+        messageId: existingByExternalId.rows[0].id,
+        direction: "inbound",
+        createdAt: existingByExternalId.rows[0].created_at.toISOString(),
+        message: toRealtimeMessage(existingByExternalId.rows[0]),
+      });
       return false;
     }
   }
@@ -246,9 +371,11 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
   });
 
   if (!input.externalMessageId && input.sentAt) {
-    const existing = await pool.query<{ id: string }>(
+    const existing = await pool.query<RealtimeMessageRow>(
       `
-      SELECT id
+      SELECT
+        id, conversation_id, direction, from_me, message_type, body, status,
+        metadata, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
       FROM messages
       WHERE account_id = $1
         AND from_me = false
@@ -261,11 +388,19 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
     );
 
     if (existing.rows.length > 0) {
+      publishMessageSaved({
+        accountJid: input.accountJid,
+        conversationId: existing.rows[0].conversation_id,
+        messageId: existing.rows[0].id,
+        direction: "inbound",
+        createdAt: existing.rows[0].created_at.toISOString(),
+        message: toRealtimeMessage(existing.rows[0]),
+      });
       return false;
     }
   }
 
-  const inserted = await pool.query<{ id: string; created_at: Date }>(
+  const inserted = await pool.query<RealtimeMessageRow>(
     `
     INSERT INTO messages (
       account_id, conversation_id, phone, wa_jid, direction, from_me,
@@ -278,7 +413,9 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
       $8::jsonb, $9::jsonb, $10
     )
     ON CONFLICT (account_id, external_message_id) WHERE external_message_id IS NOT NULL DO NOTHING
-    RETURNING id, created_at
+    RETURNING
+      id, conversation_id, direction, from_me, message_type, body, status,
+      metadata, sent_at, delivered_at, read_at, failed_at, created_at, updated_at
     `,
     [
       account.id,
@@ -289,7 +426,7 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
       input.body,
       input.externalMessageId || null,
       JSON.stringify(input.payload || {}),
-      JSON.stringify(input.metadata || {}),
+      JSON.stringify(cleanMetadata),
       input.sentAt || new Date(),
     ],
   );
@@ -301,6 +438,7 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
       messageId: inserted.rows[0].id,
       direction: "inbound",
       createdAt: inserted.rows[0].created_at.toISOString(),
+      message: toRealtimeMessage(inserted.rows[0]),
     });
     return true;
   }

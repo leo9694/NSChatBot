@@ -49,6 +49,11 @@ interface ExtractedDocumentInfo {
   mimeType: string | null;
 }
 
+interface ExtractedVideoInfo {
+  url: string | null;
+  mimeType: string | null;
+}
+
 let sock: ReturnType<typeof makeWASocket> | null = null;
 let started = false;
 let connected = false;
@@ -158,19 +163,48 @@ function updateHistorySyncProgress(progress?: number | null, isLatest?: boolean)
 async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
   const remoteJid = message.key.remoteJid;
   const remoteJidAlt = (message.key as any).remoteJidAlt;
+  const participant = message.key.participant || null;
   const messageType = detectMessageType(message.message);
   const fromMe = Boolean(message.key.fromMe);
   const externalMessageId = message.key.id || null;
+  const remoteCandidates = [String(remoteJid || ""), String(remoteJidAlt || "")].filter(Boolean);
+  const isGroup = remoteCandidates.some((jid) => jid.endsWith("@g.us"));
+  const isStatus = remoteCandidates.some((jid) => jid === "status@broadcast");
+  const isBroadcast = remoteCandidates.some((jid) => jid.endsWith("@broadcast"));
+  const hasResolvableDirectPeer = remoteCandidates.some((jid) => isDirectChatJid(jid));
+  const hasPhoneBasedPeer = remoteCandidates.some((jid) => jid.endsWith("@s.whatsapp.net"));
 
   logUpsert({
     stage: "message_in",
     remoteJid: remoteJid || null,
     remoteJidAlt: remoteJidAlt || null,
-    participant: message.key.participant || null,
+    participant,
     fromMe,
     externalMessageId,
     messageType,
+    isGroup,
+    isStatus,
+    isBroadcast,
+    hasResolvableDirectPeer,
+    hasPhoneBasedPeer,
   });
+
+  if (isGroup || isStatus || isBroadcast || !hasResolvableDirectPeer || !hasPhoneBasedPeer) {
+    logUpsert({
+      stage: "ignored_non_direct_context",
+      remoteJid: remoteJid || null,
+      remoteJidAlt: remoteJidAlt || null,
+      participant,
+      fromMe,
+      messageType,
+      isGroup,
+      isStatus,
+      isBroadcast,
+      hasResolvableDirectPeer,
+      hasPhoneBasedPeer,
+    });
+    return false;
+  }
 
   const normalizedRemoteJid = resolvePeerJid(message);
   if (!normalizedRemoteJid) {
@@ -215,15 +249,22 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
   const body = extractMessageText(message.message);
   const unwrapped = getUnwrappedMessage(message.message);
   const imagePreview = await extractBestImageUrl(message);
+  const videoInfo = await extractBestVideoInfo(message);
   const audioUrl = await extractBestAudioUrl(message);
   const documentInfo = await extractBestDocumentInfo(message);
-  const mediaType = unwrapped?.imageMessage
-    ? "image"
-    : unwrapped?.audioMessage
-      ? "audio"
-      : unwrapped?.documentMessage
-        ? "document"
-        : null;
+  const mediaType =
+    unwrapped?.imageMessage || messageType === "imageMessage"
+      ? "image"
+      : unwrapped?.videoMessage || messageType === "videoMessage"
+        ? "video"
+        : unwrapped?.audioMessage || messageType === "audioMessage"
+          ? "audio"
+          : unwrapped?.documentMessage || messageType === "documentMessage"
+            ? "document"
+            : null;
+  const imageMimeType = unwrapped?.imageMessage?.mimetype || null;
+  const videoMimeType = videoInfo.mimeType || unwrapped?.videoMessage?.mimetype || null;
+  const documentMimeType = documentInfo.mimeType || unwrapped?.documentMessage?.mimetype || null;
   const sentAt = message.messageTimestamp
     ? new Date(Number(message.messageTimestamp) * 1000)
     : new Date();
@@ -235,6 +276,21 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
       normalizedRemoteJid,
       fromMe,
       messageType,
+    });
+    return false;
+  }
+
+  const normalizedPhone = jidToPhone(normalizedRemoteJid);
+  if (!normalizedPhone || !/^\d{8,20}$/.test(normalizedPhone)) {
+    logUpsert({
+      stage: "ignored_unresolved_phone",
+      normalizedRemoteJid,
+      remoteJid: remoteJid || null,
+      remoteJidAlt: remoteJidAlt || null,
+      participant,
+      fromMe,
+      messageType,
+      normalizedPhone,
     });
     return false;
   }
@@ -284,10 +340,12 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
       metadata: {
         media_type: mediaType,
         image_preview_url: imagePreview,
+        video_url: videoInfo.url,
+        video_mime_type: videoMimeType,
         audio_url: audioUrl,
         file_url: documentInfo.url,
         file_name: documentInfo.fileName,
-        mime_type: documentInfo.mimeType,
+        mime_type: imageMimeType || videoMimeType || documentMimeType,
       },
     });
 
@@ -313,10 +371,12 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
       metadata: {
         media_type: mediaType,
         image_preview_url: imagePreview,
+        video_url: videoInfo.url,
+        video_mime_type: videoMimeType,
         audio_url: audioUrl,
         file_url: documentInfo.url,
         file_name: documentInfo.fileName,
-        mime_type: documentInfo.mimeType,
+        mime_type: imageMimeType || videoMimeType || documentMimeType,
       },
     });
 
@@ -556,6 +616,51 @@ async function extractBestAudioUrl(message: WAMessage): Promise<string | null> {
     });
   } catch {
     return null;
+  }
+}
+
+async function extractBestVideoInfo(message: WAMessage): Promise<ExtractedVideoInfo> {
+  const unwrapped = getUnwrappedMessage(message.message);
+  const videoMessage = unwrapped?.videoMessage;
+  if (!videoMessage || !sock) {
+    return { url: null, mimeType: null };
+  }
+
+  try {
+    const downloaded = await downloadMediaMessage(
+      message,
+      "buffer",
+      {},
+      {
+        logger: downloadLogger,
+        reuploadRequest: sock.updateMediaMessage,
+      },
+    );
+
+    if (!downloaded) {
+      return {
+        url: null,
+        mimeType: videoMessage.mimetype || "video/mp4",
+      };
+    }
+
+    const buffer = Buffer.isBuffer(downloaded) ? downloaded : Buffer.from(downloaded as Uint8Array);
+    const mimeType = videoMessage.mimetype || "video/mp4";
+    const url = await saveMediaBuffer({
+      buffer,
+      mimeType,
+      externalMessageId: message.key.id || null,
+    });
+
+    return {
+      url,
+      mimeType,
+    };
+  } catch {
+    return {
+      url: null,
+      mimeType: videoMessage.mimetype || "video/mp4",
+    };
   }
 }
 

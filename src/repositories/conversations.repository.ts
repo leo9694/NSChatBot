@@ -225,6 +225,71 @@ export async function updateConversationAvatar(conversationId: string, avatarUrl
   );
 }
 
+export async function cleanupInvalidConversations(): Promise<{ conversations: number; messages: number }> {
+  await ensureConversationWorkflowSchema();
+
+  const invalidConversationIds = await pool.query<{ id: string }>(
+    `
+    SELECT id
+    FROM conversations
+    WHERE wa_jid LIKE '%@g.us'
+       OR wa_jid = 'status@broadcast'
+       OR wa_jid LIKE '%@broadcast'
+       OR (
+         wa_jid LIKE '%@lid'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM messages m
+           WHERE m.conversation_id = conversations.id
+             AND (
+               COALESCE(m.provider_payload->'key'->>'remoteJid', '') LIKE '%@s.whatsapp.net'
+               OR COALESCE(m.provider_payload->'key'->>'remoteJidAlt', '') LIKE '%@s.whatsapp.net'
+             )
+         )
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM messages m
+         WHERE m.conversation_id = conversations.id
+           AND (
+             COALESCE(m.provider_payload->'key'->>'remoteJid', '') = 'status@broadcast'
+             OR COALESCE(m.provider_payload->'key'->>'remoteJid', '') LIKE '%@broadcast'
+             OR COALESCE(m.provider_payload->'key'->>'remoteJid', '') LIKE '%@g.us'
+             OR COALESCE(m.provider_payload->'key'->>'remoteJidAlt', '') = 'status@broadcast'
+             OR COALESCE(m.provider_payload->'key'->>'remoteJidAlt', '') LIKE '%@broadcast'
+             OR COALESCE(m.provider_payload->'key'->>'remoteJidAlt', '') LIKE '%@g.us'
+           )
+       )
+    `,
+  );
+
+  if (invalidConversationIds.rows.length === 0) {
+    return { conversations: 0, messages: 0 };
+  }
+
+  const ids = invalidConversationIds.rows.map((row) => row.id);
+  const deletedMessages = await pool.query(
+    `
+    DELETE FROM messages
+    WHERE conversation_id = ANY($1::uuid[])
+    `,
+    [ids],
+  );
+
+  const deletedConversations = await pool.query(
+    `
+    DELETE FROM conversations
+    WHERE id = ANY($1::uuid[])
+    `,
+    [ids],
+  );
+
+  return {
+    conversations: Number(deletedConversations.rowCount || 0),
+    messages: Number(deletedMessages.rowCount || 0),
+  };
+}
+
 export async function clearConversationBulkInitiated(conversationId: string): Promise<void> {
   await ensureConversationWorkflowSchema();
   await pool.query(

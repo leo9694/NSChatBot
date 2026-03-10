@@ -26,6 +26,13 @@ type AuthRequest = Request & {
     sector_name?: string | null;
   };
 };
+router.use((_, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
 router.use(async (_req, _res, next) => {
   try {
     await ensureConversationWorkflowSchema();

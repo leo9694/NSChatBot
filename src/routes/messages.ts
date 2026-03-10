@@ -359,7 +359,12 @@ router.post("/send-media", async (req, res) => {
         ? "video"
         : "document";
     const messageType = mediaType === "image" ? "imageMessage" : mediaType === "video" ? "videoMessage" : "documentMessage";
-    const bodyText = mediaType === "document" ? `[arquivo] ${fileName}` : caption || "[imagem]";
+    const bodyText =
+      mediaType === "document"
+        ? `[arquivo] ${fileName}`
+        : mediaType === "video"
+          ? caption || "[video]"
+          : caption || "[imagem]";
 
     await saveOutboundMessage({
       accountJid: account.waJid,
@@ -375,6 +380,8 @@ router.post("/send-media", async (req, res) => {
       metadata: {
         media_type: mediaType,
         image_preview_url: mediaType === "image" ? mediaUrl : null,
+        video_url: mediaType === "video" ? mediaUrl : null,
+        video_mime_type: mediaType === "video" ? mimetype : null,
         file_url: mediaUrl,
         file_name: fileName,
         mime_type: mimetype,

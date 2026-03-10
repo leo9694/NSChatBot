@@ -43,6 +43,14 @@ export function getSessionHeaderToken(req: Request): string {
   return "";
 }
 
+export function getSessionQueryToken(req: Request): string {
+  const queryToken = req.query?.session_token;
+  if (typeof queryToken === "string" && queryToken.trim()) {
+    return queryToken.trim();
+  }
+  return "";
+}
+
 export function setSessionCookie(res: Response, token: string, expiresAt: Date): void {
   const secure = process.env.NODE_ENV === "production";
   const maxAge = Math.max(1, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
@@ -76,7 +84,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const authReq = req as AuthRequest;
   try {
     // Prioriza token enviado no header para permitir sessoes simultaneas por aba/usuario.
-    const token = getSessionHeaderToken(authReq) || getSessionCookieToken(authReq);
+    const token = getSessionHeaderToken(authReq) || getSessionQueryToken(authReq) || getSessionCookieToken(authReq);
     if (!token) {
       return res.status(401).json({ error: "Sessao invalida. Faca login novamente." });
     }

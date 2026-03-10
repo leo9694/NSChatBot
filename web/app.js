@@ -1,5 +1,6 @@
 const state = {
   conversations: [],
+  currentMessages: [],
   selectedConversationId: null,
   selectedConversation: null,
   connectedAccountJid: "",
@@ -31,6 +32,7 @@ const state = {
   isAuthenticated: false,
   sessionToken: "",
   settingsTab: "perfil",
+  realtimeCheckpointToken: "",
 };
 const SESSION_TOKEN_KEY = "nschat_session_token";
 
@@ -158,6 +160,9 @@ const uiDialogInputWrapEl = document.getElementById("uiDialogInputWrap");
 const uiDialogInputEl = document.getElementById("uiDialogInput");
 const uiDialogCancelEl = document.getElementById("uiDialogCancel");
 const uiDialogConfirmEl = document.getElementById("uiDialogConfirm");
+const mediaModalOverlayEl = document.getElementById("mediaModalOverlay");
+const mediaModalBodyEl = document.getElementById("mediaModalBody");
+const mediaModalCloseBtnEl = document.getElementById("mediaModalCloseBtn");
 const settingsHeaderEl = document.getElementById("settingsHeader");
 const settingsAdminSectionEl = document.getElementById("settingsAdminSection");
 const settingsUsersListEl = document.getElementById("settingsUsersList");
@@ -190,8 +195,15 @@ let mediaChunks = [];
 let mediaStream = null;
 let recordingTimer = null;
 let recordingSeconds = 0;
-let realtimeSource = null;
 let realtimeReconnectTimer = null;
+let realtimePollController = null;
+let realtimePolling = false;
+let realtimePollToken = 0;
+let realtimeLastEventAt = 0;
+let realtimeLastPollAt = 0;
+let realtimeCursor = 0;
+let realtimeWatchdogTimer = null;
+let realtimeCheckpointTimer = null;
 let qrPollTimer = null;
 let lastQrText = "";
 let composerMode = "text";
@@ -203,6 +215,9 @@ let editingUserId = "";
 let transferConversationId = "";
 let bulkMessagesDraft = [""];
 let pendingConversationRefresh = false;
+let pendingMessagesRefresh = false;
+let conversationRefreshTimer = null;
+let messageRefreshTimer = null;
 const PLAYER_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
 const PLAYER_PAUSE_ICON = '<i class="bi bi-pause-fill"></i>';
 const PREVIEW_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
@@ -1332,6 +1347,7 @@ async function api(path, options = {}) {
   }
 
   const response = await fetch(path, {
+    cache: "no-store",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...authHeaders, ...customHeaders },
     ...fetchOptions,
@@ -1968,6 +1984,35 @@ function renderHeader() {
   updateComposerLock();
 }
 
+function closeMediaModal() {
+  mediaModalBodyEl.innerHTML = "";
+  mediaModalOverlayEl.hidden = true;
+}
+
+function openMediaModal(type, url, mimeType = "") {
+  mediaModalBodyEl.innerHTML = "";
+  if (!url) return;
+
+  if (type === "video") {
+    const video = document.createElement("video");
+    video.src = url;
+    video.controls = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    if (mimeType) {
+      video.setAttribute("type", mimeType);
+    }
+    mediaModalBodyEl.appendChild(video);
+  } else {
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "Midia";
+    mediaModalBodyEl.appendChild(img);
+  }
+
+  mediaModalOverlayEl.hidden = false;
+}
+
 function renderMessages(messages) {
   const preservedAudio = captureActiveAudioState();
   messagesAreaEl.innerHTML = "";
@@ -2018,17 +2063,30 @@ function renderMessages(messages) {
 
     const bubble = document.createElement("div");
     bubble.className = "msg-bubble";
-    const imageUrl = message?.metadata?.image_preview_url || "";
+    const mediaType = String(message?.metadata?.media_type || "");
+    const mimeType = String(message?.metadata?.mime_type || "");
+    const imageUrl =
+      message?.metadata?.image_preview_url ||
+      ((mediaType === "image" || mimeType.startsWith("image/")) ? message?.metadata?.file_url || "" : "");
+    const videoUrl =
+      message?.metadata?.video_url || ((mediaType === "video" || mimeType.startsWith("video/")) ? message?.metadata?.file_url || "" : "");
+    const videoMimeType = message?.metadata?.video_mime_type || mimeType || "";
     const audioUrl = message?.metadata?.audio_url || "";
     const fileUrl = message?.metadata?.file_url || "";
     const fileName = message?.metadata?.file_name || "Arquivo";
     const rawBody = String(message.body || "").trim();
     const isImagePlaceholder = /^\[imagem\]$/i.test(rawBody);
+    const isVideoPlaceholder = /^\[video\]$/i.test(rawBody);
     const isAudioPlaceholder = /^\[audio\]$/i.test(rawBody);
     const isFilePlaceholder = /^\[arquivo\]/i.test(rawBody) || /^\[documento\]$/i.test(rawBody);
     const shouldRenderText =
       Boolean(rawBody) &&
-      !((imageUrl && isImagePlaceholder) || (audioUrl && isAudioPlaceholder) || (fileUrl && isFilePlaceholder));
+      !(
+        (imageUrl && isImagePlaceholder) ||
+        (videoUrl && isVideoPlaceholder) ||
+        (audioUrl && isAudioPlaceholder) ||
+        (fileUrl && isFilePlaceholder)
+      );
 
     if (imageUrl) {
       const img = document.createElement("img");
@@ -2037,9 +2095,33 @@ function renderMessages(messages) {
       img.alt = "Imagem recebida";
       img.loading = "lazy";
       img.addEventListener("click", () => {
-        window.open(imageUrl, "_blank", "noopener,noreferrer");
+        openMediaModal("image", imageUrl);
       });
       bubble.appendChild(img);
+    }
+
+    if (videoUrl) {
+      const videoWrap = document.createElement("button");
+      videoWrap.type = "button";
+      videoWrap.className = "msg-video-wrap";
+
+      const video = document.createElement("video");
+      video.className = "msg-video";
+      video.src = videoUrl;
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+
+      const playBadge = document.createElement("span");
+      playBadge.className = "msg-video-play";
+      playBadge.innerHTML = '<i class="bi bi-play-fill"></i>';
+
+      videoWrap.appendChild(video);
+      videoWrap.appendChild(playBadge);
+      videoWrap.addEventListener("click", () => {
+        openMediaModal("video", videoUrl, videoMimeType);
+      });
+      bubble.appendChild(videoWrap);
     }
 
     if (audioUrl) {
@@ -2047,7 +2129,7 @@ function renderMessages(messages) {
       bubble.appendChild(player);
     }
 
-    if (fileUrl && !imageUrl && !audioUrl) {
+    if (fileUrl && !imageUrl && !videoUrl && !audioUrl) {
       const doc = document.createElement("a");
       doc.className = "msg-file";
       doc.href = fileUrl;
@@ -2065,7 +2147,7 @@ function renderMessages(messages) {
       bubble.appendChild(text);
     }
 
-    if ((imageUrl || audioUrl) && !shouldRenderText) {
+    if ((imageUrl || videoUrl || audioUrl) && !shouldRenderText) {
       bubble.classList.add("media-only");
     }
 
@@ -2101,20 +2183,109 @@ function scheduleRealtimeReconnect() {
   }, 2000);
 }
 
+function queueConversationRefresh() {
+  if (conversationRefreshTimer) return;
+  conversationRefreshTimer = setTimeout(() => {
+    conversationRefreshTimer = null;
+    if (state.loadingConversations) {
+      pendingConversationRefresh = true;
+      return;
+    }
+    loadConversations().catch((error) => console.error(error));
+  }, 120);
+}
+
+function queueMessageRefresh() {
+  if (messageRefreshTimer) return;
+  messageRefreshTimer = setTimeout(() => {
+    messageRefreshTimer = null;
+    loadMessages().catch((error) => console.error(error));
+  }, 80);
+}
+
 function closeRealtime() {
-  if (realtimeSource) {
-    realtimeSource.close();
-    realtimeSource = null;
+  realtimePollToken += 1;
+  realtimePolling = false;
+  if (realtimePollController) {
+    realtimePollController.abort();
+    realtimePollController = null;
+  }
+  realtimeLastEventAt = 0;
+  realtimeLastPollAt = 0;
+  if (realtimeWatchdogTimer) {
+    clearInterval(realtimeWatchdogTimer);
+    realtimeWatchdogTimer = null;
+  }
+  if (realtimeCheckpointTimer) {
+    clearInterval(realtimeCheckpointTimer);
+    realtimeCheckpointTimer = null;
+  }
+}
+
+function upsertRealtimeMessage(message) {
+  if (!message || !message.id) return;
+  const current = Array.isArray(state.currentMessages) ? [...state.currentMessages] : [];
+  const index = current.findIndex((item) => item.id === message.id);
+  if (index >= 0) {
+    current[index] = { ...current[index], ...message };
+  } else {
+    current.push(message);
+  }
+
+  current.sort((a, b) => {
+    const aPrimary = new Date(a.sent_at || a.created_at || 0).getTime();
+    const bPrimary = new Date(b.sent_at || b.created_at || 0).getTime();
+    if (aPrimary !== bPrimary) return aPrimary - bPrimary;
+
+    const aSecondary = new Date(a.created_at || a.sent_at || 0).getTime();
+    const bSecondary = new Date(b.created_at || b.sent_at || 0).getTime();
+    if (aSecondary !== bSecondary) return aSecondary - bSecondary;
+
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  });
+
+  state.currentMessages = current;
+  renderMessages(state.currentMessages);
+}
+
+function handleRealtimePayload(payload, eventType = "message_saved") {
+  if (!payload) return;
+
+  if (eventType === "checkpoint_changed") {
+    state.realtimeCheckpointToken = String(payload.token || state.realtimeCheckpointToken || "");
+    console.warn("[REALTIME] checkpoint_changed", payload);
+    if (state.currentView === "chats") {
+      queueConversationRefresh();
+      if (state.selectedConversationId) {
+        queueMessageRefresh();
+      }
+    }
+    return;
+  }
+
+  if (!payload.conversationId) return;
+
+  if (state.currentView === "chats") {
+    if (payload.conversationId === state.selectedConversationId) {
+      if (payload.message) {
+        upsertRealtimeMessage(payload.message);
+      }
+      queueMessageRefresh();
+    }
+    queueConversationRefresh();
   }
 }
 
 function clearChatStateForDisconnected() {
   state.conversations = [];
+  state.currentMessages = [];
   state.selectedConversationId = null;
   state.selectedConversation = null;
   state.loadingConversations = false;
   state.loadingMessages = false;
   state.serviceCounts = { pending: 0, in_progress: 0, finalized: 0, bulk: 0 };
+  realtimeCursor = 0;
+  state.realtimeCheckpointToken = "";
   closeConversationMenu();
   closeRealtime();
   renderConversations();
@@ -2125,7 +2296,51 @@ function clearChatStateForDisconnected() {
   updateComposerLock();
 }
 
-function connectRealtime() {
+function ensureRealtimeWatchdog() {
+  if (realtimeWatchdogTimer) return;
+  realtimeWatchdogTimer = setInterval(() => {
+    if (!realtimePolling || !state.isAuthenticated || !state.connectedAccountJid) return;
+    const idleMs = Date.now() - (realtimeLastPollAt || 0);
+    if (idleMs > 35_000) {
+      console.warn("[REALTIME] watchdog_reconnect", { idleMs });
+      closeRealtime();
+      connectRealtime().catch((error) => console.error(error));
+    }
+  }, 8000);
+}
+
+function ensureRealtimeCheckpointVerifier() {
+  if (realtimeCheckpointTimer) return;
+  realtimeCheckpointTimer = setInterval(async () => {
+    if (!state.isAuthenticated || !state.connectedAccountJid || state.currentView !== "chats") return;
+    try {
+      const query = new URLSearchParams({
+        account_jid: state.connectedAccountJid,
+        selected_conversation_id: String(state.selectedConversationId || ""),
+        _: String(Date.now()),
+      });
+      const result = await api(`/realtime/checkpoint?${query.toString()}`);
+      const nextToken = String(result?.checkpoint?.token || "");
+      if (!nextToken) return;
+      if (!state.realtimeCheckpointToken) {
+        state.realtimeCheckpointToken = nextToken;
+        return;
+      }
+      if (nextToken !== state.realtimeCheckpointToken) {
+        console.warn("[REALTIME] verifier_checkpoint_changed", result.checkpoint);
+        state.realtimeCheckpointToken = nextToken;
+        queueConversationRefresh();
+        if (state.selectedConversationId) {
+          queueMessageRefresh();
+        }
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }, 2500);
+}
+
+async function connectRealtime() {
   if (!state.isAuthenticated) {
     closeRealtime();
     return;
@@ -2135,42 +2350,62 @@ function connectRealtime() {
     return;
   }
 
-  if (realtimeSource) {
+  if (realtimePolling) {
     return;
   }
 
-  const url = `/realtime/stream?account_jid=${encodeURIComponent(state.connectedAccountJid)}`;
-  const source = new EventSource(url);
-  realtimeSource = source;
+  realtimePolling = true;
+  realtimeLastPollAt = Date.now();
+  ensureRealtimeWatchdog();
+  ensureRealtimeCheckpointVerifier();
+  const pollToken = ++realtimePollToken;
 
-  const onRealtimeMessage = (event) => {
-    let payload = null;
+  while (realtimePolling && pollToken === realtimePollToken && state.isAuthenticated && state.connectedAccountJid) {
+    const query = new URLSearchParams({
+      account_jid: state.connectedAccountJid,
+      since: String(realtimeCursor || 0),
+      checkpoint: String(state.realtimeCheckpointToken || ""),
+      selected_conversation_id: String(state.selectedConversationId || ""),
+      _: String(Date.now()),
+    });
+    realtimePollController = new AbortController();
+
     try {
-      payload = JSON.parse(event.data);
-    } catch {
+      const result = await api(`/realtime/poll?${query.toString()}`, {
+        signal: realtimePollController.signal,
+      });
+      realtimeLastPollAt = Date.now();
+      if (pollToken !== realtimePollToken) {
+        break;
+      }
+
+      realtimeLastEventAt = Date.now();
+      if (result?.event?.payload?.token) {
+        state.realtimeCheckpointToken = String(result.event.payload.token || state.realtimeCheckpointToken || "");
+      }
+      if (result?.event?.seq) {
+        realtimeCursor = Number(result.event.seq) || realtimeCursor;
+      }
+      if (result?.event?.payload) {
+        if (result?.event?.type) {
+          console.debug("[REALTIME] event", result.event.type, result.event.payload);
+        }
+        handleRealtimePayload(result.event.payload, String(result.event.type || ""));
+      }
+    } catch (error) {
+      if (realtimePollController?.signal?.aborted || pollToken !== realtimePollToken) {
+        break;
+      }
+      console.error(error);
+      realtimePolling = false;
+      realtimePollController = null;
+      scheduleRealtimeReconnect();
       return;
     }
-    if (!payload || !payload.conversationId) return;
+  }
 
-    if (state.currentView === "chats") {
-      if (state.loadingConversations) {
-        pendingConversationRefresh = true;
-        return;
-      }
-      loadConversations().catch((error) => console.error(error));
-      if (payload.conversationId === state.selectedConversationId) {
-        loadMessages().catch((error) => console.error(error));
-      }
-    }
-  };
-
-  source.addEventListener("message_saved", onRealtimeMessage);
-  source.addEventListener("message_status", onRealtimeMessage);
-
-  source.onerror = () => {
-    closeRealtime();
-    scheduleRealtimeReconnect();
-  };
+  realtimePolling = false;
+  realtimePollController = null;
 }
 
 async function loadConversations() {
@@ -2216,6 +2451,7 @@ async function loadConversations() {
     } else {
       state.selectedConversationId = null;
       state.selectedConversation = null;
+      state.currentMessages = [];
       renderMessages([]);
     }
 
@@ -2234,16 +2470,29 @@ async function loadConversations() {
 }
 
 async function loadMessages() {
-  if (!state.isAuthenticated || !state.connectedAccountJid || !state.selectedConversationId || state.loadingMessages) return;
+  if (!state.isAuthenticated || !state.connectedAccountJid || !state.selectedConversationId) return;
+  if (state.loadingMessages) {
+    pendingMessagesRefresh = true;
+    return;
+  }
   state.loadingMessages = true;
+  const targetConversationId = state.selectedConversationId;
 
   try {
-    const result = await api(`/conversations/${state.selectedConversationId}/messages?limit=200`);
-    renderMessages(result.items || []);
+    const result = await api(`/conversations/${targetConversationId}/messages?limit=200`);
+    if (targetConversationId !== state.selectedConversationId) {
+      return;
+    }
+    state.currentMessages = result.items || [];
+    renderMessages(state.currentMessages);
   } catch (error) {
     console.error(error);
   } finally {
     state.loadingMessages = false;
+    if (pendingMessagesRefresh && targetConversationId === state.selectedConversationId) {
+      pendingMessagesRefresh = false;
+      loadMessages().catch((error) => console.error(error));
+    }
   }
 }
 
@@ -2543,6 +2792,7 @@ async function deleteContextConversation() {
     if (state.selectedConversationId === conversationId) {
       state.selectedConversationId = null;
       state.selectedConversation = null;
+      state.currentMessages = [];
       renderHeader();
       renderMessages([]);
     }
@@ -3154,6 +3404,16 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeConversationMenu();
+    if (!mediaModalOverlayEl.hidden) {
+      closeMediaModal();
+    }
+  }
+});
+
+mediaModalCloseBtnEl.addEventListener("click", closeMediaModal);
+mediaModalOverlayEl.addEventListener("click", (event) => {
+  if (event.target === mediaModalOverlayEl) {
+    closeMediaModal();
   }
 });
 
