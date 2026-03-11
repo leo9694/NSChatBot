@@ -1780,7 +1780,7 @@ function renderConversations() {
     if (String(conv.service_status || "") === "in_progress" && String(conv.assigned_user_name || "").trim()) {
       const attendant = document.createElement("div");
       attendant.className = "conversation-attendant";
-      attendant.textContent = `Atendente: ${conv.assigned_user_name}`;
+      attendant.innerHTML = `<i class="bi bi-person-workspace"></i><span>${conv.assigned_user_name}</span>`;
       node.querySelector(".conversation-body").appendChild(attendant);
     }
 

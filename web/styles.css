@@ -613,7 +613,21 @@ body.auth-lock {
   color: #8ff2d4;
   font-size: 12px;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-attendant i {
+  font-size: 12px;
+  opacity: 0.95;
+}
+
+.conversation-attendant span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
