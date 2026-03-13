@@ -1,6 +1,7 @@
 import { pool } from "../db/pool";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { upsertWhatsAppAccount } from "../repositories/accounts.repository";
+import { requireActiveWhatsAppAccount } from "./whatsapp-account-context.service";
 import { getCurrentWhatsAppAccount, sendWhatsAppText } from "./whatsapp.service";
 import { normalizePhone } from "../utils/whatsapp";
 
@@ -10,6 +11,7 @@ interface ContactInput {
 }
 
 interface CreateBulkJobInput {
+  userId?: string | null;
   contacts: ContactInput[];
   message: string;
   messages?: string[];
@@ -237,7 +239,7 @@ async function processJob(jobId: string): Promise<void> {
       const item = itemResult.rows[0];
 
       try {
-        const connected = getCurrentWhatsAppAccount();
+        const connected = getCurrentWhatsAppAccount(job.account_wa_jid);
         if (!connected.waJid || connected.waJid !== job.account_wa_jid) {
           throw new Error("Conta WhatsApp conectada nao corresponde ao disparo.");
         }
@@ -247,6 +249,7 @@ async function processJob(jobId: string): Promise<void> {
         const waResponse = await sendWhatsAppText({
           to: item.phone,
           message: renderedMessage,
+          accountJid: job.account_wa_jid,
         });
 
         await saveOutboundMessage({
@@ -352,10 +355,8 @@ export async function createBulkDispatchJob(input: CreateBulkJobInput): Promise<
     throw new Error("Intervalo maximo permitido: 3600 segundos.");
   }
 
-  const connected = getCurrentWhatsAppAccount();
-  if (!connected.waJid) {
-    throw new Error("WhatsApp nao conectado.");
-  }
+  const accountContext = await requireActiveWhatsAppAccount(input.userId);
+  const connected = accountContext.effective!;
 
   const account = await upsertWhatsAppAccount({
     waJid: connected.waJid,

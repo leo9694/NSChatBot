@@ -12,7 +12,8 @@ import {
   upsertConversation,
 } from "../repositories/conversations.repository";
 import { saveOutboundMessage } from "../repositories/messages.repository";
-import { getCurrentWhatsAppAccount, getProfilePictureUrl, sendWhatsAppText } from "../services/whatsapp.service";
+import { requireActiveWhatsAppAccount, WhatsAppAccountContextError } from "../services/whatsapp-account-context.service";
+import { getProfilePictureUrl, sendWhatsAppText } from "../services/whatsapp.service";
 import { normalizePhone, phoneToJid } from "../utils/whatsapp";
 
 const router = Router();
@@ -569,7 +570,7 @@ router.get("/:conversationId/avatar", async (req, res) => {
   let avatarUrl = conversation.avatar_url || "";
 
   if (!avatarUrl) {
-    avatarUrl = (await getProfilePictureUrl(conversation.wa_jid)) || "";
+    avatarUrl = (await getProfilePictureUrl(conversation.wa_jid, result.rows[0].account_wa_jid || null)) || "";
     if (avatarUrl) {
       await updateConversationAvatar(conversation.id, avatarUrl);
     }
@@ -600,16 +601,11 @@ router.post("/start", async (req, res) => {
     });
   }
 
-  const currentAccount = getCurrentWhatsAppAccount();
-  if (!currentAccount.waJid) {
-    return res.status(503).json({
-      error: "WhatsApp account is not connected yet.",
-    });
-  }
-
   try {
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const currentAccount = accountContext.effective!;
     const targetJid = phoneToJid(phone);
-    const avatarUrl = (await getProfilePictureUrl(targetJid)) || "";
+    const avatarUrl = (await getProfilePictureUrl(targetJid, currentAccount.waJid)) || "";
     const localPhone = phone.startsWith("55") ? phone.slice(2) : phone;
 
     const account = await upsertWhatsAppAccount({
@@ -717,6 +713,7 @@ router.post("/start", async (req, res) => {
       const waResponse = await sendWhatsAppText({
         to: phone,
         message: signedFirstMessage,
+        accountJid: currentAccount.waJid,
       });
 
       await saveOutboundMessage({
@@ -739,6 +736,11 @@ router.post("/start", async (req, res) => {
       client,
     });
   } catch (error: any) {
+    if (error instanceof WhatsAppAccountContextError) {
+      return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({
+        error: error.message,
+      });
+    }
     await pool.query("ROLLBACK").catch(() => undefined);
     return res.status(500).json({
       error: "Failed to start conversation.",

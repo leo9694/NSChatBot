@@ -14,7 +14,7 @@ import messageRoutes from "./routes/messages";
 import realtimeRoutes from "./routes/realtime";
 import whatsappRoutes from "./routes/whatsapp";
 import { getMediaBlob, syncLocalMediaDirectoryToDatabase } from "./services/media.service";
-import { startWhatsAppSession } from "./services/whatsapp.service";
+import { startKnownWhatsAppSessions } from "./services/whatsapp.service";
 import { resumePendingBulkDispatchJobs } from "./services/bulk-dispatch.service";
 
 const app = express();
@@ -70,7 +70,7 @@ app.listen(env.port, async () => {
     await pool.query("SELECT 1");
     await ensureAuthSchema();
     const cleanup = await cleanupInvalidConversations();
-    await startWhatsAppSession();
+    await startKnownWhatsAppSessions();
     await resumePendingBulkDispatchJobs();
     syncLocalMediaDirectoryToDatabase()
       .then((result) => {

@@ -4,7 +4,8 @@ import ffmpegPath from "ffmpeg-static";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { getConversationAccess } from "../repositories/conversations.repository";
 import { saveMediaBuffer } from "../services/media.service";
-import { getCurrentWhatsAppAccount, sendWhatsAppAudio, sendWhatsAppMedia, sendWhatsAppText } from "../services/whatsapp.service";
+import { requireActiveWhatsAppAccount, WhatsAppAccountContextError } from "../services/whatsapp-account-context.service";
+import { sendWhatsAppAudio, sendWhatsAppMedia, sendWhatsAppText } from "../services/whatsapp.service";
 
 interface SendMessageBody {
   conversation_id?: string;
@@ -161,16 +162,13 @@ router.post("/send", async (req, res) => {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
     const signedMessage = buildSignedTextMessage(body.message, authReq.authUser?.name || "");
 
-    const account = getCurrentWhatsAppAccount();
-    if (!account.waJid) {
-      return res.status(503).json({
-        error: "WhatsApp account is not connected yet.",
-      });
-    }
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const account = accountContext.effective!;
 
     const waResponse = await sendWhatsAppText({
       to: body.phone,
       message: signedMessage,
+      accountJid: account.waJid,
     });
 
     const externalMessageId = waResponse?.key?.id || null;
@@ -205,17 +203,19 @@ router.post("/send", async (req, res) => {
     if (error?.message === "NOT_ASSIGNED") {
       return res.status(403).json({ error: "Somente o atendente responsavel pode enviar nesta conversa." });
     }
+    if (error instanceof WhatsAppAccountContextError) {
+      return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({ error: error.message });
+    }
 
     const providerError = {
       message: error?.message || "Unknown error",
     };
 
     if (body.phone && body.message) {
-      const account = getCurrentWhatsAppAccount();
       const signedMessage = buildSignedTextMessage(body.message, authReq.authUser?.name || "");
       await saveOutboundMessage({
-        accountJid: account.waJid || "unknown@s.whatsapp.net",
-        accountDisplayName: account.displayName,
+        accountJid: "unknown@s.whatsapp.net",
+        accountDisplayName: null,
         clientId: body.client_id || null,
         campaignId: body.campaign_id || null,
         phone: body.phone,
@@ -245,12 +245,8 @@ router.post("/send-audio", async (req, res) => {
   try {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
 
-    const account = getCurrentWhatsAppAccount();
-    if (!account.waJid) {
-      return res.status(503).json({
-        error: "WhatsApp account is not connected yet.",
-      });
-    }
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const account = accountContext.effective!;
 
     const sourceBuffer = parseBase64Audio(body.audio_base64);
     const audioBuffer = await transcodeToOggOpus(sourceBuffer);
@@ -261,6 +257,7 @@ router.post("/send-audio", async (req, res) => {
       audioBuffer,
       mimetype,
       ptt: true,
+      accountJid: account.waJid,
     });
 
     const externalMessageId = waResponse?.key?.id || null;
@@ -305,6 +302,9 @@ router.post("/send-audio", async (req, res) => {
     if (error?.message === "NOT_ASSIGNED") {
       return res.status(403).json({ error: "Somente o atendente responsavel pode enviar nesta conversa." });
     }
+    if (error instanceof WhatsAppAccountContextError) {
+      return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({ error: error.message });
+    }
 
     return res.status(502).json({
       error: "Failed to send WhatsApp audio.",
@@ -325,12 +325,8 @@ router.post("/send-media", async (req, res) => {
   try {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
 
-    const account = getCurrentWhatsAppAccount();
-    if (!account.waJid) {
-      return res.status(503).json({
-        error: "WhatsApp account is not connected yet.",
-      });
-    }
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const account = accountContext.effective!;
 
     const mediaBuffer = parseBase64(body.file_base64);
     const mimetype = String(body.mimetype || "application/octet-stream");
@@ -343,6 +339,7 @@ router.post("/send-media", async (req, res) => {
       mimetype,
       fileName,
       caption,
+      accountJid: account.waJid,
     });
 
     const externalMessageId = waResponse?.key?.id || null;
@@ -404,6 +401,9 @@ router.post("/send-media", async (req, res) => {
     }
     if (error?.message === "NOT_ASSIGNED") {
       return res.status(403).json({ error: "Somente o atendente responsavel pode enviar nesta conversa." });
+    }
+    if (error instanceof WhatsAppAccountContextError) {
+      return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({ error: error.message });
     }
 
     return res.status(502).json({

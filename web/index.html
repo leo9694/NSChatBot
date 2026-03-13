@@ -275,6 +275,12 @@
                 <button id="settingsTabSectors" type="button" class="settings-nav-item">
                   <i class="bi bi-diagram-3-fill"></i> Setores
                 </button>
+                <button id="settingsTabAccounts" type="button" class="settings-nav-item">
+                  <i class="bi bi-phone-fill"></i> Gerencia de perfis
+                </button>
+                <button id="settingsLogoutBtn" type="button" class="settings-nav-item settings-nav-logout">
+                  <i class="bi bi-box-arrow-right"></i> Encerrar sessao
+                </button>
               </aside>
 
               <div class="settings-content">
@@ -354,10 +360,19 @@
                   </form>
                   <div id="settingsSectorsList" class="settings-users-list"></div>
                 </div>
+
+                <div id="settingsPanelAccounts" class="bulk-card settings-panel">
+                  <h3>Gerencia de perfis</h3>
+                  <div class="settings-account-actions">
+                    <button id="settingsSwitchNumberBtn" type="button" class="btn-secondary">Trocar numero</button>
+                    <button id="settingsAddNumberBtn" type="button" class="btn-secondary" hidden>Adicionar numero</button>
+                    <button id="settingsRemoveNumberBtn" type="button" class="btn-danger" hidden>Remover numero</button>
+                  </div>
+                  <div class="settings-account-note">
+                    Selecione o numero de trabalho do atendente e gerencie os numeros vinculados ao app.
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="settings-footer-actions">
-              <button id="settingsLogoutBtn" type="button" class="btn-danger">Encerrar sessao</button>
             </div>
           </section>
         </div>
@@ -456,6 +471,15 @@
           <button type="submit" class="btn-primary">Transferir</button>
         </div>
       </form>
+    </div>
+
+    <div id="accountSwitchOverlay" class="new-chat-overlay"></div>
+    <div id="accountSwitchModal" class="new-chat-modal account-switch-modal">
+      <h3 id="accountSwitchTitle">Selecionar numero</h3>
+      <div id="accountSwitchList" class="account-switch-list"></div>
+      <div class="new-chat-actions">
+        <button id="accountSwitchClose" type="button" class="btn-secondary">Fechar</button>
+      </div>
     </div>
 
     <div id="uiDialogOverlay" class="ui-dialog-overlay">

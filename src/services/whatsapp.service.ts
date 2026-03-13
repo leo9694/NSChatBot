@@ -21,19 +21,21 @@ import {
   normalizeChatJid,
   phoneToJid,
 } from "../utils/whatsapp";
-import { getWhatsAppHistorySyncState, setWhatsAppHistorySyncBaseline } from "../repositories/accounts.repository";
+import { getWhatsAppHistorySyncState, listWhatsAppAccounts, setWhatsAppHistorySyncBaseline, upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { saveInboundMessage, saveOutboundMessage, updateOutboundMessageStatus } from "../repositories/messages.repository";
 import { saveMediaBuffer } from "./media.service";
 
 export interface SendWhatsAppTextInput {
   to: string;
   message: string;
+  accountJid?: string | null;
 }
 export interface SendWhatsAppAudioInput {
   to: string;
   audioBuffer: Buffer;
   mimetype?: string;
   ptt?: boolean;
+  accountJid?: string | null;
 }
 export interface SendWhatsAppMediaInput {
   to: string;
@@ -41,6 +43,7 @@ export interface SendWhatsAppMediaInput {
   mimetype?: string;
   fileName?: string;
   caption?: string;
+  accountJid?: string | null;
 }
 
 interface ExtractedDocumentInfo {
@@ -54,28 +57,98 @@ interface ExtractedVideoInfo {
   mimeType: string | null;
 }
 
-let sock: ReturnType<typeof makeWASocket> | null = null;
-let started = false;
-let connected = false;
-let selfJid = "";
-let latestQr = "";
-let latestQrAt: Date | null = null;
-let reconnectTimer: NodeJS.Timeout | null = null;
-let activeSessionToken = 0;
-let reconnectAttempts = 0;
-let reconnectWindowStartedAt = 0;
-let historySyncUntil = 0;
-let historySyncProgress = 0;
-let historySyncImportedCount = 0;
-let historySyncMessage = "";
-let historySyncWatchdogTimer: NodeJS.Timeout | null = null;
-let historySyncLastActivityAt = 0;
-let hasOpenedConnection = false;
-let historySyncBaselineAt: Date | null = null;
-let syncOnNextConnect = false;
+let activeSessionPath = env.whatsappSessionPath;
+interface WhatsAppSessionState {
+  sessionPath: string;
+  sock: ReturnType<typeof makeWASocket> | null;
+  started: boolean;
+  connected: boolean;
+  selfJid: string;
+  latestQr: string;
+  latestQrAt: Date | null;
+  reconnectTimer: NodeJS.Timeout | null;
+  activeSessionToken: number;
+  reconnectAttempts: number;
+  reconnectWindowStartedAt: number;
+  historySyncUntil: number;
+  historySyncProgress: number;
+  historySyncImportedCount: number;
+  historySyncMessage: string;
+  historySyncWatchdogTimer: NodeJS.Timeout | null;
+  historySyncLastActivityAt: number;
+  hasOpenedConnection: boolean;
+  historySyncBaselineAt: Date | null;
+  syncOnNextConnect: boolean;
+}
+
+const sessions = new Map<string, WhatsAppSessionState>();
 const avatarCache = new Map<string, { url: string | null; fetchedAt: number }>();
 const AVATAR_TTL_MS = 10 * 60 * 1000;
 const downloadLogger = pino({ level: "silent" });
+
+function normalizeSessionPath(sessionPath?: string | null): string {
+  return String(sessionPath || activeSessionPath || env.whatsappSessionPath).trim() || env.whatsappSessionPath;
+}
+
+function createSessionState(sessionPath: string): WhatsAppSessionState {
+  return {
+    sessionPath,
+    sock: null,
+    started: false,
+    connected: false,
+    selfJid: "",
+    latestQr: "",
+    latestQrAt: null,
+    reconnectTimer: null,
+    activeSessionToken: 0,
+    reconnectAttempts: 0,
+    reconnectWindowStartedAt: 0,
+    historySyncUntil: 0,
+    historySyncProgress: 0,
+    historySyncImportedCount: 0,
+    historySyncMessage: "",
+    historySyncWatchdogTimer: null,
+    historySyncLastActivityAt: 0,
+    hasOpenedConnection: false,
+    historySyncBaselineAt: null,
+    syncOnNextConnect: false,
+  };
+}
+
+function getOrCreateSession(sessionPath?: string | null): WhatsAppSessionState {
+  const normalizedPath = normalizeSessionPath(sessionPath);
+  let session = sessions.get(normalizedPath);
+  if (!session) {
+    session = createSessionState(normalizedPath);
+    sessions.set(normalizedPath, session);
+  }
+  return session;
+}
+
+function getActiveSession(): WhatsAppSessionState {
+  return getOrCreateSession(activeSessionPath);
+}
+
+function listSessionStates(): WhatsAppSessionState[] {
+  return Array.from(sessions.values());
+}
+
+function getSessionByAccountJid(accountJid?: string | null): WhatsAppSessionState | null {
+  const normalizedJid = normalizeChatJid(String(accountJid || ""));
+  if (!normalizedJid) return null;
+  return listSessionStates().find((session) => session.selfJid === normalizedJid) || null;
+}
+
+function resolveSessionForAccount(accountJid?: string | null, sessionPath?: string | null): WhatsAppSessionState {
+  if (accountJid) {
+    const byJid = getSessionByAccountJid(accountJid);
+    if (byJid) return byJid;
+  }
+  if (sessionPath) {
+    return getOrCreateSession(sessionPath);
+  }
+  return getActiveSession();
+}
 
 function logUpsert(data: Record<string, unknown>): void {
   const timestamp = new Date().toISOString();
@@ -87,45 +160,46 @@ function logStatus(data: Record<string, unknown>): void {
   console.log(`[WA_STATUS ${timestamp}]`, JSON.stringify(data));
 }
 
-function isHistorySyncActive(): boolean {
-  if (historySyncUntil > 0 && historySyncUntil <= Date.now()) {
-    finishHistorySync(historySyncImportedCount > 0 ? 100 : 0);
+function isHistorySyncActive(session: WhatsAppSessionState): boolean {
+  if (session.historySyncUntil > 0 && session.historySyncUntil <= Date.now()) {
+    finishHistorySync(session, session.historySyncImportedCount > 0 ? 100 : 0);
   }
-  return historySyncUntil > Date.now();
+  return session.historySyncUntil > Date.now();
 }
 
-function clearHistorySyncWatchdog(): void {
-  if (historySyncWatchdogTimer) {
-    clearTimeout(historySyncWatchdogTimer);
-    historySyncWatchdogTimer = null;
+function clearHistorySyncWatchdog(session: WhatsAppSessionState): void {
+  if (session.historySyncWatchdogTimer) {
+    clearTimeout(session.historySyncWatchdogTimer);
+    session.historySyncWatchdogTimer = null;
   }
 }
 
-function finishHistorySync(progress = 100, message = ""): void {
-  clearHistorySyncWatchdog();
-  historySyncUntil = 0;
-  historySyncProgress = Math.max(0, Math.min(100, Math.round(progress)));
-  historySyncLastActivityAt = 0;
-  historySyncBaselineAt = null;
+function finishHistorySync(session: WhatsAppSessionState, progress = 100, message = ""): void {
+  clearHistorySyncWatchdog(session);
+  session.historySyncUntil = 0;
+  session.historySyncProgress = Math.max(0, Math.min(100, Math.round(progress)));
+  session.historySyncLastActivityAt = 0;
+  session.historySyncBaselineAt = null;
   if (message) {
-    historySyncMessage = message;
+    session.historySyncMessage = message;
   }
 }
 
-function scheduleHistorySyncWatchdog(timeoutMs = 12_000): void {
-  clearHistorySyncWatchdog();
-  historySyncWatchdogTimer = setTimeout(() => {
-    if (!isHistorySyncActive()) {
+function scheduleHistorySyncWatchdog(session: WhatsAppSessionState, timeoutMs = 12_000): void {
+  clearHistorySyncWatchdog(session);
+  session.historySyncWatchdogTimer = setTimeout(() => {
+    if (!isHistorySyncActive(session)) {
       return;
     }
 
-    const idleMs = Date.now() - historySyncLastActivityAt;
+    const idleMs = Date.now() - session.historySyncLastActivityAt;
     if (idleMs < timeoutMs - 250) {
-      scheduleHistorySyncWatchdog(timeoutMs);
+      scheduleHistorySyncWatchdog(session, timeoutMs);
       return;
     }
 
     finishHistorySync(
+      session,
       0,
       "Nenhuma sincronizacao pendente. Para puxar historico antigo, desconecte este dispositivo no WhatsApp e conecte novamente no app.",
     );
@@ -133,34 +207,34 @@ function scheduleHistorySyncWatchdog(timeoutMs = 12_000): void {
   }, timeoutMs);
 }
 
-function beginHistorySync(message?: string): void {
-  historySyncUntil = Date.now() + 2 * 60 * 1000;
-  historySyncProgress = 5;
-  historySyncImportedCount = 0;
-  historySyncMessage =
+function beginHistorySync(session: WhatsAppSessionState, message?: string): void {
+  session.historySyncUntil = Date.now() + 2 * 60 * 1000;
+  session.historySyncProgress = 5;
+  session.historySyncImportedCount = 0;
+  session.historySyncMessage =
     message ||
     "O app vai importar somente mensagens que ainda nao estao no banco. Para puxar historico antigo, desconecte este dispositivo no WhatsApp e conecte novamente no app.";
-  historySyncLastActivityAt = Date.now();
-  scheduleHistorySyncWatchdog();
+  session.historySyncLastActivityAt = Date.now();
+  scheduleHistorySyncWatchdog(session);
 }
 
-function updateHistorySyncProgress(progress?: number | null, isLatest?: boolean): void {
+function updateHistorySyncProgress(session: WhatsAppSessionState, progress?: number | null, isLatest?: boolean): void {
   if (typeof progress === "number" && Number.isFinite(progress)) {
-    historySyncProgress = Math.max(historySyncProgress, Math.min(100, Math.round(progress)));
+    session.historySyncProgress = Math.max(session.historySyncProgress, Math.min(100, Math.round(progress)));
   }
-  historySyncLastActivityAt = Date.now();
-  scheduleHistorySyncWatchdog();
+  session.historySyncLastActivityAt = Date.now();
+  scheduleHistorySyncWatchdog(session);
 
   if (isLatest) {
     const message =
-      historySyncImportedCount > 0
-        ? `${historySyncImportedCount} mensagem(ns) importada(s) na ultima sincronizacao.`
+      session.historySyncImportedCount > 0
+        ? `${session.historySyncImportedCount} mensagem(ns) importada(s) na ultima sincronizacao.`
         : "Nenhuma sincronizacao pendente. Para puxar historico antigo, desconecte este dispositivo no WhatsApp e conecte novamente no app.";
-    finishHistorySync(100, message);
+    finishHistorySync(session, 100, message);
   }
 }
 
-async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
+async function processWhatsAppMessage(session: WhatsAppSessionState, message: WAMessage): Promise<boolean> {
   const remoteJid = message.key.remoteJid;
   const remoteJidAlt = (message.key as any).remoteJidAlt;
   const participant = message.key.participant || null;
@@ -218,7 +292,7 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
     return false;
   }
 
-  const isSelfChat = selfJid && normalizedRemoteJid === selfJid;
+  const isSelfChat = session.selfJid && normalizedRemoteJid === session.selfJid;
   const inboundDisplayName =
     message.pushName ||
     ((message as any).verifiedBizName as string | undefined) ||
@@ -239,7 +313,7 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
     logUpsert({
       stage: "ignored_self_chat_outbound",
       normalizedRemoteJid,
-      selfJid,
+      selfJid: session.selfJid,
       fromMe,
       messageType,
     });
@@ -248,10 +322,10 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
 
   const body = extractMessageText(message.message);
   const unwrapped = getUnwrappedMessage(message.message);
-  const imagePreview = await extractBestImageUrl(message);
-  const videoInfo = await extractBestVideoInfo(message);
-  const audioUrl = await extractBestAudioUrl(message);
-  const documentInfo = await extractBestDocumentInfo(message);
+  const imagePreview = await extractBestImageUrl(session, message);
+  const videoInfo = await extractBestVideoInfo(session, message);
+  const audioUrl = await extractBestAudioUrl(session, message);
+  const documentInfo = await extractBestDocumentInfo(session, message);
   const mediaType =
     unwrapped?.imageMessage || messageType === "imageMessage"
       ? "image"
@@ -268,7 +342,7 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
   const sentAt = message.messageTimestamp
     ? new Date(Number(message.messageTimestamp) * 1000)
     : new Date();
-  const avatarUrl = await getContactAvatarUrl(normalizedRemoteJid);
+  const avatarUrl = await getContactAvatarUrl(session, normalizedRemoteJid);
 
   if (normalizedRemoteJid.endsWith("@lid") && !inboundDisplayName && body === "[mensagem sem texto]") {
     logUpsert({
@@ -305,7 +379,7 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
     sentAt: sentAt.toISOString(),
   });
 
-  if (!selfJid) {
+  if (!session.selfJid) {
     logUpsert({
       stage: "ignored_missing_connected_account",
       normalizedRemoteJid,
@@ -315,20 +389,20 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
     return false;
   }
 
-  if (historySyncBaselineAt && sentAt <= historySyncBaselineAt) {
+  if (session.historySyncBaselineAt && sentAt <= session.historySyncBaselineAt) {
     logUpsert({
       stage: "ignored_before_history_sync_baseline",
       normalizedRemoteJid,
       sentAt: sentAt.toISOString(),
-      baselineAt: historySyncBaselineAt.toISOString(),
+      baselineAt: session.historySyncBaselineAt.toISOString(),
     });
     return false;
   }
 
   if (isInbound) {
     const inserted = await saveInboundMessage({
-      accountJid: selfJid,
-      accountDisplayName: currentAccountName() || null,
+      accountJid: session.selfJid,
+      accountDisplayName: currentAccountName(session) || null,
       waJid: normalizedRemoteJid,
       avatarUrl,
       body,
@@ -358,8 +432,8 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
     return inserted;
   } else {
     await saveOutboundMessage({
-      accountJid: selfJid,
-      accountDisplayName: currentAccountName() || null,
+      accountJid: session.selfJid,
+      accountDisplayName: currentAccountName(session) || null,
       phone: jidToPhone(normalizedRemoteJid),
       avatarUrl,
       body,
@@ -390,10 +464,10 @@ async function processWhatsAppMessage(message: WAMessage): Promise<boolean> {
   }
 }
 
-function currentAccountName(): string {
+function currentAccountName(session: WhatsAppSessionState): string {
   return (
-    ((sock?.user as any)?.name as string | undefined) ||
-    ((sock?.user as any)?.verifiedName as string | undefined) ||
+    ((session.sock?.user as any)?.name as string | undefined) ||
+    ((session.sock?.user as any)?.verifiedName as string | undefined) ||
     ""
   );
 }
@@ -430,22 +504,22 @@ function resolveDirectJid(remoteJid: string, remoteJidAlt = ""): string {
   return directJid ? normalizeChatJid(directJid) : "";
 }
 
-function clearReconnectTimer(): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+function clearReconnectTimer(session: WhatsAppSessionState): void {
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = null;
   }
 }
 
-async function resetAuthSessionFiles(): Promise<void> {
-  await rm(env.whatsappSessionPath, { recursive: true, force: true }).catch(() => undefined);
+async function resetAuthSessionFiles(sessionPath = activeSessionPath): Promise<void> {
+  await rm(sessionPath, { recursive: true, force: true }).catch(() => undefined);
 }
 
-async function teardownCurrentSocket(logout = false): Promise<void> {
-  clearReconnectTimer();
-  clearHistorySyncWatchdog();
-  const previousSock = sock;
-  activeSessionToken += 1;
+async function teardownCurrentSocket(session: WhatsAppSessionState, logout = false): Promise<void> {
+  clearReconnectTimer(session);
+  clearHistorySyncWatchdog(session);
+  const previousSock = session.sock;
+  session.activeSessionToken += 1;
 
   try {
     if (logout && previousSock) {
@@ -468,28 +542,29 @@ async function teardownCurrentSocket(logout = false): Promise<void> {
     }
   }
 
-  sock = null;
-  started = false;
-  connected = false;
-  hasOpenedConnection = false;
-  selfJid = "";
-  latestQr = "";
-  latestQrAt = null;
+  session.sock = null;
+  session.started = false;
+  session.connected = false;
+  session.hasOpenedConnection = false;
+  session.selfJid = "";
+  session.latestQr = "";
+  session.latestQrAt = null;
 }
 
-async function runPendingPostConnectSync(): Promise<void> {
-  if (!syncOnNextConnect || !selfJid) {
+async function runPendingPostConnectSync(session: WhatsAppSessionState): Promise<void> {
+  if (!session.syncOnNextConnect || !session.selfJid) {
     return;
   }
 
-  syncOnNextConnect = false;
-  const syncState = await getWhatsAppHistorySyncState(selfJid);
+  const syncState = await getWhatsAppHistorySyncState(session.selfJid);
   const now = new Date();
 
   if (!syncState.baselineAt) {
-    await setWhatsAppHistorySyncBaseline(selfJid, now);
-    historySyncBaselineAt = now;
+    session.syncOnNextConnect = false;
+    await setWhatsAppHistorySyncBaseline(session.selfJid, now);
+    session.historySyncBaselineAt = now;
     finishHistorySync(
+      session,
       100,
       "Primeira sincronizacao registrada. Historico antigo foi ignorado. Para importar historico antigo, desconecte este dispositivo no WhatsApp e conecte novamente no app.",
     );
@@ -497,51 +572,82 @@ async function runPendingPostConnectSync(): Promise<void> {
     return;
   }
 
-  beginHistorySync("Sincronizacao automatica em andamento apos reconectar o WhatsApp.");
-  historySyncBaselineAt = syncState.baselineAt;
+  session.syncOnNextConnect = false;
+  beginHistorySync(session, "Sincronizacao automatica em andamento apos reconectar o WhatsApp.");
+  session.historySyncBaselineAt = syncState.baselineAt;
   console.log(`Sincronizacao automatica solicitada a partir de ${syncState.baselineAt.toISOString()}.`);
 
-  if (sock?.resyncAppState) {
-    await sock.resyncAppState(
+  if (session.sock?.resyncAppState) {
+    await session.sock.resyncAppState(
       ["critical_block", "critical_unblock_low", "regular_low", "regular_high", "regular"],
       false,
     );
   }
 
-  await setWhatsAppHistorySyncBaseline(selfJid, now);
+  await setWhatsAppHistorySyncBaseline(session.selfJid, now);
 }
 
-function nextReconnectDelayMs(): number | null {
+async function ensureHistoryBaselineOnConnect(session: WhatsAppSessionState): Promise<void> {
+  if (!session.selfJid) {
+    return;
+  }
+
+  const syncState = await getWhatsAppHistorySyncState(session.selfJid);
+  if (syncState.baselineAt) {
+    session.historySyncBaselineAt = syncState.baselineAt;
+    return;
+  }
+
+  const now = new Date();
+  await setWhatsAppHistorySyncBaseline(session.selfJid, now);
+  session.historySyncBaselineAt = now;
+  console.log(`Baseline registrada para ${session.selfJid} em ${now.toISOString()}.`);
+}
+
+async function ensureHistorySyncReady(session: WhatsAppSessionState): Promise<boolean> {
+  if (isHistorySyncActive(session)) {
+    return true;
+  }
+
+  if (!session.syncOnNextConnect || !session.selfJid) {
+    return false;
+  }
+
+  await runPendingPostConnectSync(session);
+  return isHistorySyncActive(session);
+}
+
+function nextReconnectDelayMs(session: WhatsAppSessionState): number | null {
   const now = Date.now();
   const WINDOW_MS = 60_000;
   const MAX_ATTEMPTS_IN_WINDOW = 8;
 
-  if (!reconnectWindowStartedAt || now - reconnectWindowStartedAt > WINDOW_MS) {
-    reconnectWindowStartedAt = now;
-    reconnectAttempts = 0;
+  if (!session.reconnectWindowStartedAt || now - session.reconnectWindowStartedAt > WINDOW_MS) {
+    session.reconnectWindowStartedAt = now;
+    session.reconnectAttempts = 0;
   }
 
-  reconnectAttempts += 1;
-  if (reconnectAttempts > MAX_ATTEMPTS_IN_WINDOW) {
+  session.reconnectAttempts += 1;
+  if (session.reconnectAttempts > MAX_ATTEMPTS_IN_WINDOW) {
     return null;
   }
 
-  return Math.min(12_000, 1_500 * reconnectAttempts);
+  return Math.min(12_000, 1_500 * session.reconnectAttempts);
 }
 
-async function getContactAvatarUrl(waJid: string): Promise<string | null> {
+async function getContactAvatarUrl(session: WhatsAppSessionState, waJid: string): Promise<string | null> {
   const normalized = normalizeChatJid(waJid);
   const cached = avatarCache.get(normalized);
   if (cached && Date.now() - cached.fetchedAt < AVATAR_TTL_MS) {
     return cached.url;
   }
 
-  if (!sock) {
+  if (!session.sock) {
     return null;
   }
 
   try {
-    const url = await sock.profilePictureUrl(normalized, "image");
+    const url = await session.sock.profilePictureUrl(normalized, "image");
     avatarCache.set(normalized, { url: url || null, fetchedAt: Date.now() });
     return url || null;
   } catch {
@@ -550,11 +656,11 @@ async function getContactAvatarUrl(waJid: string): Promise<string | null> {
   }
 }
 
-async function extractBestImageUrl(message: WAMessage): Promise<string | null> {
+async function extractBestImageUrl(session: WhatsAppSessionState, message: WAMessage): Promise<string | null> {
   const preview = extractImagePreviewDataUrl(message.message);
   const unwrapped = getUnwrappedMessage(message.message);
   const imageMessage = unwrapped?.imageMessage;
-  if (!imageMessage || !sock) {
+  if (!imageMessage || !session.sock) {
     return preview;
   }
 
@@ -565,7 +671,7 @@ async function extractBestImageUrl(message: WAMessage): Promise<string | null> {
       {},
       {
         logger: downloadLogger,
-        reuploadRequest: sock.updateMediaMessage,
+        reuploadRequest: session.sock.updateMediaMessage,
       },
     );
 
@@ -586,10 +692,10 @@ async function extractBestImageUrl(message: WAMessage): Promise<string | null> {
   }
 }
 
-async function extractBestAudioUrl(message: WAMessage): Promise<string | null> {
+async function extractBestAudioUrl(session: WhatsAppSessionState, message: WAMessage): Promise<string | null> {
   const unwrapped = getUnwrappedMessage(message.message);
   const audioMessage = unwrapped?.audioMessage;
-  if (!audioMessage || !sock) {
+  if (!audioMessage || !session.sock) {
     return null;
   }
 
@@ -600,7 +706,7 @@ async function extractBestAudioUrl(message: WAMessage): Promise<string | null> {
       {},
       {
         logger: downloadLogger,
-        reuploadRequest: sock.updateMediaMessage,
+        reuploadRequest: session.sock.updateMediaMessage,
       },
     );
 
@@ -619,10 +725,10 @@ async function extractBestAudioUrl(message: WAMessage): Promise<string | null> {
   }
 }
 
-async function extractBestVideoInfo(message: WAMessage): Promise<ExtractedVideoInfo> {
+async function extractBestVideoInfo(session: WhatsAppSessionState, message: WAMessage): Promise<ExtractedVideoInfo> {
   const unwrapped = getUnwrappedMessage(message.message);
   const videoMessage = unwrapped?.videoMessage;
-  if (!videoMessage || !sock) {
+  if (!videoMessage || !session.sock) {
     return { url: null, mimeType: null };
   }
 
@@ -633,7 +739,7 @@ async function extractBestVideoInfo(message: WAMessage): Promise<ExtractedVideoI
       {},
       {
         logger: downloadLogger,
-        reuploadRequest: sock.updateMediaMessage,
+        reuploadRequest: session.sock.updateMediaMessage,
       },
     );
 
@@ -664,10 +770,10 @@ async function extractBestVideoInfo(message: WAMessage): Promise<ExtractedVideoI
   }
 }
 
-async function extractBestDocumentInfo(message: WAMessage): Promise<ExtractedDocumentInfo> {
+async function extractBestDocumentInfo(session: WhatsAppSessionState, message: WAMessage): Promise<ExtractedDocumentInfo> {
   const unwrapped = getUnwrappedMessage(message.message);
   const documentMessage = unwrapped?.documentMessage;
-  if (!documentMessage || !sock) {
+  if (!documentMessage || !session.sock) {
     return { url: null, fileName: null, mimeType: null };
   }
 
@@ -678,7 +784,7 @@ async function extractBestDocumentInfo(message: WAMessage): Promise<ExtractedDoc
       {},
       {
         logger: downloadLogger,
-        reuploadRequest: sock.updateMediaMessage,
+        reuploadRequest: session.sock.updateMediaMessage,
       },
     );
 
@@ -713,49 +819,40 @@ async function extractBestDocumentInfo(message: WAMessage): Promise<ExtractedDoc
   }
 }
 
-export async function startWhatsAppSession(force = false): Promise<void> {
-  if (started && !force) {
+export async function startWhatsAppSession(
+  force = false,
+  options?: {
+    sessionPath?: string;
+  },
+): Promise<void> {
+  const nextSessionPath = normalizeSessionPath(options?.sessionPath);
+  const session = getOrCreateSession(nextSessionPath);
+  if (session.started && !force) {
     return;
   }
 
   if (force) {
-    clearReconnectTimer();
-    clearHistorySyncWatchdog();
-    const previousSock = sock;
-    activeSessionToken += 1;
-    try {
-      (previousSock?.ev as any)?.removeAllListeners?.();
-    } catch {
-      // no-op
-    }
-    try {
-      previousSock?.ws?.close?.();
-    } catch {
-      // no-op
-    }
-    started = false;
-    connected = false;
-    selfJid = "";
-    sock = null;
+    await teardownCurrentSocket(session, false);
   }
 
-  started = true;
-  const sessionToken = ++activeSessionToken;
+  activeSessionPath = nextSessionPath;
+  session.started = true;
+  const sessionToken = ++session.activeSessionToken;
 
-  const { state, saveCreds } = await useMultiFileAuthState(env.whatsappSessionPath);
+  const { state, saveCreds } = await useMultiFileAuthState(session.sessionPath);
   const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
+  session.sock = makeWASocket({
     auth: state,
     version,
     printQRInTerminal: false,
     logger: pino({ level: "silent" }),
-    syncFullHistory: syncOnNextConnect,
+    syncFullHistory: session.syncOnNextConnect,
   });
 
-  sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("messages.upsert", async (event) => {
-    if (sessionToken !== activeSessionToken) {
+  session.sock.ev.on("creds.update", saveCreds);
+  session.sock.ev.on("messages.upsert", async (event: any) => {
+    if (sessionToken != session.activeSessionToken) {
       return;
     }
 
@@ -763,23 +860,26 @@ export async function startWhatsAppSession(force = false): Promise<void> {
       stage: "event_received",
       eventType: event.type,
       count: event.messages?.length || 0,
+      accountJid: session.selfJid || null,
+      sessionPath: session.sessionPath,
     });
 
     if (!event.messages || event.messages.length === 0) {
       return;
     }
 
-    if (event.type === "append" && !isHistorySyncActive()) {
+    if (event.type === "append" && !isHistorySyncActive(session)) {
       logUpsert({
         stage: "ignored_append_without_manual_sync",
         count: event.messages.length,
+        sessionPath: session.sessionPath,
       });
       return;
     }
 
     for (const message of event.messages) {
       try {
-        await processWhatsAppMessage(message);
+        await processWhatsAppMessage(session, message);
       } catch (error) {
         logUpsert({
           stage: "save_error",
@@ -787,53 +887,58 @@ export async function startWhatsAppSession(force = false): Promise<void> {
           externalMessageId: message.key.id || null,
           messageType: detectMessageType(message.message),
           error: error instanceof Error ? error.message : "unknown",
+          accountJid: session.selfJid || null,
+          sessionPath: session.sessionPath,
         });
         console.error("Erro ao salvar mensagem do WhatsApp:", error);
       }
     }
   });
 
-  sock.ev.on("messaging-history.set", async (history) => {
-    if (sessionToken !== activeSessionToken) {
+  session.sock.ev.on("messaging-history.set", async (history: any) => {
+    if (sessionToken !== session.activeSessionToken) {
       return;
     }
 
-    if (!isHistorySyncActive()) {
+    if (!(await ensureHistorySyncReady(session))) {
       logUpsert({
         stage: "ignored_history_sync_without_manual_trigger",
         messageCount: history.messages?.length || 0,
+        sessionPath: session.sessionPath,
       });
       return;
     }
 
-    updateHistorySyncProgress(history.progress, history.isLatest);
+    updateHistorySyncProgress(session, history.progress, history.isLatest);
     logUpsert({
       stage: "history_sync_chunk",
       messageCount: history.messages?.length || 0,
-      progress: historySyncProgress,
+      progress: session.historySyncProgress,
       isLatest: Boolean(history.isLatest),
+      accountJid: session.selfJid || null,
+      sessionPath: session.sessionPath,
     });
 
     for (const message of history.messages || []) {
       try {
-        const saved = await processWhatsAppMessage(message);
+        const saved = await processWhatsAppMessage(session, message);
         if (saved) {
-          historySyncImportedCount += 1;
+          session.historySyncImportedCount += 1;
         }
       } catch (error) {
         console.error("Erro ao salvar mensagem do historico:", error);
       }
     }
 
-    updateHistorySyncProgress(history.progress, history.isLatest);
+    updateHistorySyncProgress(session, history.progress, history.isLatest);
   });
 
-  sock.ev.on("messages.update", async (updates: any[]) => {
-    if (sessionToken !== activeSessionToken) {
+  session.sock.ev.on("messages.update", async (updates: any[]) => {
+    if (sessionToken !== session.activeSessionToken) {
       return;
     }
 
-    if (!updates || updates.length === 0 || !selfJid) {
+    if (!updates || updates.length === 0 || !session.selfJid) {
       return;
     }
 
@@ -850,41 +955,33 @@ export async function startWhatsAppSession(force = false): Promise<void> {
       const now = new Date();
 
       try {
-        if (
-          (Number.isFinite(statusCode) && statusCode >= 4) ||
-          statusText.includes("read") ||
-          statusText.includes("played")
-        ) {
+        if ((Number.isFinite(statusCode) && statusCode >= 4) || statusText.includes("read") || statusText.includes("played")) {
           await updateOutboundMessageStatus({
-            accountJid: selfJid,
+            accountJid: session.selfJid,
             externalMessageId,
             waJid,
             deliveredAt: now,
             readAt: now,
             status: "read",
           });
-          logStatus({ source: "messages.update", externalMessageId, waJid, status: "read" });
-        } else if (
-          (Number.isFinite(statusCode) && statusCode >= 3) ||
-          statusText.includes("delivery") ||
-          statusText.includes("deliver")
-        ) {
+          logStatus({ source: "messages.update", externalMessageId, waJid, status: "read", accountJid: session.selfJid });
+        } else if ((Number.isFinite(statusCode) && statusCode >= 3) || statusText.includes("delivery") || statusText.includes("deliver")) {
           await updateOutboundMessageStatus({
-            accountJid: selfJid,
+            accountJid: session.selfJid,
             externalMessageId,
             waJid,
             deliveredAt: now,
             status: "delivered",
           });
-          logStatus({ source: "messages.update", externalMessageId, waJid, status: "delivered" });
+          logStatus({ source: "messages.update", externalMessageId, waJid, status: "delivered", accountJid: session.selfJid });
         } else if (Number.isFinite(statusCode) && statusCode >= 2) {
           await updateOutboundMessageStatus({
-            accountJid: selfJid,
+            accountJid: session.selfJid,
             status: "sent",
             externalMessageId,
             waJid,
           });
-          logStatus({ source: "messages.update", externalMessageId, waJid, status: "sent" });
+          logStatus({ source: "messages.update", externalMessageId, waJid, status: "sent", accountJid: session.selfJid });
         }
       } catch (error) {
         console.error("Erro ao atualizar status da mensagem:", error);
@@ -892,12 +989,12 @@ export async function startWhatsAppSession(force = false): Promise<void> {
     }
   });
 
-  sock.ev.on("message-receipt.update", async (updates: any[]) => {
-    if (sessionToken !== activeSessionToken) {
+  session.sock.ev.on("message-receipt.update", async (updates: any[]) => {
+    if (sessionToken !== session.activeSessionToken) {
       return;
     }
 
-    if (!updates || updates.length === 0 || !selfJid) {
+    if (!updates || updates.length === 0 || !session.selfJid) {
       return;
     }
 
@@ -922,23 +1019,23 @@ export async function startWhatsAppSession(force = false): Promise<void> {
         for (const externalMessageId of messageIds) {
           if (type === "read" || type === "played") {
             await updateOutboundMessageStatus({
-              accountJid: selfJid,
+              accountJid: session.selfJid,
               externalMessageId,
               waJid,
               deliveredAt: now,
               readAt: now,
               status: "read",
             });
-            logStatus({ source: "message-receipt.update", externalMessageId, waJid, type, status: "read" });
+            logStatus({ source: "message-receipt.update", externalMessageId, waJid, type, status: "read", accountJid: session.selfJid });
           } else if (type === "delivery" || type === "delivered") {
             await updateOutboundMessageStatus({
-              accountJid: selfJid,
+              accountJid: session.selfJid,
               externalMessageId,
               waJid,
               deliveredAt: now,
               status: "delivered",
             });
-            logStatus({ source: "message-receipt.update", externalMessageId, waJid, type, status: "delivered" });
+            logStatus({ source: "message-receipt.update", externalMessageId, waJid, type, status: "delivered", accountJid: session.selfJid });
           }
         }
       } catch (error) {
@@ -947,146 +1044,204 @@ export async function startWhatsAppSession(force = false): Promise<void> {
     }
   });
 
-  sock.ev.on("connection.update", async (update) => {
-    if (sessionToken !== activeSessionToken) {
+  session.sock.ev.on("connection.update", async (update: any) => {
+    if (sessionToken !== session.activeSessionToken) {
       return;
     }
 
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      latestQr = qr;
-      latestQrAt = new Date();
-      console.log("Escaneie o QR abaixo com o WhatsApp:");
+      session.latestQr = qr;
+      session.latestQrAt = new Date();
+      console.log(`Escaneie o QR abaixo com o WhatsApp (${session.sessionPath}):`);
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === "open") {
-      clearReconnectTimer();
-      if (!syncOnNextConnect) {
-        finishHistorySync(0, historySyncMessage || "Para puxar historico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.");
+      clearReconnectTimer(session);
+      if (!session.syncOnNextConnect) {
+        finishHistorySync(
+          session,
+          0,
+          session.historySyncMessage || "Para puxar historico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.",
+        );
       } else {
-        clearHistorySyncWatchdog();
+        clearHistorySyncWatchdog(session);
       }
-      reconnectAttempts = 0;
-      reconnectWindowStartedAt = 0;
-      connected = true;
-      hasOpenedConnection = true;
-      selfJid = sock?.user?.id ? normalizeChatJid(sock.user.id) : "";
-      latestQr = "";
-      latestQrAt = null;
-      console.log("WhatsApp conectado via Baileys.");
-      runPendingPostConnectSync().catch((error) => {
-        finishHistorySync(0, "Falha ao sincronizar apos reconectar. Tente novamente.");
+      session.reconnectAttempts = 0;
+      session.reconnectWindowStartedAt = 0;
+      session.connected = true;
+      session.hasOpenedConnection = true;
+      session.selfJid = session.sock?.user?.id ? normalizeChatJid(session.sock.user.id) : "";
+      session.latestQr = "";
+      session.latestQrAt = null;
+      if (session.selfJid) {
+        await upsertWhatsAppAccount({
+          waJid: session.selfJid,
+          displayName: currentAccountName(session) || null,
+          sessionPath: session.sessionPath,
+        }).catch(() => undefined);
+        await ensureHistoryBaselineOnConnect(session).catch((error) => {
+          console.error("Erro ao registrar baseline de historico:", error);
+        });
+      }
+      console.log(`WhatsApp conectado via Baileys (${session.selfJid || session.sessionPath}).`);
+      runPendingPostConnectSync(session).catch((error) => {
+        finishHistorySync(session, 0, "Falha ao sincronizar apos reconectar. Tente novamente.");
         console.error("Erro ao iniciar sincronizacao automatica:", error);
       });
     }
 
     if (connection === "close") {
-      connected = false;
-      clearHistorySyncWatchdog();
+      session.connected = false;
+      clearHistorySyncWatchdog(session);
 
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
       const shouldReconnect =
         statusCode !== DisconnectReason.loggedOut && statusCode !== DisconnectReason.connectionReplaced;
 
-      console.log(`WhatsApp desconectado. status=${statusCode ?? "unknown"}`);
+      console.log(`WhatsApp desconectado. status=${statusCode ?? "unknown"} session=${session.sessionPath}`);
 
       if (shouldReconnect) {
-        if (reconnectTimer) {
+        if (session.reconnectTimer) {
           return;
         }
 
-        const delayMs = nextReconnectDelayMs();
-        if (delayMs === null || (!hasOpenedConnection && reconnectAttempts >= 3)) {
-          clearReconnectTimer();
-          started = false;
-          selfJid = "";
-          latestQr = "";
-          latestQrAt = null;
+        const delayMs = nextReconnectDelayMs(session);
+        if (delayMs === null || (!session.hasOpenedConnection && session.reconnectAttempts >= 3)) {
+          clearReconnectTimer(session);
+          session.started = false;
+          session.selfJid = "";
+          session.latestQr = "";
+          session.latestQrAt = null;
           console.log("Reconexao pausada. Clique em Conectar para gerar novo QR.");
           return;
         }
 
-        console.log(`WhatsApp desconectado. Reconectando em ${delayMs}ms...`);
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          if (sessionToken !== activeSessionToken) {
+        console.log(`WhatsApp desconectado. Reconectando em ${delayMs}ms... session=${session.sessionPath}`);
+        session.reconnectTimer = setTimeout(() => {
+          session.reconnectTimer = null;
+          if (sessionToken !== session.activeSessionToken) {
             return;
           }
-          started = false;
-          startWhatsAppSession().catch((error) => {
+          session.started = false;
+          startWhatsAppSession(false, { sessionPath: session.sessionPath }).catch((error) => {
             console.error("Erro ao reconectar WhatsApp:", error);
           });
         }, delayMs);
       } else {
-        clearReconnectTimer();
-        reconnectAttempts = 0;
-        reconnectWindowStartedAt = 0;
-        started = false;
-        connected = false;
-        hasOpenedConnection = false;
-        selfJid = "";
-        sock = null;
-        latestQr = "";
-        latestQrAt = null;
-        finishHistorySync(0, "Sessao desconectada. Conecte novamente para continuar.");
-        await resetAuthSessionFiles();
+        clearReconnectTimer(session);
+        session.reconnectAttempts = 0;
+        session.reconnectWindowStartedAt = 0;
+        session.started = false;
+        session.connected = false;
+        session.hasOpenedConnection = false;
+        session.selfJid = "";
+        session.sock = null;
+        session.latestQr = "";
+        session.latestQrAt = null;
+        finishHistorySync(session, 0, "Sessao desconectada. Conecte novamente para continuar.");
+        await resetAuthSessionFiles(session.sessionPath);
         console.log("Sessao encerrada (logged out). Remova a pasta de sessao e conecte novamente.");
       }
     }
   });
 }
 
-export function getWhatsAppConnectionStatus() {
-  const currentUserId = connected && sock?.user?.id ? normalizeChatJid(sock.user.id) : "";
+export async function startKnownWhatsAppSessions(): Promise<void> {
+  const accounts = await listWhatsAppAccounts();
+  const sessionPaths = new Set<string>();
+
+  for (const account of accounts) {
+    const sessionPath = String(account.session_path || "").trim();
+    if (!sessionPath || sessionPaths.has(sessionPath)) {
+      continue;
+    }
+    sessionPaths.add(sessionPath);
+    await startWhatsAppSession(false, { sessionPath }).catch((error) => {
+      console.error(`Falha ao iniciar sessao WhatsApp ${sessionPath}:`, error);
+    });
+  }
+
+  if (sessionPaths.size === 0) {
+    await startWhatsAppSession(false, { sessionPath: env.whatsappSessionPath });
+  }
+}
+
+export function getWhatsAppConnectionStatus(accountJid?: string | null, sessionPath?: string | null) {
+  const session = resolveSessionForAccount(accountJid, sessionPath || (accountJid ? null : activeSessionPath));
+  const currentUserId = session.connected && session.sock?.user?.id ? normalizeChatJid(session.sock.user.id) : "";
   const currentUserPhone = currentUserId ? jidToPhone(currentUserId) : "";
-  const currentUserName = currentAccountName();
+  const currentUserName = currentAccountName(session);
 
   return {
-    connected,
-    started,
-    sessionPath: env.whatsappSessionPath,
+    connected: session.connected,
+    started: session.started,
+    sessionPath: session.sessionPath,
     userId: currentUserId || null,
     userPhone: currentUserPhone || null,
     userName: currentUserName || null,
-    historySyncActive: isHistorySyncActive(),
-    historySyncProgress,
-    historySyncImportedCount,
-    historySyncMessage,
-    qrAvailable: Boolean(latestQr),
-    qrUpdatedAt: latestQrAt ? latestQrAt.toISOString() : null,
+    historySyncActive: isHistorySyncActive(session),
+    historySyncProgress: session.historySyncProgress,
+    historySyncImportedCount: session.historySyncImportedCount,
+    historySyncMessage: session.historySyncMessage,
+    qrAvailable: Boolean(session.latestQr),
+    qrUpdatedAt: session.latestQrAt ? session.latestQrAt.toISOString() : null,
   };
 }
 
-export function getCurrentWhatsAppAccount() {
-  const currentUserId = sock?.user?.id ? normalizeChatJid(sock.user.id) : "";
+export function listConnectedWhatsAppAccounts() {
+  return listSessionStates()
+    .filter((session) => session.connected && session.selfJid)
+    .map((session) => ({
+      waJid: session.selfJid,
+      displayName: currentAccountName(session) || null,
+      sessionPath: session.sessionPath,
+    }));
+}
+
+export function getCurrentWhatsAppAccount(accountJid?: string | null, sessionPath?: string | null) {
+  const session = resolveSessionForAccount(accountJid, sessionPath || (accountJid ? null : activeSessionPath));
+  const currentUserId = session.sock?.user?.id ? normalizeChatJid(session.sock.user.id) : "";
   return {
     waJid: currentUserId || "",
-    displayName: currentAccountName() || null,
+    displayName: currentAccountName(session) || null,
+    sessionPath: session.sessionPath,
   };
 }
 
-export async function getProfilePictureUrl(waJid: string): Promise<string | null> {
-  return getContactAvatarUrl(waJid);
+export async function getProfilePictureUrl(waJid: string, accountJid?: string | null, sessionPath?: string | null): Promise<string | null> {
+  const session = resolveSessionForAccount(accountJid, sessionPath || (accountJid ? null : activeSessionPath));
+  return getContactAvatarUrl(session, waJid);
 }
 
-export async function getConnectedAccountAvatarUrl(): Promise<string | null> {
-  const currentUserId = sock?.user?.id ? normalizeChatJid(sock.user.id) : "";
+export async function getConnectedAccountAvatarUrl(accountJid?: string | null, sessionPath?: string | null): Promise<string | null> {
+  const session = resolveSessionForAccount(accountJid, sessionPath || (accountJid ? null : activeSessionPath));
+  const currentUserId = session.sock?.user?.id ? normalizeChatJid(session.sock.user.id) : "";
   if (!currentUserId) {
     return null;
   }
 
-  return getContactAvatarUrl(currentUserId);
+  return getContactAvatarUrl(session, currentUserId);
 }
 
-export async function sendWhatsAppText({ to, message }: SendWhatsAppTextInput): Promise<WAMessage> {
-  if (!sock || !connected) {
+export function getLatestQr(accountJid?: string | null, sessionPath?: string | null) {
+  const session = resolveSessionForAccount(accountJid, sessionPath);
+  return {
+    qr: session.latestQr || null,
+    updatedAt: session.latestQrAt ? session.latestQrAt.toISOString() : null,
+  };
+}
+
+export async function sendWhatsAppText({ to, message, accountJid }: SendWhatsAppTextInput): Promise<WAMessage> {
+  const session = resolveSessionForAccount(accountJid, accountJid ? null : activeSessionPath);
+  if (!session.sock || !session.connected) {
     throw new Error("WhatsApp nao conectado. Escaneie o QR no terminal primeiro.");
   }
 
   const jid = phoneToJid(to);
-  const response = await sock.sendMessage(jid, { text: message });
+  const response = await session.sock.sendMessage(jid, { text: message });
   if (!response) {
     throw new Error("Falha ao enviar mensagem no Baileys.");
   }
@@ -1095,12 +1250,13 @@ export async function sendWhatsAppText({ to, message }: SendWhatsAppTextInput): 
 }
 
 export async function sendWhatsAppAudio(input: SendWhatsAppAudioInput): Promise<WAMessage> {
-  if (!sock || !connected) {
+  const session = resolveSessionForAccount(input.accountJid, input.accountJid ? null : activeSessionPath);
+  if (!session.sock || !session.connected) {
     throw new Error("WhatsApp nao conectado. Escaneie o QR no terminal primeiro.");
   }
 
   const jid = phoneToJid(input.to);
-  const response = await sock.sendMessage(jid, {
+  const response = await session.sock.sendMessage(jid, {
     audio: input.audioBuffer,
     mimetype: input.mimetype || "audio/ogg",
     ptt: Boolean(input.ptt),
@@ -1114,7 +1270,8 @@ export async function sendWhatsAppAudio(input: SendWhatsAppAudioInput): Promise<
 }
 
 export async function sendWhatsAppMedia(input: SendWhatsAppMediaInput): Promise<WAMessage> {
-  if (!sock || !connected) {
+  const session = resolveSessionForAccount(input.accountJid, input.accountJid ? null : activeSessionPath);
+  if (!session.sock || !session.connected) {
     throw new Error("WhatsApp nao conectado. Escaneie o QR no terminal primeiro.");
   }
 
@@ -1143,7 +1300,7 @@ export async function sendWhatsAppMedia(input: SendWhatsAppMediaInput): Promise<
     };
   }
 
-  const response = await sock.sendMessage(jid, payload as any);
+  const response = await session.sock.sendMessage(jid, payload as any);
   if (!response) {
     throw new Error("Falha ao enviar midia no Baileys.");
   }
@@ -1151,37 +1308,40 @@ export async function sendWhatsAppMedia(input: SendWhatsAppMediaInput): Promise<
   return response;
 }
 
-export function getLatestQr() {
-  return {
-    qr: latestQr || null,
-    updatedAt: latestQrAt ? latestQrAt.toISOString() : null,
-  };
-}
-
-export async function disconnectWhatsAppSession(): Promise<void> {
+export async function disconnectWhatsAppSession(sessionPath?: string): Promise<void> {
+  const session = resolveSessionForAccount(null, sessionPath || activeSessionPath);
   try {
-    syncOnNextConnect = false;
-    await teardownCurrentSocket(true);
+    session.syncOnNextConnect = false;
+    await teardownCurrentSocket(session, true);
   } finally {
-    finishHistorySync(0, "Sessao desconectada. Conecte novamente para continuar.");
-    await resetAuthSessionFiles();
+    finishHistorySync(session, 0, "Sessao desconectada. Conecte novamente para continuar.");
+    await resetAuthSessionFiles(session.sessionPath);
   }
 }
 
-export async function requestWhatsAppConnect(): Promise<void> {
-  syncOnNextConnect = true;
-  await teardownCurrentSocket(true);
-  reconnectAttempts = 0;
-  reconnectWindowStartedAt = 0;
-  hasOpenedConnection = false;
-  historySyncMessage =
-    "Leia o novo QR code. Depois da conexao, o app vai sincronizar automaticamente as mensagens pendentes.";
-  await resetAuthSessionFiles();
-  await startWhatsAppSession(true);
+export async function requestWhatsAppConnect(sessionPath?: string): Promise<void> {
+  const session = getOrCreateSession(sessionPath || activeSessionPath);
+  activeSessionPath = session.sessionPath;
+  session.syncOnNextConnect = false;
+  await teardownCurrentSocket(session, true);
+  session.reconnectAttempts = 0;
+  session.reconnectWindowStartedAt = 0;
+  session.hasOpenedConnection = false;
+  session.historySyncMessage =
+    "Leia o novo QR code. O app vai mostrar apenas as conversas ja salvas no banco e as novas mensagens recebidas daqui para frente.";
+  await resetAuthSessionFiles(session.sessionPath);
+  await startWhatsAppSession(true, { sessionPath: session.sessionPath });
 }
 
-export async function requestWhatsAppHistorySync(): Promise<void> {
-  historySyncMessage =
+export async function requestWhatsAppHistorySync(sessionPath?: string): Promise<void> {
+  const session = getOrCreateSession(sessionPath || activeSessionPath);
+  session.historySyncMessage =
     "Sincronizacao solicitada. O app vai remover a conexao atual, gerar um novo QR code e sincronizar automaticamente apos a leitura.";
-  await requestWhatsAppConnect();
+  session.syncOnNextConnect = true;
+  await teardownCurrentSocket(session, true);
+  session.reconnectAttempts = 0;
+  session.reconnectWindowStartedAt = 0;
+  session.hasOpenedConnection = false;
+  await resetAuthSessionFiles(session.sessionPath);
+  await startWhatsAppSession(true, { sessionPath: session.sessionPath });
 }

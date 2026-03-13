@@ -7,6 +7,8 @@ const state = {
   connectedAccountPhone: "",
   connectedAccountName: "",
   connectedAccountAvatarUrl: "",
+  whatsappAccounts: [],
+  selectedWhatsAppAccountId: "",
   search: "",
   serviceTab: "pending",
   showAllChats: false,
@@ -131,6 +133,11 @@ const transferModalEl = document.getElementById("transferModal");
 const transferFormEl = document.getElementById("transferForm");
 const transferUserSelectEl = document.getElementById("transferUserSelect");
 const transferCancelEl = document.getElementById("transferCancel");
+const accountSwitchOverlayEl = document.getElementById("accountSwitchOverlay");
+const accountSwitchModalEl = document.getElementById("accountSwitchModal");
+const accountSwitchTitleEl = document.getElementById("accountSwitchTitle");
+const accountSwitchListEl = document.getElementById("accountSwitchList");
+const accountSwitchCloseEl = document.getElementById("accountSwitchClose");
 const conversationItemTpl = document.getElementById("conversationItemTpl");
 const railChatsEl = document.getElementById("railChats");
 const railBulkCreateEl = document.getElementById("railBulkCreate");
@@ -170,16 +177,21 @@ const settingsTabPerfilEl = document.getElementById("settingsTabPerfil");
 const settingsTabCreateEl = document.getElementById("settingsTabCreate");
 const settingsTabListEl = document.getElementById("settingsTabList");
 const settingsTabSectorsEl = document.getElementById("settingsTabSectors");
+const settingsTabAccountsEl = document.getElementById("settingsTabAccounts");
 const settingsPanelPerfilEl = document.getElementById("settingsPanelPerfil");
 const settingsPanelCreateEl = document.getElementById("settingsPanelCreate");
 const settingsPanelListEl = document.getElementById("settingsPanelList");
 const settingsPanelSectorsEl = document.getElementById("settingsPanelSectors");
+const settingsPanelAccountsEl = document.getElementById("settingsPanelAccounts");
 const settingsProfileNameEl = document.getElementById("settingsProfileName");
 const settingsProfileUsernameEl = document.getElementById("settingsProfileUsername");
 const settingsProfileRoleEl = document.getElementById("settingsProfileRole");
 const settingsProfileSectorEl = document.getElementById("settingsProfileSector");
 const settingsAdminActionsEl = document.getElementById("settingsAdminActions");
 const settingsFinalizePendingBtnEl = document.getElementById("settingsFinalizePendingBtn");
+const settingsSwitchNumberBtnEl = document.getElementById("settingsSwitchNumberBtn");
+const settingsAddNumberBtnEl = document.getElementById("settingsAddNumberBtn");
+const settingsRemoveNumberBtnEl = document.getElementById("settingsRemoveNumberBtn");
 const createUserFormEl = document.getElementById("createUserForm");
 const newUserNameEl = document.getElementById("newUserName");
 const newUserUsernameEl = document.getElementById("newUserUsername");
@@ -213,6 +225,7 @@ let healthTimer = null;
 let bulkMonitorTimer = null;
 let editingUserId = "";
 let transferConversationId = "";
+let accountSwitchMode = "select";
 let bulkMessagesDraft = [""];
 let pendingConversationRefresh = false;
 let pendingMessagesRefresh = false;
@@ -329,6 +342,45 @@ function formatPhone(phone) {
   return `+${digits}`;
 }
 
+function getSelectedWhatsAppAccount() {
+  return state.whatsappAccounts.find((item) => item.id === state.selectedWhatsAppAccountId) || null;
+}
+
+function isPendingWhatsAppAccount(account) {
+  return String(account?.wa_jid || "").startsWith("pending:");
+}
+
+function getProfileWhatsAppAccount() {
+  return getSelectedWhatsAppAccount();
+}
+
+function formatWhatsAppAccountTitle(account) {
+  if (!account) return "Nenhum numero selecionado";
+  if (isPendingWhatsAppAccount(account)) {
+    return String(account.display_name || "").trim() || "Novo numero";
+  }
+  const name = String(account.display_name || "").trim();
+  const phone = formatPhone(account.phone || "");
+  if (name && phone) return `${name} - ${phone}`;
+  return name || phone || "Novo numero";
+}
+
+function formatWhatsAppAccountMeta(account) {
+  if (!account) return "";
+  if (isPendingWhatsAppAccount(account)) {
+    return "Numero ainda nao vinculado. Clique em Conectar para ler o QR code.";
+  }
+  return String(account.wa_jid || "").trim();
+}
+
+function getActiveAccountJid() {
+  const selected = getSelectedWhatsAppAccount();
+  if (selected?.wa_jid) {
+    return String(selected.wa_jid).trim();
+  }
+  return String(state.connectedAccountJid || "").trim();
+}
+
 function profileLabel(name, phone) {
   if (name && name.trim()) {
     const parts = name.trim().split(/\s+/).slice(0, 2);
@@ -433,21 +485,30 @@ function canManageWhatsAppSession() {
   return String(state.currentUser?.role || "") === "administrador";
 }
 
+function isAdmin() {
+  return canManageWhatsAppSession();
+}
+
 function syncProfilePanel() {
-  const name = state.connectedAccountName || "-";
-  const phone = formatPhone(state.connectedAccountPhone) || "-";
-  const jid = state.connectedAccountJid || "-";
-  const isOnline = waStatusEl.classList.contains("online");
+  const selectedAccount = getProfileWhatsAppAccount();
+  const name = selectedAccount ? formatWhatsAppAccountTitle(selectedAccount) : state.connectedAccountName || "-";
+  const phone = selectedAccount
+    ? isPendingWhatsAppAccount(selectedAccount)
+      ? "-"
+      : formatPhone(selectedAccount.phone || "") || "-"
+    : formatPhone(state.connectedAccountPhone) || "-";
+  const jid = selectedAccount ? formatWhatsAppAccountMeta(selectedAccount) || "-" : state.connectedAccountJid || "-";
+  const isOnline = selectedAccount ? Boolean(selectedAccount.connected) : waStatusEl.classList.contains("online");
   const canManageSession = canManageWhatsAppSession();
 
-  profileAvatarEl.textContent = profileLabel(state.connectedAccountName, state.connectedAccountPhone);
+  profileAvatarEl.textContent = profileLabel(selectedAccount?.display_name || state.connectedAccountName, selectedAccount?.phone || state.connectedAccountPhone);
   profileNameEl.textContent = name;
-  profileStatusEl.textContent = isOnline ? "Conectado" : "Desconectado";
+  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexao" : isOnline ? "Conectado" : "Desconectado";
   profilePhoneEl.textContent = phone;
   profileJidEl.textContent = jid;
   disconnectBtnEl.hidden = !isOnline || !canManageSession;
   syncHistoryBtnEl.hidden = !isOnline || !canManageSession;
-  connectBtnEl.hidden = isOnline;
+  connectBtnEl.hidden = isOnline || !selectedAccount;
 }
 
 function renderHistorySyncStatus(wa = {}) {
@@ -651,6 +712,47 @@ function renderSettingsHeader() {
   settingsProfileRoleEl.textContent = user.role || "-";
   settingsProfileSectorEl.textContent = user.sector_name || "-";
   settingsAdminActionsEl.hidden = user.role !== "administrador";
+  settingsAddNumberBtnEl.hidden = user.role !== "administrador";
+  settingsRemoveNumberBtnEl.hidden = user.role !== "administrador";
+}
+
+function renderWhatsAppAccountOptions() {
+  const items = Array.isArray(state.whatsappAccounts) ? state.whatsappAccounts : [];
+  if (!accountSwitchListEl) return;
+  accountSwitchListEl.innerHTML = "";
+
+  if (!items.length) {
+    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum numero vinculado.</div>';
+    return;
+  }
+
+  for (const account of items) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `account-switch-item${account.id === state.selectedWhatsAppAccountId ? " active" : ""}${
+      isPendingWhatsAppAccount(account) ? " pending" : ""
+    }`;
+    item.dataset.accountId = account.id;
+    const badges = [];
+    if (account.connected) badges.push('<span class="account-switch-badge online"><i class="bi bi-wifi"></i>Online</span>');
+    if (account.id === state.selectedWhatsAppAccountId) {
+      badges.push('<span class="account-switch-badge selected"><i class="bi bi-check2-circle"></i>Selecionado</span>');
+    }
+    if (isPendingWhatsAppAccount(account)) {
+      badges.push('<span class="account-switch-badge pending"><i class="bi bi-qr-code"></i>Aguardando QR</span>');
+    }
+    if (accountSwitchMode === "remove") {
+      badges.push('<span class="account-switch-badge pending"><i class="bi bi-trash3"></i>Remover</span>');
+    }
+    item.innerHTML = `
+      <div class="account-switch-item-head">
+        <strong>${formatWhatsAppAccountTitle(account)}</strong>
+        <span class="account-switch-badges">${badges.join("")}</span>
+      </div>
+      <small>${formatWhatsAppAccountMeta(account) || "-"}</small>
+    `;
+    accountSwitchListEl.appendChild(item);
+  }
 }
 
 function setSettingsTab(tab) {
@@ -660,11 +762,13 @@ function setSettingsTab(tab) {
   settingsTabCreateEl.classList.toggle("active", tab === "create");
   settingsTabListEl.classList.toggle("active", tab === "list");
   settingsTabSectorsEl.classList.toggle("active", tab === "sectors");
+  settingsTabAccountsEl.classList.toggle("active", tab === "accounts");
 
   settingsPanelPerfilEl.classList.toggle("active", tab === "perfil");
   settingsPanelCreateEl.classList.toggle("active", tab === "create");
   settingsPanelListEl.classList.toggle("active", tab === "list");
   settingsPanelSectorsEl.classList.toggle("active", tab === "sectors");
+  settingsPanelAccountsEl.classList.toggle("active", tab === "accounts");
 }
 
 function openSettingsModal() {
@@ -782,6 +886,7 @@ async function loadUsersForSettings() {
     settingsTabCreateEl.disabled = true;
     settingsTabListEl.disabled = true;
     settingsTabSectorsEl.disabled = true;
+    settingsTabAccountsEl.disabled = false;
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
@@ -793,6 +898,7 @@ async function loadUsersForSettings() {
   settingsTabCreateEl.disabled = false;
   settingsTabListEl.disabled = false;
   settingsTabSectorsEl.disabled = false;
+  settingsTabAccountsEl.disabled = false;
   await loadSectorsForSettings();
   const result = await api("/auth/users");
   state.settingsUsers = result.items || [];
@@ -809,6 +915,143 @@ async function loadAgents() {
     state.agents = Array.isArray(result?.items) ? result.items : [];
   } catch {
     state.agents = [];
+  }
+}
+
+async function loadWhatsAppAccounts() {
+  if (!state.isAuthenticated) {
+    state.whatsappAccounts = [];
+    state.selectedWhatsAppAccountId = "";
+    renderWhatsAppAccountOptions();
+    syncProfilePanel();
+    return;
+  }
+
+  try {
+    const result = await api("/whatsapp/accounts");
+    state.whatsappAccounts = Array.isArray(result?.items) ? result.items : [];
+    state.selectedWhatsAppAccountId = String(result?.selected_account_id || "").trim();
+
+    if (!state.selectedWhatsAppAccountId) {
+      const connected = state.whatsappAccounts.find((item) => item.connected);
+      if (connected?.id) {
+        state.selectedWhatsAppAccountId = connected.id;
+      } else if (state.whatsappAccounts[0]?.id) {
+        state.selectedWhatsAppAccountId = state.whatsappAccounts[0].id;
+      }
+    }
+
+    renderWhatsAppAccountOptions();
+    renderSettingsHeader();
+    syncProfilePanel();
+  } catch (error) {
+    console.error(error);
+    state.whatsappAccounts = [];
+    state.selectedWhatsAppAccountId = "";
+    renderWhatsAppAccountOptions();
+    syncProfilePanel();
+  }
+}
+
+function openAccountSwitchModal(mode = "select") {
+  accountSwitchMode = mode;
+  if (accountSwitchTitleEl) {
+    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover numero" : "Selecionar numero";
+  }
+  renderWhatsAppAccountOptions();
+  accountSwitchOverlayEl.classList.add("open");
+  accountSwitchModalEl.classList.add("open");
+}
+
+function closeAccountSwitchModal() {
+  accountSwitchMode = "select";
+  accountSwitchOverlayEl.classList.remove("open");
+  accountSwitchModalEl.classList.remove("open");
+}
+
+async function switchSelectedWhatsAppAccount(accountId, options = {}) {
+  const nextAccountId = String(accountId || "").trim();
+  state.selectedWhatsAppAccountId = nextAccountId;
+  renderWhatsAppAccountOptions();
+  syncProfilePanel();
+
+  try {
+    await persistSelectedWhatsAppAccount(nextAccountId || null);
+    await loadWhatsAppAccounts();
+    await refreshHealth();
+    await refreshConnectedAccountAvatar();
+    syncProfilePanel();
+    realtimeCursor = 0;
+    state.realtimeCheckpointToken = "";
+    closeRealtime();
+    await loadConversations();
+    if (state.currentView === "bulk-monitor") {
+      await loadBulkJobs();
+    }
+    connectRealtime().catch((error) => console.error(error));
+    if (!options.keepOpen) {
+      closeAccountSwitchModal();
+    }
+  } catch (error) {
+    await showAlert(error.message || "Falha ao selecionar conta WhatsApp.");
+    await loadWhatsAppAccounts();
+    await loadConversations();
+    connectRealtime().catch((innerError) => console.error(innerError));
+  }
+}
+
+async function handleProvisionWhatsAppAccount() {
+  if (!isAdmin()) return;
+
+  try {
+    const result = await api("/whatsapp/accounts/provision", {
+      method: "POST",
+      body: JSON.stringify({
+        display_name: "Novo numero",
+      }),
+    });
+    if (result?.item?.id) {
+      await switchSelectedWhatsAppAccount(result.item.id);
+    }
+    openProfilePanel();
+    await api("/whatsapp/connect", { method: "POST" });
+    qrPanelEl.hidden = false;
+    qrHintEl.textContent = "Escaneie o QR code para vincular o novo numero.";
+    clearQrCode();
+    await pollQrCode();
+    startQrPolling();
+  } catch (error) {
+    await showAlert(error.message || "Falha ao adicionar numero.");
+  }
+}
+
+async function handleRemoveWhatsAppAccount(accountId) {
+  if (!isAdmin()) return;
+  const selected = state.whatsappAccounts.find((item) => item.id === accountId) || null;
+  if (!selected?.id) {
+    await showAlert("Selecione um numero para remover.");
+    return;
+  }
+
+  const confirmed = await showConfirm(
+    `Remover o numero ${formatWhatsAppAccountTitle(selected)}?`,
+    "Remover numero",
+    "Remover",
+    "Cancelar",
+  );
+  if (!confirmed) return;
+
+  try {
+    await api(`/whatsapp/accounts/${selected.id}`, {
+      method: "DELETE",
+    });
+    await loadWhatsAppAccounts();
+    const fallbackAccount = state.whatsappAccounts[0] || null;
+    await switchSelectedWhatsAppAccount(fallbackAccount?.id || "");
+    closeAccountSwitchModal();
+    await showAlert("Numero removido com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao remover numero.");
   }
 }
 
@@ -1291,7 +1534,8 @@ function renderBulkJobs() {
 async function loadBulkJobs() {
   if (!state.isAuthenticated) return;
   const result = await api("/bulk-dispatch/jobs?limit=20");
-  state.bulkJobs = result.items || [];
+  const activeAccountJid = getActiveAccountJid();
+  state.bulkJobs = (result.items || []).filter((job) => !activeAccountJid || job.account_wa_jid === activeAccountJid);
   if (
     state.bulkJobs.length > 0 &&
     (!state.selectedBulkJobId || !state.bulkJobs.some((job) => job.id === state.selectedBulkJobId))
@@ -1318,6 +1562,8 @@ function resetAppAfterLogout() {
   state.connectedAccountPhone = "";
   state.connectedAccountName = "";
   state.connectedAccountAvatarUrl = "";
+  state.whatsappAccounts = [];
+  state.selectedWhatsAppAccountId = "";
   state.search = "";
   state.agents = [];
   state.currentView = "chats";
@@ -1489,6 +1735,14 @@ async function loadCurrentUser() {
     showLoginScreen();
     return false;
   }
+}
+
+async function persistSelectedWhatsAppAccount(accountId) {
+  if (!state.isAuthenticated) return;
+  await api("/whatsapp/selected-account", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId || null }),
+  });
 }
 
 async function performLogout() {
@@ -1819,14 +2073,15 @@ function renderServiceTabs() {
 }
 
 async function loadConversationSummary() {
-  if (!state.isAuthenticated || !state.connectedAccountJid) {
+  const activeAccountJid = getActiveAccountJid();
+  if (!state.isAuthenticated || !activeAccountJid) {
     state.serviceCounts = { pending: 0, in_progress: 0, finalized: 0, bulk: 0 };
     renderServiceTabs();
     return;
   }
 
   const query = new URLSearchParams();
-  query.set("account_jid", state.connectedAccountJid);
+  query.set("account_jid", activeAccountJid);
   const result = await api(`/conversations/summary?${query.toString()}`);
   state.serviceCounts = {
     pending: Number(result?.pending_count || 0),
@@ -2383,7 +2638,7 @@ function clearChatStateForDisconnected() {
 function ensureRealtimeWatchdog() {
   if (realtimeWatchdogTimer) return;
   realtimeWatchdogTimer = setInterval(() => {
-    if (!realtimePolling || !state.isAuthenticated || !state.connectedAccountJid) return;
+    if (!realtimePolling || !state.isAuthenticated || !getActiveAccountJid()) return;
     const idleMs = Date.now() - (realtimeLastPollAt || 0);
     if (idleMs > 35_000) {
       console.warn("[REALTIME] watchdog_reconnect", { idleMs });
@@ -2396,10 +2651,11 @@ function ensureRealtimeWatchdog() {
 function ensureRealtimeCheckpointVerifier() {
   if (realtimeCheckpointTimer) return;
   realtimeCheckpointTimer = setInterval(async () => {
-    if (!state.isAuthenticated || !state.connectedAccountJid || state.currentView !== "chats") return;
+    const activeAccountJid = getActiveAccountJid();
+    if (!state.isAuthenticated || !activeAccountJid || state.currentView !== "chats") return;
     try {
       const query = new URLSearchParams({
-        account_jid: state.connectedAccountJid,
+        account_jid: activeAccountJid,
         selected_conversation_id: String(state.selectedConversationId || ""),
         _: String(Date.now()),
       });
@@ -2429,7 +2685,7 @@ async function connectRealtime() {
     closeRealtime();
     return;
   }
-  if (!state.connectedAccountJid) {
+  if (!getActiveAccountJid()) {
     closeRealtime();
     return;
   }
@@ -2444,9 +2700,10 @@ async function connectRealtime() {
   ensureRealtimeCheckpointVerifier();
   const pollToken = ++realtimePollToken;
 
-  while (realtimePolling && pollToken === realtimePollToken && state.isAuthenticated && state.connectedAccountJid) {
+  while (realtimePolling && pollToken === realtimePollToken && state.isAuthenticated && getActiveAccountJid()) {
+    const activeAccountJid = getActiveAccountJid();
     const query = new URLSearchParams({
-      account_jid: state.connectedAccountJid,
+      account_jid: activeAccountJid,
       since: String(realtimeCursor || 0),
       checkpoint: String(state.realtimeCheckpointToken || ""),
       selected_conversation_id: String(state.selectedConversationId || ""),
@@ -2495,7 +2752,8 @@ async function connectRealtime() {
 async function loadConversations(options = {}) {
   const skipMessagesReload = Boolean(options.skipMessagesReload);
   if (!state.isAuthenticated) return;
-  if (!state.connectedAccountJid) {
+  const activeAccountJid = getActiveAccountJid();
+  if (!activeAccountJid) {
     clearChatStateForDisconnected();
     return;
   }
@@ -2516,8 +2774,8 @@ async function loadConversations(options = {}) {
         query.set("service_status", state.serviceTab);
       }
     }
-    if (state.connectedAccountJid) {
-      query.set("account_jid", state.connectedAccountJid);
+    if (activeAccountJid) {
+      query.set("account_jid", activeAccountJid);
     }
 
     const result = await api(`/conversations?${query.toString()}`);
@@ -2557,7 +2815,7 @@ async function loadConversations(options = {}) {
 }
 
 async function loadMessages() {
-  if (!state.isAuthenticated || !state.connectedAccountJid || !state.selectedConversationId) return;
+  if (!state.isAuthenticated || !getActiveAccountJid() || !state.selectedConversationId) return;
   if (state.loadingMessages) {
     pendingMessagesRefresh = true;
     return;
@@ -2935,13 +3193,16 @@ async function transferContextConversation() {
 async function refreshHealth() {
   if (!state.isAuthenticated) return;
   try {
-    const health = await api("/health");
-    const wa = health?.whatsapp || {};
+    const statusResult = await api("/whatsapp/status");
+    const wa = statusResult?.whatsapp || {};
     const online = Boolean(wa.connected);
     const phone = wa.userPhone || "";
     const name = wa.userName || "";
     const jid = wa.userId || "";
     const previousAccountJid = state.connectedAccountJid;
+
+    await loadWhatsAppAccounts();
+    const hasAnyConnectedAccount = state.whatsappAccounts.some((item) => item.connected);
 
     waStatusEl.textContent = online ? "Online" : "Offline";
     waStatusEl.classList.toggle("online", online);
@@ -2969,11 +3230,13 @@ async function refreshHealth() {
       qrPanelEl.hidden = true;
       stopQrPolling();
       clearQrCode();
-    } else {
+    } else if (!hasAnyConnectedAccount) {
       clearChatStateForDisconnected();
     }
     connectRealtime();
   } catch (error) {
+    await loadWhatsAppAccounts();
+    const hasAnyConnectedAccount = state.whatsappAccounts.some((item) => item.connected);
     waStatusEl.textContent = "Offline";
     waStatusEl.classList.remove("online");
     state.connectedAccountAvatarUrl = "";
@@ -2985,7 +3248,9 @@ async function refreshHealth() {
     state.connectedAccountName = "";
     syncProfilePanel();
     renderHistorySyncStatus({});
-    clearChatStateForDisconnected();
+    if (!hasAnyConnectedAccount) {
+      clearChatStateForDisconnected();
+    }
     connectRealtime();
   }
 }
@@ -3130,6 +3395,7 @@ settingsTabPerfilEl.addEventListener("click", () => setSettingsTab("perfil"));
 settingsTabCreateEl.addEventListener("click", () => setSettingsTab("create"));
 settingsTabListEl.addEventListener("click", () => setSettingsTab("list"));
 settingsTabSectorsEl.addEventListener("click", () => setSettingsTab("sectors"));
+settingsTabAccountsEl.addEventListener("click", () => setSettingsTab("accounts"));
 settingsUsersListEl.addEventListener("click", async (event) => {
   const target = event.target.closest("button[data-action]");
   if (!target) return;
@@ -3166,7 +3432,7 @@ settingsFinalizePendingBtnEl.addEventListener("click", async () => {
     const result = await api("/conversations/finalize-pending-all", {
       method: "POST",
       body: JSON.stringify({
-        account_jid: state.connectedAccountJid || "",
+        account_jid: getActiveAccountJid() || "",
       }),
     });
     await loadConversations();
@@ -3357,6 +3623,13 @@ sendFormEl.addEventListener("submit", sendCurrentMessage);
 connectedProfileEl.addEventListener("click", openProfilePanel);
 profileCloseBtnEl.addEventListener("click", closeProfilePanel);
 profileOverlayEl.addEventListener("click", closeProfilePanel);
+settingsSwitchNumberBtnEl.addEventListener("click", () => openAccountSwitchModal("select"));
+settingsAddNumberBtnEl.addEventListener("click", () => {
+  handleProvisionWhatsAppAccount().catch((error) => console.error(error));
+});
+settingsRemoveNumberBtnEl.addEventListener("click", () => {
+  openAccountSwitchModal("remove");
+});
 disconnectBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm("Desconectar este telefone do app?", "Desconectar", "Sair", "Cancelar");
   if (!confirmed) return;
@@ -3415,6 +3688,19 @@ editUserOverlayEl.addEventListener("click", closeEditUserModal);
 editUserCancelEl.addEventListener("click", closeEditUserModal);
 transferOverlayEl.addEventListener("click", closeTransferModal);
 transferCancelEl.addEventListener("click", closeTransferModal);
+accountSwitchOverlayEl.addEventListener("click", closeAccountSwitchModal);
+accountSwitchCloseEl.addEventListener("click", closeAccountSwitchModal);
+accountSwitchListEl.addEventListener("click", (event) => {
+  const button = event.target.closest(".account-switch-item");
+  if (!button) return;
+  const accountId = String(button.dataset.accountId || "").trim();
+  if (!accountId) return;
+  if (accountSwitchMode === "remove") {
+    handleRemoveWhatsAppAccount(accountId).catch((error) => console.error(error));
+    return;
+  }
+  switchSelectedWhatsAppAccount(accountId).catch((error) => console.error(error));
+});
 transferFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const conversationId = String(transferConversationId || "").trim();
@@ -3491,6 +3777,7 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeConversationMenu();
+    closeAccountSwitchModal();
     if (!mediaModalOverlayEl.hidden) {
       closeMediaModal();
     }
