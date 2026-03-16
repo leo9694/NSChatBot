@@ -237,6 +237,7 @@ const agentLastTestEl = document.getElementById("agentLastTest");
 const agentTestBtnEl = document.getElementById("agentTestBtn");
 const agentTestResultEl = document.getElementById("agentTestResult");
 const agentSettingsFormEl = document.getElementById("agentSettingsForm");
+const agentMoodInputEl = document.getElementById("agentMoodInput");
 const agentNameInputEl = document.getElementById("agentNameInput");
 const companyNameInputEl = document.getElementById("companyNameInput");
 const agentSettingsSaveBtnEl = document.getElementById("agentSettingsSaveBtn");
@@ -862,6 +863,7 @@ function renderAgentStatus(data = null) {
 
 function renderAgentSettings() {
   const settings = state.agentSettings || {};
+  agentMoodInputEl.value = String(settings.mood || "informal");
   agentNameInputEl.value = String(settings.agent_name || "");
   companyNameInputEl.value = String(settings.company_name || "");
 }
@@ -987,7 +989,7 @@ async function loadAgentStatus() {
   renderAgentStatus(result);
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    state.agentSettings = { agent_name: "", company_name: "" };
+    state.agentSettings = { agent_name: "", company_name: "", mood: "informal" };
     renderAgentSettings();
     return;
   }
@@ -4228,6 +4230,7 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
       method: "PUT",
       body: JSON.stringify({
         account_id: accountId,
+        mood: String(agentMoodInputEl.value || "informal").trim(),
         agent_name: String(agentNameInputEl.value || "").trim(),
         company_name: String(companyNameInputEl.value || "").trim(),
       }),

@@ -1,6 +1,7 @@
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import {
   createAiOrder,
+  getAiAccountSettings,
   getConversationAiContext,
   listConversationMessagesForAi,
   updatePendingAiOrder,
@@ -38,6 +39,47 @@ function pickFirstFilled<T>(...values: Array<T | null | undefined>): T | null {
   return null;
 }
 
+function hasCompleteDeliveryAddress(value: string | null | undefined): boolean {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const normalized = normalizeText(text);
+  const hasCity =
+    /\bcidade\b/.test(normalized) ||
+    /\bcep\b/.test(normalized) ||
+    /-\s*[a-z]{2}\b/.test(normalized);
+  const hasStreet =
+    /\brua\b/.test(normalized) ||
+    /\bavenida\b/.test(normalized) ||
+    /\bav\b/.test(normalized) ||
+    /\btravessa\b/.test(normalized) ||
+    /\balameda\b/.test(normalized) ||
+    /\brodovia\b/.test(normalized);
+  const hasNumber = /\b(n[ºo°]?|numero)\b/.test(normalized) || /\d+/.test(normalized);
+  const hasDistrict = /\bbairro\b/.test(normalized) || /\bjd\b/.test(normalized) || /\bjardim\b/.test(normalized);
+  return hasCity && hasStreet && hasNumber && hasDistrict;
+}
+
+function buildDeliveryAddressForm() {
+  return [
+    "Para entrega, me envie estes dados assim:",
+    "",
+    "Cidade:",
+    "Rua:",
+    "Número:",
+    "Bairro:",
+  ].join("\n");
+}
+
+function hasDeliveryAddressForm(value: string | null | undefined): boolean {
+  const normalized = normalizeText(String(value || ""));
+  return (
+    normalized.includes("cidade:") &&
+    normalized.includes("rua:") &&
+    normalized.includes("numero:") &&
+    normalized.includes("bairro:")
+  );
+}
+
 function isClosingMessage(body: string): boolean {
   const text = normalizeText(body);
   if (!text) return false;
@@ -59,6 +101,45 @@ function isClosingMessage(body: string): boolean {
   ];
 
   return closingPatterns.some((pattern) => pattern.test(text));
+}
+
+function getAgentMood(value: string | null | undefined): "amigavel" | "informal" | "formal" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "amigavel" || normalized === "formal") return normalized;
+  return "informal";
+}
+
+function buildClosingReply(mood: "amigavel" | "informal" | "formal") {
+  if (mood === "amigavel") {
+    return "Perfeito. Qualquer coisa, fico por aqui. Obrigado pelo contato 😊";
+  }
+  if (mood === "formal") {
+    return "Perfeito. Permanecemos à disposição. Obrigado pelo contato.";
+  }
+  return "Perfeito. Qualquer coisa, fico por aqui. Obrigado pelo contato.";
+}
+
+function buildOrderFallbackReply(input: {
+  mood: "amigavel" | "informal" | "formal";
+  updatedPendingOrder: boolean;
+}) {
+  if (input.updatedPendingOrder) {
+    if (input.mood === "amigavel") {
+      return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui 😊";
+    }
+    if (input.mood === "formal") {
+      return "Perfeito. Seu pedido pendente foi ajustado e permanece aguardando confirmação interna. Assim que houver a confirmação, informarei por aqui.";
+    }
+    return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
+  }
+
+  if (input.mood === "amigavel") {
+    return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui 😊";
+  }
+  if (input.mood === "formal") {
+    return "Perfeito. Seu pedido foi registrado e ficou pendente de confirmação interna. Assim que houver a confirmação, informarei por aqui.";
+  }
+  return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
 export async function handleInboundAiAutomation(conversationId: string): Promise<{ ok: boolean; replied: boolean; reason?: string }> {
@@ -86,6 +167,9 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
       return { ok: false, replied: false, reason: "missing_account_or_phone" };
     }
 
+    const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
+    const mood = getAgentMood(accountSettings?.mood);
+
     const messages = await listConversationMessagesForAi(id, 80);
     if (!messages.length) {
       return { ok: true, replied: false, reason: "no_messages" };
@@ -97,7 +181,7 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
     }
 
     if (isClosingMessage(String(lastMessage.body || ""))) {
-      const closingReply = "Perfeito. Qualquer coisa, fico por aqui. Obrigado pelo contato.";
+      const closingReply = buildClosingReply(mood);
       const waResponse = await sendWhatsAppText({
         to: context.phone,
         message: closingReply,
@@ -172,7 +256,7 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
       Boolean(mergedOrder.paymentMethod) &&
       Boolean(aiResult.order.customerConfirmedDetails) &&
       Boolean(mergedOrder.fulfillmentType) &&
-      (!requiresDeliveryAddress || Boolean(mergedOrder.deliveryAddress));
+      (!requiresDeliveryAddress || hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || "")));
 
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
@@ -214,11 +298,21 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
 
     const fallbackReply =
       aiResult.order.shouldCreate && hasRequiredOrderData
-        ? updatedPendingOrder
-          ? "Perfeito, ajustei seu pedido pendente e ele continua aguardando confirmacao interna. Assim que for confirmado, eu te aviso por aqui."
-          : "Perfeito, registrei seu pedido e ele ficou pendente de confirmacao interna. Assim que for confirmado, eu te aviso por aqui."
+        ? buildOrderFallbackReply({
+            mood,
+            updatedPendingOrder,
+          })
         : "";
-    const replyText = String(aiResult.reply || "").trim() || fallbackReply;
+    let replyText = String(aiResult.reply || "").trim() || fallbackReply;
+
+    if (
+      normalizedFulfillment.includes("entrega") &&
+      !hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || "")) &&
+      replyText &&
+      !hasDeliveryAddressForm(replyText)
+    ) {
+      replyText = `${replyText}\n\n${buildDeliveryAddressForm()}`.trim();
+    }
 
     if (!aiResult.shouldReply || !replyText) {
       return { ok: true, replied: false, reason: "model_chose_not_to_reply" };
@@ -260,7 +354,7 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
         const media = await loadMediaBufferFromUrl(String(product.image_url || "").trim());
         if (!media?.buffer) continue;
 
-        const caption = `${product.name}\nPreco: R$${Number(product.price || 0).toFixed(2)}\nEstoque: ${Number(product.stock || 0)}`;
+        const caption = `${product.name}\nPreço: R$${Number(product.price || 0).toFixed(2)}`;
         const mediaResponse = await sendWhatsAppMedia({
           to: context.phone,
           mediaBuffer: media.buffer,

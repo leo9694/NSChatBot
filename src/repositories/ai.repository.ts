@@ -4,6 +4,7 @@ export interface AiAccountSettingsRow {
   account_id: string;
   agent_name: string | null;
   company_name: string | null;
+  mood: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,9 +54,15 @@ export async function ensureAiSchema(): Promise<void> {
           account_id UUID PRIMARY KEY REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
           agent_name VARCHAR(160),
           company_name VARCHAR(180),
+          mood VARCHAR(20),
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+      `);
+
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS mood VARCHAR(20)
       `);
 
       await pool.query(`
@@ -154,6 +161,7 @@ export async function getAiAccountSettings(accountId: string): Promise<AiAccount
       account_id,
       agent_name,
       company_name,
+      mood,
       created_at::text,
       updated_at::text
     FROM ai_account_settings
@@ -170,24 +178,27 @@ export async function upsertAiAccountSettings(input: {
   accountId: string;
   agentName?: string | null;
   companyName?: string | null;
+  mood?: string | null;
 }): Promise<AiAccountSettingsRow> {
   await ensureAiSchema();
   const result = await pool.query<AiAccountSettingsRow>(
     `
-    INSERT INTO ai_account_settings (account_id, agent_name, company_name)
-    VALUES ($1, $2, $3)
+    INSERT INTO ai_account_settings (account_id, agent_name, company_name, mood)
+    VALUES ($1, $2, $3, $4)
     ON CONFLICT (account_id) DO UPDATE
       SET agent_name = EXCLUDED.agent_name,
           company_name = EXCLUDED.company_name,
+          mood = EXCLUDED.mood,
           updated_at = NOW()
     RETURNING
       account_id,
       agent_name,
       company_name,
+      mood,
       created_at::text,
       updated_at::text
     `,
-    [input.accountId, input.agentName || null, input.companyName || null],
+    [input.accountId, input.agentName || null, input.companyName || null, input.mood || null],
   );
 
   return result.rows[0];

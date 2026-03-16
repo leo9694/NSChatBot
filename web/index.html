@@ -287,6 +287,33 @@
               </div>
 
               <div class="agent-layout">
+                <div class="agent-config-panel">
+                  <div class="agent-config-head">
+                    <h4>Identidade do agente</h4>
+                    <p>Essas informações ajudam o agente a responder com mais contexto e consistência.</p>
+                  </div>
+
+                  <form id="agentSettingsForm" class="new-chat-form agent-settings-form">
+                    <label>
+                      Humor
+                      <select id="agentMoodInput">
+                        <option value="amigavel">Amigável</option>
+                        <option value="informal">Informal</option>
+                        <option value="formal">Formal</option>
+                      </select>
+                    </label>
+                    <label>
+                      Nome do agente
+                      <input id="agentNameInput" type="text" placeholder="Ex.: Zenaide" />
+                    </label>
+                    <label>
+                      Nome da empresa
+                      <input id="companyNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
+                    </label>
+                    <button id="agentSettingsSaveBtn" type="submit" class="btn-primary">Salvar configurações do agente</button>
+                  </form>
+                </div>
+
                 <div class="agent-summary">
                   <div class="agent-grid">
                     <div class="settings-profile-item">
@@ -310,25 +337,6 @@
                   <div id="agentTestResult" class="settings-account-note">
                     Aguardando teste de conexão.
                   </div>
-                </div>
-
-                <div class="agent-config-panel">
-                  <div class="agent-config-head">
-                    <h4>Identidade do agente</h4>
-                    <p>Essas informações ajudam o agente a responder com mais contexto e consistência.</p>
-                  </div>
-
-                  <form id="agentSettingsForm" class="new-chat-form agent-settings-form">
-                    <label>
-                      Nome do agente
-                      <input id="agentNameInput" type="text" placeholder="Ex.: Zenaide" />
-                    </label>
-                    <label>
-                      Nome da empresa
-                      <input id="companyNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
-                    </label>
-                    <button id="agentSettingsSaveBtn" type="submit" class="btn-primary">Salvar configurações do agente</button>
-                  </form>
                 </div>
               </div>
             </div>

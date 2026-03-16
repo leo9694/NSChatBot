@@ -14,6 +14,28 @@ type AuthRequest = Express.Request & {
   };
 };
 
+function formatCustomerOrderMessage(input: {
+  greeting?: string;
+  statusLine: string;
+  summary?: string;
+  readyTimeMinutes?: number | null;
+  note?: string | null;
+  cancelReason?: string | null;
+}) {
+  const parts = [
+    input.greeting?.trim() || "",
+    input.statusLine.trim(),
+    input.summary?.trim() ? `Resumo:\n${input.summary.trim()}` : "",
+    Number.isFinite(input.readyTimeMinutes)
+      ? `Tempo estimado:\n${Math.round(Number(input.readyTimeMinutes))} minuto(s)`
+      : "",
+    input.note?.trim() ? `Informações adicionais:\n${input.note.trim()}` : "",
+    input.cancelReason?.trim() ? `Motivo do cancelamento:\n${input.cancelReason.trim()}` : "",
+  ].filter(Boolean);
+
+  return parts.join("\n\n");
+}
+
 router.get("/status", (_req, res) => {
   void (async () => {
     return res.status(200).json(await getOpenAIStatus());
@@ -52,6 +74,7 @@ router.get("/settings", async (req, res) => {
       account_id: accountId,
       agent_name: settings?.agent_name || "",
       company_name: settings?.company_name || "",
+      mood: settings?.mood || "informal",
     });
   } catch (error) {
     return res.status(500).json({
@@ -65,6 +88,8 @@ router.put("/settings", async (req, res) => {
   const accountId = String(req.body?.account_id || "").trim();
   const agentName = String(req.body?.agent_name || "").trim();
   const companyName = String(req.body?.company_name || "").trim();
+  const rawMood = String(req.body?.mood || "").trim().toLowerCase();
+  const mood = ["amigavel", "informal", "formal"].includes(rawMood) ? rawMood : "informal";
 
   if (!authReq.authUser?.id) {
     return res.status(401).json({ error: "Sessao invalida." });
@@ -78,6 +103,7 @@ router.put("/settings", async (req, res) => {
       accountId,
       agentName,
       companyName,
+      mood,
     });
     return res.status(200).json({
       status: "ok",
@@ -211,10 +237,12 @@ router.post("/orders/:orderId/cancel", async (req, res) => {
     if (order.customer_phone && order.account_wa_jid) {
       const customerName = String(order.conversation_name || "").trim();
       const orderSummary = String(order.summary || "").trim();
-      const message =
-        `${customerName ? `${customerName}, ` : ""}seu pedido foi cancelado.` +
-        `${orderSummary ? ` Resumo: ${orderSummary}.` : ""} ` +
-        `Motivo do cancelamento: ${reason}.`;
+      const message = formatCustomerOrderMessage({
+        greeting: customerName ? `${customerName},` : "",
+        statusLine: "seu pedido foi cancelado.",
+        summary: orderSummary || "",
+        cancelReason: reason,
+      });
 
       const waResponse = await sendWhatsAppText({
         to: order.customer_phone,
