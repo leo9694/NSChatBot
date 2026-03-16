@@ -7,6 +7,7 @@ import { createProduct, ensureProductsSchema, listProducts, updateProduct } from
 
 const router = Router();
 const mediaDir = path.resolve(process.cwd(), "storage", "media");
+const ALLOWED_PRODUCT_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -25,8 +26,9 @@ const upload = multer({
     fileSize: 8 * 1024 * 1024,
   },
   fileFilter: (_req, file, cb) => {
-    if (!String(file.mimetype || "").startsWith("image/")) {
-      cb(new Error("A imagem do produto deve ser um arquivo de imagem."));
+    const mimeType = String(file.mimetype || "").toLowerCase();
+    if (!ALLOWED_PRODUCT_IMAGE_MIME_TYPES.has(mimeType)) {
+      cb(new Error("A imagem do produto deve estar em JPG, JPEG ou PNG."));
       return;
     }
     cb(null, true);

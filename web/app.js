@@ -267,6 +267,7 @@ const productsTabOrdersEl = document.getElementById("productsTabOrders");
 const productsPanelCreateEl = document.getElementById("productsPanelCreate");
 const productsPanelListEl = document.getElementById("productsPanelList");
 const productsPanelOrdersEl = document.getElementById("productsPanelOrders");
+const ALLOWED_PRODUCT_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
 let mediaRecorder = null;
 let mediaChunks = [];
 let mediaStream = null;
@@ -4256,7 +4257,16 @@ productTypeEl.addEventListener("change", () => updateProductTypeState());
 productPriceEl.addEventListener("input", () => updateProductPreview());
 productStockEl.addEventListener("input", () => updateProductPreview());
 productDescriptionEl.addEventListener("input", () => updateProductPreview());
-productImageEl.addEventListener("change", () => updateProductPreview());
+productImageEl.addEventListener("change", async () => {
+  const file = productImageEl.files?.[0] || null;
+  if (file && !ALLOWED_PRODUCT_IMAGE_TYPES.has(String(file.type || "").toLowerCase())) {
+    productImageEl.value = "";
+    updateProductPreview();
+    await showAlert("A imagem do produto deve estar em JPG, JPEG ou PNG.");
+    return;
+  }
+  updateProductPreview();
+});
 updateProductPreview();
 productsListEl.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action='edit-product']");
@@ -4377,6 +4387,10 @@ productsFormEl.addEventListener("submit", async (event) => {
 
   if (!name) {
     await showAlert("Informe o nome do produto.");
+    return;
+  }
+  if (image && !ALLOWED_PRODUCT_IMAGE_TYPES.has(String(image.type || "").toLowerCase())) {
+    await showAlert("A imagem do produto deve estar em JPG, JPEG ou PNG.");
     return;
   }
 
