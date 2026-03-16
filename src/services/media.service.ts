@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 import { pool } from "../db/pool";
 
 const MEDIA_DIR = path.resolve(process.cwd(), "storage", "media");
@@ -190,10 +191,20 @@ export async function loadMediaBufferFromUrl(
                 : ext === "mp4"
                   ? "video/mp4"
                   : "application/octet-stream";
+      if (mimeType === "image/webp") {
+        const convertedBuffer = await sharp(buffer).jpeg({ quality: 92 }).toBuffer();
+        const convertedName = fileName.replace(/\.webp$/i, ".jpg");
+        return { buffer: convertedBuffer, mimeType: "image/jpeg", fileName: convertedName };
+      }
       return { buffer, mimeType, fileName };
     } catch {
       const blob = await getMediaBlob(fileName);
       if (!blob) return null;
+      if (String(blob.mimeType || "").toLowerCase() === "image/webp") {
+        const convertedBuffer = await sharp(blob.content).jpeg({ quality: 92 }).toBuffer();
+        const convertedName = fileName.replace(/\.webp$/i, ".jpg");
+        return { buffer: convertedBuffer, mimeType: "image/jpeg", fileName: convertedName };
+      }
       return { buffer: blob.content, mimeType: blob.mimeType, fileName };
     }
   }
@@ -206,6 +217,15 @@ export async function loadMediaBufferFromUrl(
     const arrayBuffer = await response.arrayBuffer();
     const mimeType = response.headers.get("content-type");
     const fileName = path.basename(new URL(url).pathname || "");
+    if (String(mimeType || "").toLowerCase() === "image/webp") {
+      const convertedBuffer = await sharp(Buffer.from(arrayBuffer)).jpeg({ quality: 92 }).toBuffer();
+      const convertedName = fileName.replace(/\.webp$/i, ".jpg") || "imagem.jpg";
+      return {
+        buffer: convertedBuffer,
+        mimeType: "image/jpeg",
+        fileName: convertedName,
+      };
+    }
     return {
       buffer: Buffer.from(arrayBuffer),
       mimeType,

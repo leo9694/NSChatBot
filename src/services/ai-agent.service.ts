@@ -142,6 +142,22 @@ function buildOrderFallbackReply(input: {
   return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
+function buildMissingImageReply(input: {
+  mood: "amigavel" | "informal" | "formal";
+  requestedName?: string | null;
+}) {
+  const itemName = String(input.requestedName || "").trim();
+  const itemLabel = itemName ? ` de ${itemName}` : "";
+
+  if (input.mood === "amigavel") {
+    return `Ainda não tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto 😊`;
+  }
+  if (input.mood === "formal") {
+    return `No momento, não há imagem${itemLabel} cadastrada no sistema. Se desejar, posso informar os detalhes do item por mensagem.`;
+  }
+  return `Ainda não tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto.`;
+}
+
 function extractRequestedProductNames(input: {
   catalog: Array<{ name: string; image_url: string | null; price: string; type: string; description: string | null; id: string; stock: number }>;
   productNames: string[];
@@ -341,6 +357,43 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
       replyText = `${replyText}\n\n${buildDeliveryAddressForm()}`.trim();
     }
 
+    const shouldAttemptImage = aiResult.media.shouldSendImages;
+    let matchedProducts: Array<{
+      id: string;
+      name: string;
+      type: string;
+      description: string | null;
+      price: string;
+      stock: number;
+      image_url: string | null;
+    }> = [];
+
+    if (shouldAttemptImage) {
+      const catalog = await listProductsForAgentDetailedContext();
+      matchedProducts = extractRequestedProductNames({
+        catalog,
+        productNames: aiResult.media.productNames,
+        replyText,
+        lastCustomerMessage: String(lastMessage.body || ""),
+      }).slice(0, 3);
+
+      if (!matchedProducts.length) {
+        const requestedName =
+          aiResult.media.productNames[0] ||
+          String(lastMessage.body || "")
+            .trim()
+            .replace(/^me envie a foto da\s+/i, "")
+            .replace(/^agora da\s+/i, "")
+            .replace(/^foto da\s+/i, "")
+            .trim();
+
+        replyText = buildMissingImageReply({
+          mood,
+          requestedName,
+        });
+      }
+    }
+
     if (!aiResult.shouldReply || !replyText) {
       return { ok: true, replied: false, reason: "model_chose_not_to_reply" };
     }
@@ -367,16 +420,7 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
       },
     });
 
-    if (aiResult.media.shouldSendImages) {
-      const catalog = await listProductsForAgentDetailedContext();
-      const matchedProducts = extractRequestedProductNames({
-        catalog,
-        productNames: aiResult.media.productNames,
-        replyText,
-        lastCustomerMessage: String(lastMessage.body || ""),
-      })
-        .slice(0, 3);
-
+    if (shouldAttemptImage && matchedProducts.length > 0) {
       for (const product of matchedProducts) {
         const media = await loadMediaBufferFromUrl(String(product.image_url || "").trim());
         if (!media?.buffer) continue;

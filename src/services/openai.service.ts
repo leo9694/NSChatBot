@@ -215,9 +215,9 @@ export async function generateAiSalesReply(input: {
           "Se o cliente pedir foto, imagem, mostrar produto, ou perguntar diretamente sobre um item especifico do catalogo, voce pode decidir enviar a imagem do produto. " +
           "Voce esta falando dentro do proprio WhatsApp do cliente. Nunca pergunte se pode mandar no WhatsApp, no numero, ou por aqui. Se fizer sentido, apenas diga que esta enviando a imagem a seguir. " +
           "Quando for oferecer imagem sem o cliente pedir, faca isso com naturalidade e sem insistencia. Exemplo: 'Se quiser, eu tambem posso te mandar a foto do item.' " +
-          "Quando o cliente pedir foto de um item, diga de forma simples que esta enviando a imagem em seguida e nao faca perguntas desnecessarias antes disso. " +
+          "Quando o cliente pedir foto de um item, diga de forma simples que esta enviando a imagem em seguida somente se esse item existir no catalogo com imagem disponivel. " +
           "A forma de anunciar envio de imagem deve respeitar o humor configurado. " +
-          "Quando decidir enviar imagem, use somente produtos existentes no catalogo e mencione nomes coerentes. Ao enviar imagem, nao cite estoque na legenda, a menos que o cliente tenha perguntado isso. " +
+          "Quando decidir enviar imagem, use somente produtos existentes no catalogo e mencione nomes coerentes. So diga que vai enviar foto se o item realmente tiver imagem disponivel no catalogo. Ao enviar imagem, nao cite estoque na legenda, a menos que o cliente tenha perguntado isso. " +
           "Ao sugerir produtos, adapte o estilo ao humor configurado sem perder objetividade. " +
           "Ao pedir dados para fechar pedido, use lista curta e limpa, sem repetir catalogo completo dentro da mesma mensagem. " +
           "Nunca invente produto fora do catalogo. " +
