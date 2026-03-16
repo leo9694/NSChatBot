@@ -142,6 +142,33 @@ function buildOrderFallbackReply(input: {
   return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
+function extractRequestedProductNames(input: {
+  catalog: Array<{ name: string; image_url: string | null; price: string; type: string; description: string | null; id: string; stock: number }>;
+  productNames: string[];
+  replyText: string;
+  lastCustomerMessage: string;
+}) {
+  const requestedNames = input.productNames.map((item) => normalizeName(item)).filter(Boolean);
+  const replyText = normalizeText(input.replyText);
+  const customerText = normalizeText(input.lastCustomerMessage);
+
+  return input.catalog.filter((product) => {
+    if (!String(product.image_url || "").trim()) return false;
+
+    const productName = normalizeName(product.name);
+    const nameParts = productName.split(/\s+/).filter((part) => part.length >= 4);
+
+    const matchesExplicitName = requestedNames.some((requested) => productName.includes(requested) || requested.includes(productName));
+    if (matchesExplicitName) return true;
+
+    const matchesReply = replyText && (replyText.includes(productName) || nameParts.some((part) => replyText.includes(part)));
+    if (matchesReply) return true;
+
+    const matchesCustomer = customerText && (customerText.includes(productName) || nameParts.some((part) => customerText.includes(part)));
+    return matchesCustomer;
+  });
+}
+
 export async function handleInboundAiAutomation(conversationId: string): Promise<{ ok: boolean; replied: boolean; reason?: string }> {
   const id = String(conversationId || "").trim();
   if (!id || processingConversations.has(id)) {
@@ -340,14 +367,14 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
       },
     });
 
-    if (aiResult.media.shouldSendImages && aiResult.media.productNames.length > 0) {
+    if (aiResult.media.shouldSendImages) {
       const catalog = await listProductsForAgentDetailedContext();
-      const matchedProducts = catalog
-        .filter((product) => {
-          const productName = normalizeName(product.name);
-          return aiResult.media.productNames.some((name: string) => productName.includes(normalizeName(name)));
-        })
-        .filter((product) => String(product.image_url || "").trim())
+      const matchedProducts = extractRequestedProductNames({
+        catalog,
+        productNames: aiResult.media.productNames,
+        replyText,
+        lastCustomerMessage: String(lastMessage.body || ""),
+      })
         .slice(0, 3);
 
       for (const product of matchedProducts) {
