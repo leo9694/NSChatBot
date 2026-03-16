@@ -158,31 +158,60 @@ function buildMissingImageReply(input: {
   return `Ainda não tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto.`;
 }
 
+function shouldSendMultipleImages(lastCustomerMessage: string, productNames: string[]): boolean {
+  const text = normalizeText(lastCustomerMessage);
+  if (!text) return productNames.length > 1;
+
+  if (productNames.length > 1) return true;
+
+  return (
+    /\btodos\b/.test(text) ||
+    /\btodas\b/.test(text) ||
+    /\btodos os produtos\b/.test(text) ||
+    /\btodas as imagens\b/.test(text) ||
+    /\btodas as fotos\b/.test(text) ||
+    /\btodos os itens\b/.test(text) ||
+    /\bcatalogo\b/.test(text) ||
+    /\bmostra (todos|todas)\b/.test(text) ||
+    /\bme envie (todos|todas)\b/.test(text)
+  );
+}
+
 function extractRequestedProductNames(input: {
   catalog: Array<{ name: string; image_url: string | null; price: string; type: string; description: string | null; id: string; stock: number }>;
   productNames: string[];
-  replyText: string;
   lastCustomerMessage: string;
 }) {
   const requestedNames = input.productNames.map((item) => normalizeName(item)).filter(Boolean);
-  const replyText = normalizeText(input.replyText);
   const customerText = normalizeText(input.lastCustomerMessage);
-
-  return input.catalog.filter((product) => {
+  const rankedMatches = input.catalog
+    .map((product) => {
     if (!String(product.image_url || "").trim()) return false;
 
     const productName = normalizeName(product.name);
     const nameParts = productName.split(/\s+/).filter((part) => part.length >= 4);
+      let score = 0;
 
     const matchesExplicitName = requestedNames.some((requested) => productName.includes(requested) || requested.includes(productName));
-    if (matchesExplicitName) return true;
+      if (matchesExplicitName) score += 100;
 
-    const matchesReply = replyText && (replyText.includes(productName) || nameParts.some((part) => replyText.includes(part)));
-    if (matchesReply) return true;
+      if (customerText.includes(productName)) score += 80;
 
-    const matchesCustomer = customerText && (customerText.includes(productName) || nameParts.some((part) => customerText.includes(part)));
-    return matchesCustomer;
-  });
+      for (const part of nameParts) {
+        if (customerText.includes(part)) {
+          score += 20;
+        }
+      }
+
+      return score > 0 ? { product, score } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number((b as any).score) - Number((a as any).score));
+
+  const bestScore = rankedMatches.length ? Number((rankedMatches[0] as any).score) : 0;
+  return rankedMatches
+    .filter((entry) => Number((entry as any).score) === bestScore)
+    .map((entry) => (entry as any).product);
 }
 
 export async function handleInboundAiAutomation(conversationId: string): Promise<{ ok: boolean; replied: boolean; reason?: string }> {
@@ -370,12 +399,21 @@ export async function handleInboundAiAutomation(conversationId: string): Promise
 
     if (shouldAttemptImage) {
       const catalog = await listProductsForAgentDetailedContext();
+      const sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), aiResult.media.productNames);
       matchedProducts = extractRequestedProductNames({
         catalog,
         productNames: aiResult.media.productNames,
-        replyText,
         lastCustomerMessage: String(lastMessage.body || ""),
-      }).slice(0, 3);
+      });
+
+      if (sendMultipleImages) {
+        if (!matchedProducts.length && /\btodos\b|\btodas\b|\bcatalogo\b/.test(normalizeText(String(lastMessage.body || "")))) {
+          matchedProducts = catalog.filter((product) => String(product.image_url || "").trim());
+        }
+        matchedProducts = matchedProducts.slice(0, 10);
+      } else {
+        matchedProducts = matchedProducts.slice(0, 1);
+      }
 
       if (!matchedProducts.length) {
         const requestedName =

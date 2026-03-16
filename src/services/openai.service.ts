@@ -213,6 +213,7 @@ export async function generateAiSalesReply(input: {
           "Se houver pedido pendente atual, voce pode usa-lo como contexto. Se nao houver pedido pendente atual, nao assuma pedido em andamento. " +
           "Se houver pedido pendente atual e o cliente pedir ajuste, voce pode responder considerando apenas os campos alterados. Nao exija que ele repita os dados que ja estao corretos no pedido pendente. " +
           "Se o cliente pedir foto, imagem, mostrar produto, ou perguntar diretamente sobre um item especifico do catalogo, voce pode decidir enviar a imagem do produto. " +
+          "Se o cliente pedir imagem de varios produtos na mesma mensagem, ou pedir todos os produtos, todas as fotos ou o catalogo com imagens, voce pode retornar varios nomes em media.product_names. " +
           "Voce esta falando dentro do proprio WhatsApp do cliente. Nunca pergunte se pode mandar no WhatsApp, no numero, ou por aqui. Se fizer sentido, apenas diga que esta enviando a imagem a seguir. " +
           "Quando for oferecer imagem sem o cliente pedir, faca isso com naturalidade e sem insistencia. Exemplo: 'Se quiser, eu tambem posso te mandar a foto do item.' " +
           "Quando o cliente pedir foto de um item, diga de forma simples que esta enviando a imagem em seguida somente se esse item existir no catalogo com imagem disponivel. " +
