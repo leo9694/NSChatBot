@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
@@ -11,10 +11,10 @@
     <div id="loginScreen" class="login-screen">
       <div class="login-card">
         <h1>NS Chat</h1>
-        <p>Acesse com seu usuario para entrar no painel.</p>
+        <p>Acesse com seu usuário para entrar no painel.</p>
         <form id="loginForm" class="login-form">
           <label>
-            Usuario
+            Usuário
             <input id="loginUsername" type="text" autocomplete="username" required />
           </label>
           <label>
@@ -30,7 +30,7 @@
     <aside id="profilePanel" class="profile-panel">
       <header class="profile-header">
         <h2>Perfil</h2>
-        <button id="profileCloseBtn" class="profile-close" type="button">×</button>
+        <button id="profileCloseBtn" class="profile-close" type="button">&times;</button>
       </header>
 
       <div class="profile-avatar" id="profileAvatar">NS</div>
@@ -63,7 +63,7 @@
 
       <div id="historySyncPanel" class="history-sync-panel" hidden>
         <div class="history-sync-head">
-          <span>Sincronizando historico</span>
+          <span>Sincronizando histórico</span>
           <strong id="historySyncPercent">0%</strong>
         </div>
         <div class="history-sync-bar">
@@ -72,7 +72,7 @@
         <small id="historySyncMeta">0 mensagens importadas</small>
       </div>
       <div id="historySyncHint" class="history-sync-hint">
-        Para puxar historico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.
+        Para puxar histórico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.
       </div>
 
       <div id="qrPanel" class="qr-panel" hidden>
@@ -83,6 +83,16 @@
     </aside>
 
     <div class="layout">
+      <div id="mobileTopbar" class="mobile-topbar" hidden>
+        <button id="mobileTopbarBack" type="button" class="mobile-topbar-back" hidden>
+          <i class="bi bi-arrow-left"></i>
+        </button>
+        <div class="mobile-topbar-copy">
+          <strong id="mobileTopbarTitle">NS Chat</strong>
+          <span id="mobileTopbarSubtitle">Conversas</span>
+        </div>
+      </div>
+
       <aside class="left-rail">
         <div class="rail-top">
           <button id="railChats" class="rail-icon active" type="button" title="Chats">
@@ -94,9 +104,15 @@
           <button id="railBulkMonitor" class="rail-icon" type="button" title="Monitorar envios">
             <i class="bi bi-bar-chart-line-fill"></i>
           </button>
+          <button id="railAgent" class="rail-icon" type="button" title="Agente IA">
+            <i class="bi bi-cpu-fill"></i>
+          </button>
+          <button id="railProducts" class="rail-icon" type="button" title="Produtos">
+            <i class="bi bi-shop-window"></i>
+          </button>
         </div>
         <div class="rail-bottom">
-          <button id="settingsBtn" class="rail-icon" type="button" title="Configuracoes">
+          <button id="settingsBtn" class="rail-icon" type="button" title="Configurações">
             <i class="bi bi-gear-fill"></i>
           </button>
           <div id="connectedProfile" class="rail-icon profile" title="Telefone desconectado">NS</div>
@@ -116,7 +132,7 @@
         </div>
 
         <div class="search-wrap">
-          <input id="searchInput" type="text" placeholder="Pesquisar ou comecar nova conversa" />
+          <input id="searchInput" type="text" placeholder="Pesquisar ou começar nova conversa" />
         </div>
 
         <div class="filters service-tabs">
@@ -201,7 +217,7 @@
                 <label>
                   Lista de contatos (Excel .xlsx)
                   <input id="bulkFile" type="file" accept=".xlsx,.xls,.csv" required />
-                  <small>Colunas aceitas: nome/name e telefone/phone/numero.</small>
+                  <small>Colunas aceitas: nome/name e telefone/phone/número.</small>
                 </label>
                 <label>
                   Intervalo inicial (segundos)
@@ -230,7 +246,7 @@
                 <button class="btn-primary" type="submit">Iniciar disparo</button>
                 <div class="bulk-contacts-panel">
                   <div class="bulk-contacts-toolbar">
-                    <input id="bulkContactsSearch" type="text" placeholder="Buscar contato por nome ou numero" />
+                    <input id="bulkContactsSearch" type="text" placeholder="Buscar contato por nome ou número" />
                     <div class="bulk-contacts-actions">
                       <button id="bulkSelectAllBtn" type="button" class="btn-secondary">Marcar todos</button>
                       <button id="bulkClearAllBtn" type="button" class="btn-secondary">Desmarcar</button>
@@ -256,6 +272,178 @@
           </section>
         </div>
 
+        <div id="agentView" class="view view-agent">
+          <header class="chat-header">
+            <div class="chat-contact">Agente IA</div>
+          </header>
+          <section class="agent-body">
+            <div class="bulk-card agent-card">
+              <div class="agent-card-head">
+                <div>
+                  <h3>Configuração básica</h3>
+                  <p>Base pronta para responder mensagens, sugerir itens e apoiar pedidos.</p>
+                </div>
+                <div id="agentStatusBadge" class="service-status-tag finalized">Não configurado</div>
+              </div>
+
+              <div class="agent-layout">
+                <div class="agent-summary">
+                  <div class="agent-grid">
+                    <div class="settings-profile-item">
+                      <span class="profile-label">OpenAI</span>
+                      <strong id="agentConfigured">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Modelo</span>
+                      <strong id="agentModel">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Último teste</span>
+                      <strong id="agentLastTest">Não executado</strong>
+                    </div>
+                  </div>
+
+                  <div class="agent-actions">
+                    <button id="agentTestBtn" type="button" class="btn-primary">Testar conexão com a OpenAI</button>
+                  </div>
+
+                  <div id="agentTestResult" class="settings-account-note">
+                    Aguardando teste de conexão.
+                  </div>
+                </div>
+
+                <div class="agent-config-panel">
+                  <div class="agent-config-head">
+                    <h4>Identidade do agente</h4>
+                    <p>Essas informações ajudam o agente a responder com mais contexto e consistência.</p>
+                  </div>
+
+                  <form id="agentSettingsForm" class="new-chat-form agent-settings-form">
+                    <label>
+                      Nome do agente
+                      <input id="agentNameInput" type="text" placeholder="Ex.: Zenaide" />
+                    </label>
+                    <label>
+                      Nome da empresa
+                      <input id="companyNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
+                    </label>
+                    <button id="agentSettingsSaveBtn" type="submit" class="btn-primary">Salvar configurações do agente</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="productsView" class="view view-products">
+          <header class="chat-header">
+            <div class="chat-contact">Produtos</div>
+          </header>
+          <section class="products-body">
+            <div class="products-shell">
+              <aside class="products-nav">
+                <button id="productsTabCreate" type="button" class="products-nav-item active">
+                  <i class="bi bi-box2-heart-fill"></i> Cadastro de produtos
+                </button>
+                <button id="productsTabList" type="button" class="products-nav-item">
+                  <i class="bi bi-grid-1x2-fill"></i> Lista de produtos
+                </button>
+                <button id="productsTabOrders" type="button" class="products-nav-item">
+                  <i class="bi bi-receipt-cutoff"></i> Pedidos
+                </button>
+              </aside>
+
+              <div class="products-content">
+                <div id="productsPanelCreate" class="bulk-card products-panel active">
+                  <div class="products-create-layout">
+                    <form id="productsForm" class="new-chat-form products-form">
+                      <div class="agent-card-head products-create-head">
+                        <div>
+                          <h3 id="productFormHeading">Cadastrar produto</h3>
+                          <p id="productFormDescription">Cadastre itens para o agente consultar e sugerir durante o atendimento.</p>
+                        </div>
+                      </div>
+                      <input id="productId" type="hidden" />
+                      <label>
+                        Nome
+                      <input id="productName" type="text" required />
+                    </label>
+                    <label>
+                      Tipo
+                      <select id="productType" required>
+                        <option value="product">Produto</option>
+                        <option value="service">Serviço</option>
+                      </select>
+                    </label>
+                    <label>
+                      Preço
+                      <input id="productPrice" type="number" min="0" step="0.01" required />
+                    </label>
+                    <label id="productStockField">
+                      Estoque
+                      <input id="productStock" type="number" min="0" step="1" required />
+                    </label>
+                    <label class="product-description-field">
+                      Descrição
+                      <textarea id="productDescription" rows="4" placeholder="Descreva o produto ou serviço para o agente consultar."></textarea>
+                    </label>
+                    <label class="product-image-field">
+                      Imagem
+                      <input id="productImage" type="file" accept="image/*" />
+                        <small>Use uma foto nítida para ajudar o agente a sugerir o item.</small>
+                      </label>
+                      <div class="products-form-actions">
+                        <button id="productSubmitBtn" type="submit" class="btn-primary">
+                          <i class="bi bi-check2-circle"></i> Cadastrar produto
+                        </button>
+                        <button id="productCancelEditBtn" type="button" class="btn-secondary" hidden>
+                          <i class="bi bi-arrow-counterclockwise"></i> Cancelar edição
+                        </button>
+                      </div>
+                    </form>
+
+                    <div class="products-create-side">
+                      <div id="productPreviewCard" class="product-preview-card">
+                        <div class="product-preview-media">
+                          <div id="productPreviewPlaceholder" class="product-preview-placeholder">
+                            <i class="bi bi-box-seam-fill"></i>
+                          </div>
+                          <img id="productPreviewImage" class="product-preview-image" alt="Pré-visualização do produto" hidden />
+                        </div>
+                        <div class="product-preview-body">
+                          <strong id="productPreviewName">Novo produto</strong>
+                          <span id="productPreviewPrice">Preço ainda não informado</span>
+                          <span id="productPreviewStock">Estoque ainda não informado</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="productsPanelList" class="bulk-card products-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Produtos cadastrados</h3>
+                      <p>Esses itens ficam disponíveis para o agente de IA consultar.</p>
+                    </div>
+                  </div>
+                  <div id="productsList" class="products-list"></div>
+                </div>
+
+                <div id="productsPanelOrders" class="bulk-card products-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Pedidos do agente</h3>
+                      <p>Pedidos gerados pelo agente ficam pendentes até a confirmação interna.</p>
+                    </div>
+                  </div>
+                  <div id="ordersList" class="products-list"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
         <div id="settingsView" class="view view-settings">
           <header class="chat-header">
             <div class="chat-contact">Configuracoes</div>
@@ -267,25 +455,25 @@
                   <i class="bi bi-person-circle"></i> Perfil
                 </button>
                 <button id="settingsTabCreate" type="button" class="settings-nav-item">
-                  <i class="bi bi-person-plus-fill"></i> Cadastrar usuario
+                  <i class="bi bi-person-plus-fill"></i> Cadastrar usuário
                 </button>
                 <button id="settingsTabList" type="button" class="settings-nav-item">
-                  <i class="bi bi-people-fill"></i> Listar usuario
+                  <i class="bi bi-people-fill"></i> Listar usuários
                 </button>
                 <button id="settingsTabSectors" type="button" class="settings-nav-item">
                   <i class="bi bi-diagram-3-fill"></i> Setores
                 </button>
                 <button id="settingsTabAccounts" type="button" class="settings-nav-item">
-                  <i class="bi bi-phone-fill"></i> Gerencia de perfis
+                  <i class="bi bi-phone-fill"></i> Gerência de perfis
                 </button>
                 <button id="settingsLogoutBtn" type="button" class="settings-nav-item settings-nav-logout">
-                  <i class="bi bi-box-arrow-right"></i> Encerrar sessao
+                  <i class="bi bi-box-arrow-right"></i> Encerrar sessão
                 </button>
               </aside>
 
               <div class="settings-content">
                 <div id="settingsPanelPerfil" class="bulk-card settings-panel active">
-                  <h3>Perfil do usuario</h3>
+                  <h3>Perfil do usuário</h3>
                   <div id="settingsHeader" class="settings-header"></div>
                   <div class="settings-profile-grid">
                     <div class="settings-profile-item">
@@ -293,7 +481,7 @@
                       <strong id="settingsProfileName">-</strong>
                     </div>
                     <div class="settings-profile-item">
-                      <span class="profile-label">Usuario (login)</span>
+                      <span class="profile-label">Usuário (login)</span>
                       <strong id="settingsProfileUsername">-</strong>
                     </div>
                     <div class="settings-profile-item">
@@ -313,7 +501,7 @@
                 </div>
 
                 <div id="settingsPanelCreate" class="bulk-card settings-panel">
-                  <h3>Cadastrar usuario</h3>
+                  <h3>Cadastrar usuário</h3>
                   <div id="settingsAdminSection" class="settings-admin" hidden>
                     <form id="createUserForm" class="new-chat-form">
                       <label>
@@ -321,7 +509,7 @@
                         <input id="newUserName" type="text" required />
                       </label>
                       <label>
-                        Usuario (login)
+                        Usuário (login)
                         <input id="newUserUsername" type="text" required />
                       </label>
                       <label>
@@ -339,13 +527,13 @@
                         Setor
                         <select id="newUserSector" required></select>
                       </label>
-                      <button type="submit" class="btn-primary">Cadastrar usuario</button>
+                      <button type="submit" class="btn-primary">Cadastrar usuário</button>
                     </form>
                   </div>
                 </div>
 
                 <div id="settingsPanelList" class="bulk-card settings-panel">
-                  <h3>Usuarios cadastrados</h3>
+                  <h3>Usuários cadastrados</h3>
                   <div id="settingsUsersList" class="settings-users-list"></div>
                 </div>
 
@@ -362,14 +550,14 @@
                 </div>
 
                 <div id="settingsPanelAccounts" class="bulk-card settings-panel">
-                  <h3>Gerencia de perfis</h3>
+                  <h3>Gerência de perfis</h3>
                   <div class="settings-account-actions">
-                    <button id="settingsSwitchNumberBtn" type="button" class="btn-secondary">Trocar numero</button>
-                    <button id="settingsAddNumberBtn" type="button" class="btn-secondary" hidden>Adicionar numero</button>
-                    <button id="settingsRemoveNumberBtn" type="button" class="btn-danger" hidden>Remover numero</button>
+                    <button id="settingsSwitchNumberBtn" type="button" class="btn-secondary">Trocar número</button>
+                    <button id="settingsAddNumberBtn" type="button" class="btn-secondary" hidden>Adicionar número</button>
+                    <button id="settingsRemoveNumberBtn" type="button" class="btn-danger" hidden>Remover número</button>
                   </div>
                   <div class="settings-account-note">
-                    Selecione o numero de trabalho do atendente e gerencie os numeros vinculados ao app.
+                    Selecione o número de trabalho do atendente e gerencie os números vinculados ao app.
                   </div>
                 </div>
               </div>
@@ -377,6 +565,33 @@
           </section>
         </div>
       </main>
+
+      <nav id="mobileBottomNav" class="mobile-bottom-nav" hidden>
+        <button id="mobileNavChats" type="button" class="mobile-nav-item active">
+          <i class="bi bi-chat-left-text-fill"></i>
+          <span>Chats</span>
+        </button>
+        <button id="mobileNavBulkCreate" type="button" class="mobile-nav-item">
+          <i class="bi bi-megaphone-fill"></i>
+          <span>Disparo</span>
+        </button>
+        <button id="mobileNavBulkMonitor" type="button" class="mobile-nav-item">
+          <i class="bi bi-bar-chart-line-fill"></i>
+          <span>Monitorar</span>
+        </button>
+        <button id="mobileNavAgent" type="button" class="mobile-nav-item">
+          <i class="bi bi-cpu-fill"></i>
+          <span>Agente</span>
+        </button>
+        <button id="mobileNavProducts" type="button" class="mobile-nav-item">
+          <i class="bi bi-shop-window"></i>
+          <span>Loja</span>
+        </button>
+        <button id="mobileNavSettings" type="button" class="mobile-nav-item">
+          <i class="bi bi-gear-fill"></i>
+          <span>Ajustes</span>
+        </button>
+      </nav>
     </div>
 
     <template id="conversationItemTpl">
@@ -397,6 +612,10 @@
 
     <div id="conversationMenu" class="conversation-menu">
       <button id="deleteConversationBtn" type="button">Excluir conversa</button>
+      <label class="conversation-menu-check">
+        <input id="conversationAIAgentToggle" type="checkbox" />
+        <span>Resposta por agente de venda</span>
+      </label>
       <button id="editConversationBtn" type="button">Editar contato</button>
       <button id="transferConversationBtn" type="button">Transferir atendimento</button>
     </div>
@@ -415,7 +634,7 @@
         </label>
         <label>
           Primeira mensagem (opcional)
-          <textarea id="newChatMessage" rows="3" placeholder="Ola, tudo bem?"></textarea>
+          <textarea id="newChatMessage" rows="3" placeholder="Olá, tudo bem?"></textarea>
         </label>
         <div class="new-chat-actions">
           <button id="newChatCancel" type="button" class="btn-secondary">Cancelar</button>
@@ -426,14 +645,14 @@
 
     <div id="editUserOverlay" class="new-chat-overlay"></div>
     <div id="editUserModal" class="new-chat-modal">
-      <h3>Editar usuario</h3>
+      <h3>Editar usuário</h3>
       <form id="editUserForm" class="new-chat-form">
         <label>
           Nome
           <input id="editUserName" type="text" required />
         </label>
         <label>
-          Usuario (login)
+          Usuário (login)
           <input id="editUserUsername" type="text" required />
         </label>
         <label>
@@ -449,7 +668,7 @@
         </label>
         <label>
           Nova senha (opcional)
-          <input id="editUserPassword" type="password" minlength="6" placeholder="Deixe em branco para nao alterar" />
+          <input id="editUserPassword" type="password" minlength="6" placeholder="Deixe em branco para não alterar" />
         </label>
         <div class="new-chat-actions">
           <button id="editUserCancel" type="button" class="btn-secondary">Cancelar</button>
@@ -475,11 +694,30 @@
 
     <div id="accountSwitchOverlay" class="new-chat-overlay"></div>
     <div id="accountSwitchModal" class="new-chat-modal account-switch-modal">
-      <h3 id="accountSwitchTitle">Selecionar numero</h3>
+      <h3 id="accountSwitchTitle">Selecionar número</h3>
       <div id="accountSwitchList" class="account-switch-list"></div>
       <div class="new-chat-actions">
         <button id="accountSwitchClose" type="button" class="btn-secondary">Fechar</button>
       </div>
+    </div>
+
+    <div id="orderConfirmOverlay" class="new-chat-overlay"></div>
+    <div id="orderConfirmModal" class="new-chat-modal">
+      <h3>Confirmar pedido</h3>
+      <form id="orderConfirmForm" class="new-chat-form">
+        <label>
+          Informe o tempo mínimo para o pedido ficar pronto (em minutos):
+          <input id="orderConfirmReadyTime" type="number" min="1" step="1" placeholder="Ex.: 30" required />
+        </label>
+        <label>
+          Informacao adicional para o cliente (opcional)
+          <textarea id="orderConfirmNote" rows="3" placeholder="Ex.: retirar com documento, horario comercial..."></textarea>
+        </label>
+        <div class="new-chat-actions">
+          <button id="orderConfirmCancel" type="button" class="btn-secondary">Cancelar</button>
+          <button type="submit" class="btn-primary">Avancar</button>
+        </div>
+      </form>
     </div>
 
     <div id="uiDialogOverlay" class="ui-dialog-overlay">
@@ -544,3 +782,4 @@
     <script src="/app/app.js"></script>
   </body>
 </html>
+

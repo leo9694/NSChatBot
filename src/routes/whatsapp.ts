@@ -102,7 +102,7 @@ router.post("/selected-account", async (req, res) => {
     });
   } catch (error: any) {
     if (error?.message === "WHATSAPP_ACCOUNT_NOT_FOUND") {
-      return res.status(404).json({ error: "Conta WhatsApp nao encontrada." });
+      return res.status(404).json({ error: "Conta WhatsApp não encontrada." });
     }
     throw error;
   }
@@ -142,7 +142,7 @@ router.get("/profile-avatar", async (req, res) => {
 
 router.post("/accounts/provision", requireAdmin, async (req, res) => {
   const authReq = req as AuthRequest;
-  const displayName = String(req.body?.display_name || "").trim() || "Novo numero";
+  const displayName = String(req.body?.display_name || "").trim() || "Novo número";
   const account = await createPendingWhatsAppAccount(displayName);
 
   if (authReq.authUser?.id) {
@@ -163,7 +163,7 @@ router.delete("/accounts/:accountId", requireAdmin, async (req, res) => {
 
   const account = await getWhatsAppAccountById(accountId);
   if (!account) {
-    return res.status(404).json({ error: "Conta WhatsApp nao encontrada." });
+    return res.status(404).json({ error: "Conta WhatsApp não encontrada." });
   }
 
   if (account.session_path) {
@@ -172,7 +172,7 @@ router.delete("/accounts/:accountId", requireAdmin, async (req, res) => {
 
   const deleted = await deleteWhatsAppAccount(accountId);
   if (!deleted) {
-    return res.status(404).json({ error: "Conta WhatsApp nao encontrada." });
+    return res.status(404).json({ error: "Conta WhatsApp não encontrada." });
   }
 
   if (deleted.session_path) {
@@ -201,7 +201,7 @@ router.post("/disconnect", requireAdmin, async (req, res) => {
   const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
   const connected = getCurrentWhatsAppAccount(selected?.wa_jid || null, selected?.session_path || null);
   if (selected?.wa_jid && connected.waJid && selected.wa_jid !== connected.waJid) {
-    return res.status(409).json({ error: "A conta selecionada nao esta conectada nesta sessao ativa." });
+    return res.status(409).json({ error: "A conta selecionada não está conectada nesta sessão ativa." });
   }
   await disconnectWhatsAppSession(selected?.session_path || undefined);
   return res.status(200).json({

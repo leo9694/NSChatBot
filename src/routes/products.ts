@@ -1,0 +1,139 @@
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import multer from "multer";
+import { Router } from "express";
+import { createProduct, ensureProductsSchema, listProducts, updateProduct } from "../repositories/products.repository";
+
+const router = Router();
+const mediaDir = path.resolve(process.cwd(), "storage", "media");
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    fs.mkdirSync(mediaDir, { recursive: true });
+    cb(null, mediaDir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(String(file.originalname || "")).trim() || ".png";
+    cb(null, `product_${Date.now()}_${randomUUID()}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (!String(file.mimetype || "").startsWith("image/")) {
+      cb(new Error("A imagem do produto deve ser um arquivo de imagem."));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+type AuthRequest = Express.Request & {
+  authUser?: {
+    id: string;
+    name: string;
+    username: string;
+    role: "administrador" | "operador";
+  };
+};
+
+router.get("/", async (_req, res) => {
+  const items = await listProducts();
+  return res.status(200).json({ items });
+});
+
+router.post("/", upload.single("image"), async (req, res) => {
+  const authReq = req as AuthRequest;
+  try {
+    await ensureProductsSchema();
+
+    const name = String(req.body?.name || "").trim();
+    const type = String(req.body?.type || "product").trim() === "service" ? "service" : "product";
+    const description = String(req.body?.description || "").trim();
+    const price = Number(req.body?.price || 0);
+    const stock = type === "service" ? 0 : Number(req.body?.stock || 0);
+
+    if (!name) {
+      return res.status(400).json({ error: "Informe o nome do produto." });
+    }
+
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({ error: "Informe um preço válido." });
+    }
+
+    if (!Number.isFinite(stock) || stock < 0) {
+      return res.status(400).json({ error: "Informe um estoque válido." });
+    }
+
+    const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
+    const product = await createProduct({
+      name,
+      type,
+      description,
+      price,
+      stock: Math.floor(stock),
+      imageUrl,
+      createdBy: authReq.authUser?.id || null,
+    });
+
+    return res.status(201).json({ status: "ok", product });
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : "Falha ao cadastrar produto.",
+    });
+  }
+});
+
+router.put("/:productId", upload.single("image"), async (req, res) => {
+  const productId = String(req.params.productId || "").trim();
+  try {
+    await ensureProductsSchema();
+
+    const name = String(req.body?.name || "").trim();
+    const type = String(req.body?.type || "product").trim() === "service" ? "service" : "product";
+    const description = String(req.body?.description || "").trim();
+    const price = Number(req.body?.price || 0);
+    const stock = type === "service" ? 0 : Number(req.body?.stock || 0);
+
+    if (!productId) {
+      return res.status(400).json({ error: "Produto inválido." });
+    }
+    if (!name) {
+      return res.status(400).json({ error: "Informe o nome do produto." });
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      return res.status(400).json({ error: "Informe um preço válido." });
+    }
+    if (!Number.isFinite(stock) || stock < 0) {
+      return res.status(400).json({ error: "Informe um estoque válido." });
+    }
+
+    const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
+    const product = await updateProduct({
+      id: productId,
+      name,
+      type,
+      description,
+      price,
+      stock: Math.floor(stock),
+      imageUrl,
+    });
+
+    if (!product) {
+      return res.status(404).json({ error: "Produto não encontrado." });
+    }
+
+    return res.status(200).json({ status: "ok", product });
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : "Falha ao atualizar produto.",
+    });
+  }
+});
+
+export default router;

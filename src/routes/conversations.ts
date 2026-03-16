@@ -8,11 +8,13 @@ import {
   getConversationAccess,
   resetConversationUnread,
   transferConversationToUser,
+  updateConversationAiEnabled,
   updateConversationAvatar,
   upsertConversation,
 } from "../repositories/conversations.repository";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { requireActiveWhatsAppAccount, WhatsAppAccountContextError } from "../services/whatsapp-account-context.service";
+import { handleInboundAiAutomation } from "../services/ai-agent.service";
 import { getProfilePictureUrl, sendWhatsAppText } from "../services/whatsapp.service";
 import { normalizePhone, phoneToJid } from "../utils/whatsapp";
 
@@ -109,6 +111,7 @@ router.get("/", async (req, res) => {
           AND NULLIF(c.metadata->>'bulk_started_at', '') IS NOT NULL
           AND COALESCE(bm.sent_at, bm.created_at) >= (c.metadata->>'bulk_started_at')::timestamptz
       ) AS bulk_has_reply,
+      COALESCE((c.metadata->>'ai_agent_enabled')::boolean, false) AS ai_agent_enabled,
       c.unread_count,
       c.created_at,
       c.updated_at,
@@ -334,6 +337,27 @@ router.patch("/:conversationId/read", async (req, res) => {
     status: "ok",
     conversation_id: conversationId,
     unread_count: 0,
+  });
+});
+
+router.patch("/:conversationId/ai-agent", async (req, res) => {
+  const { conversationId } = req.params;
+  const enabled = Boolean(req.body?.enabled);
+  const ok = await updateConversationAiEnabled(conversationId, enabled);
+  if (!ok) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
+
+  let automationResult: { ok: boolean; replied: boolean; reason?: string } | null = null;
+  if (enabled) {
+    automationResult = await handleInboundAiAutomation(conversationId);
+  }
+
+  return res.status(200).json({
+    status: "ok",
+    conversation_id: conversationId,
+    ai_agent_enabled: enabled,
+    automation: automationResult,
   });
 });
 

@@ -290,6 +290,22 @@ export async function cleanupInvalidConversations(): Promise<{ conversations: nu
   };
 }
 
+export async function updateConversationAiEnabled(conversationId: string, enabled: boolean): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{ai_agent_enabled}', to_jsonb($2::boolean), true),
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [conversationId, enabled],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
 export async function clearConversationBulkInitiated(conversationId: string): Promise<void> {
   await ensureConversationWorkflowSchema();
   await pool.query(

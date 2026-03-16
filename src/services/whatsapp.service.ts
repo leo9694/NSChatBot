@@ -23,6 +23,7 @@ import {
 } from "../utils/whatsapp";
 import { getWhatsAppHistorySyncState, listWhatsAppAccounts, setWhatsAppHistorySyncBaseline, upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { saveInboundMessage, saveOutboundMessage, updateOutboundMessageStatus } from "../repositories/messages.repository";
+import { handleInboundAiAutomation } from "./ai-agent.service";
 import { saveMediaBuffer } from "./media.service";
 
 export interface SendWhatsAppTextInput {
@@ -400,7 +401,7 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
   }
 
   if (isInbound) {
-    const inserted = await saveInboundMessage({
+    const inboundResult = await saveInboundMessage({
       accountJid: session.selfJid,
       accountDisplayName: currentAccountName(session) || null,
       waJid: normalizedRemoteJid,
@@ -423,13 +424,17 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
       },
     });
 
+    if (inboundResult.conversationId) {
+      void handleInboundAiAutomation(inboundResult.conversationId).catch(() => undefined);
+    }
+
     logUpsert({
       stage: "saved_inbound",
       normalizedRemoteJid,
       externalMessageId,
       messageType,
     });
-    return inserted;
+    return inboundResult.inserted;
   } else {
     await saveOutboundMessage({
       accountJid: session.selfJid,
@@ -601,7 +606,6 @@ async function ensureHistoryBaselineOnConnect(session: WhatsAppSessionState): Pr
   const now = new Date();
   await setWhatsAppHistorySyncBaseline(session.selfJid, now);
   session.historySyncBaselineAt = now;
-  console.log(`Baseline registrada para ${session.selfJid} em ${now.toISOString()}.`);
 }
 
 async function ensureHistorySyncReady(session: WhatsAppSessionState): Promise<boolean> {
@@ -901,11 +905,6 @@ export async function startWhatsAppSession(
     }
 
     if (!(await ensureHistorySyncReady(session))) {
-      logUpsert({
-        stage: "ignored_history_sync_without_manual_trigger",
-        messageCount: history.messages?.length || 0,
-        sessionPath: session.sessionPath,
-      });
       return;
     }
 

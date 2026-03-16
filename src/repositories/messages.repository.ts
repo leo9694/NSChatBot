@@ -294,7 +294,7 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
   }
 }
 
-export async function saveInboundMessage(input: SaveInboundMessageInput): Promise<boolean> {
+export async function saveInboundMessage(input: SaveInboundMessageInput): Promise<{ inserted: boolean; conversationId: string | null }> {
   await ensureMessagesSchema();
   const cleanMetadata = compactMetadata(input.metadata);
   const account = await upsertWhatsAppAccount({
@@ -357,7 +357,7 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
         createdAt: existingByExternalId.rows[0].created_at.toISOString(),
         message: toRealtimeMessage(existingByExternalId.rows[0]),
       });
-      return false;
+      return { inserted: false, conversationId: existingByExternalId.rows[0].conversation_id };
     }
   }
 
@@ -396,7 +396,7 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
         createdAt: existing.rows[0].created_at.toISOString(),
         message: toRealtimeMessage(existing.rows[0]),
       });
-      return false;
+      return { inserted: false, conversationId: existing.rows[0].conversation_id };
     }
   }
 
@@ -440,10 +440,10 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
       createdAt: inserted.rows[0].created_at.toISOString(),
       message: toRealtimeMessage(inserted.rows[0]),
     });
-    return true;
+    return { inserted: true, conversationId: conversation.id };
   }
 
-  return false;
+  return { inserted: false, conversationId: conversation.id };
 }
 
 export async function updateOutboundMessageStatus(input: UpdateOutboundMessageStatusInput): Promise<void> {

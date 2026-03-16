@@ -165,3 +165,53 @@ export async function syncLocalMediaDirectoryToDatabase(): Promise<{ synced: num
 
   return { synced };
 }
+
+export async function loadMediaBufferFromUrl(
+  mediaUrl: string,
+): Promise<{ buffer: Buffer; mimeType: string | null; fileName: string | null } | null> {
+  const url = String(mediaUrl || "").trim();
+  if (!url) return null;
+
+  if (url.startsWith("/media/")) {
+    const fileName = path.basename(url);
+    const localPath = path.join(MEDIA_DIR, fileName);
+    try {
+      const buffer = await readFile(localPath);
+      const ext = path.extname(fileName).replace(".", "").toLowerCase();
+      const mimeType =
+        ext === "jpg" || ext === "jpeg"
+          ? "image/jpeg"
+          : ext === "png"
+            ? "image/png"
+            : ext === "webp"
+              ? "image/webp"
+              : ext === "gif"
+                ? "image/gif"
+                : ext === "mp4"
+                  ? "video/mp4"
+                  : "application/octet-stream";
+      return { buffer, mimeType, fileName };
+    } catch {
+      const blob = await getMediaBlob(fileName);
+      if (!blob) return null;
+      return { buffer: blob.content, mimeType: blob.mimeType, fileName };
+    }
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      return null;
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const mimeType = response.headers.get("content-type");
+    const fileName = path.basename(new URL(url).pathname || "");
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType,
+      fileName: fileName || null,
+    };
+  }
+
+  return null;
+}

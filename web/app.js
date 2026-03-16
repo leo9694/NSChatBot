@@ -35,11 +35,22 @@ const state = {
   sessionToken: "",
   settingsTab: "perfil",
   realtimeCheckpointToken: "",
+  products: [],
+  productOrders: [],
+  productsTab: "create",
+  editingProductId: "",
+  agentSettings: null,
+  mobileChatPane: "list",
 };
 const SESSION_TOKEN_KEY = "nschat_session_token";
 
 const layoutEl = document.querySelector(".layout");
 const chatMainEl = document.querySelector(".chat-main");
+const mobileTopbarEl = document.getElementById("mobileTopbar");
+const mobileTopbarBackEl = document.getElementById("mobileTopbarBack");
+const mobileTopbarTitleEl = document.getElementById("mobileTopbarTitle");
+const mobileTopbarSubtitleEl = document.getElementById("mobileTopbarSubtitle");
+const mobileBottomNavEl = document.getElementById("mobileBottomNav");
 const loginScreenEl = document.getElementById("loginScreen");
 const loginFormEl = document.getElementById("loginForm");
 const loginUsernameEl = document.getElementById("loginUsername");
@@ -128,6 +139,7 @@ const conversationMenuEl = document.getElementById("conversationMenu");
 const deleteConversationBtnEl = document.getElementById("deleteConversationBtn");
 const editConversationBtnEl = document.getElementById("editConversationBtn");
 const transferConversationBtnEl = document.getElementById("transferConversationBtn");
+const conversationAIAgentToggleEl = document.getElementById("conversationAIAgentToggle");
 const transferOverlayEl = document.getElementById("transferOverlay");
 const transferModalEl = document.getElementById("transferModal");
 const transferFormEl = document.getElementById("transferForm");
@@ -138,14 +150,30 @@ const accountSwitchModalEl = document.getElementById("accountSwitchModal");
 const accountSwitchTitleEl = document.getElementById("accountSwitchTitle");
 const accountSwitchListEl = document.getElementById("accountSwitchList");
 const accountSwitchCloseEl = document.getElementById("accountSwitchClose");
+const orderConfirmOverlayEl = document.getElementById("orderConfirmOverlay");
+const orderConfirmModalEl = document.getElementById("orderConfirmModal");
+const orderConfirmFormEl = document.getElementById("orderConfirmForm");
+const orderConfirmReadyTimeEl = document.getElementById("orderConfirmReadyTime");
+const orderConfirmNoteEl = document.getElementById("orderConfirmNote");
+const orderConfirmCancelEl = document.getElementById("orderConfirmCancel");
 const conversationItemTpl = document.getElementById("conversationItemTpl");
 const railChatsEl = document.getElementById("railChats");
 const railBulkCreateEl = document.getElementById("railBulkCreate");
 const railBulkMonitorEl = document.getElementById("railBulkMonitor");
+const railAgentEl = document.getElementById("railAgent");
+const railProductsEl = document.getElementById("railProducts");
 const settingsBtnEl = document.getElementById("settingsBtn");
+const mobileNavChatsEl = document.getElementById("mobileNavChats");
+const mobileNavBulkCreateEl = document.getElementById("mobileNavBulkCreate");
+const mobileNavBulkMonitorEl = document.getElementById("mobileNavBulkMonitor");
+const mobileNavAgentEl = document.getElementById("mobileNavAgent");
+const mobileNavProductsEl = document.getElementById("mobileNavProducts");
+const mobileNavSettingsEl = document.getElementById("mobileNavSettings");
 const chatViewEl = document.getElementById("chatView");
 const bulkCreateViewEl = document.getElementById("bulkCreateView");
 const bulkMonitorViewEl = document.getElementById("bulkMonitorView");
+const agentViewEl = document.getElementById("agentView");
+const productsViewEl = document.getElementById("productsView");
 const settingsViewEl = document.getElementById("settingsView");
 const bulkCreateFormEl = document.getElementById("bulkCreateForm");
 const bulkFileEl = document.getElementById("bulkFile");
@@ -202,6 +230,42 @@ const createSectorFormEl = document.getElementById("createSectorForm");
 const newSectorNameEl = document.getElementById("newSectorName");
 const settingsSectorsListEl = document.getElementById("settingsSectorsList");
 const settingsLogoutBtnEl = document.getElementById("settingsLogoutBtn");
+const agentStatusBadgeEl = document.getElementById("agentStatusBadge");
+const agentConfiguredEl = document.getElementById("agentConfigured");
+const agentModelEl = document.getElementById("agentModel");
+const agentLastTestEl = document.getElementById("agentLastTest");
+const agentTestBtnEl = document.getElementById("agentTestBtn");
+const agentTestResultEl = document.getElementById("agentTestResult");
+const agentSettingsFormEl = document.getElementById("agentSettingsForm");
+const agentNameInputEl = document.getElementById("agentNameInput");
+const companyNameInputEl = document.getElementById("companyNameInput");
+const agentSettingsSaveBtnEl = document.getElementById("agentSettingsSaveBtn");
+const productsFormEl = document.getElementById("productsForm");
+const productIdEl = document.getElementById("productId");
+const productNameEl = document.getElementById("productName");
+const productTypeEl = document.getElementById("productType");
+const productPriceEl = document.getElementById("productPrice");
+const productStockEl = document.getElementById("productStock");
+const productStockFieldEl = document.getElementById("productStockField");
+const productDescriptionEl = document.getElementById("productDescription");
+const productImageEl = document.getElementById("productImage");
+const productSubmitBtnEl = document.getElementById("productSubmitBtn");
+const productCancelEditBtnEl = document.getElementById("productCancelEditBtn");
+const productFormHeadingEl = document.getElementById("productFormHeading");
+const productFormDescriptionEl = document.getElementById("productFormDescription");
+const productPreviewImageEl = document.getElementById("productPreviewImage");
+const productPreviewPlaceholderEl = document.getElementById("productPreviewPlaceholder");
+const productPreviewNameEl = document.getElementById("productPreviewName");
+const productPreviewPriceEl = document.getElementById("productPreviewPrice");
+const productPreviewStockEl = document.getElementById("productPreviewStock");
+const productsListEl = document.getElementById("productsList");
+const ordersListEl = document.getElementById("ordersList");
+const productsTabCreateEl = document.getElementById("productsTabCreate");
+const productsTabListEl = document.getElementById("productsTabList");
+const productsTabOrdersEl = document.getElementById("productsTabOrders");
+const productsPanelCreateEl = document.getElementById("productsPanelCreate");
+const productsPanelListEl = document.getElementById("productsPanelList");
+const productsPanelOrdersEl = document.getElementById("productsPanelOrders");
 let mediaRecorder = null;
 let mediaChunks = [];
 let mediaStream = null;
@@ -318,6 +382,15 @@ function fmtDateDivider(value) {
   return date.toLocaleDateString("pt-BR");
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function checksByStatus(message) {
   const CHECK = "\u2713";
   const DOUBLE_CHECK = `${CHECK}${CHECK}`;
@@ -355,20 +428,20 @@ function getProfileWhatsAppAccount() {
 }
 
 function formatWhatsAppAccountTitle(account) {
-  if (!account) return "Nenhum numero selecionado";
+  if (!account) return "Nenhum número selecionado";
   if (isPendingWhatsAppAccount(account)) {
-    return String(account.display_name || "").trim() || "Novo numero";
+    return String(account.display_name || "").trim() || "Novo número";
   }
   const name = String(account.display_name || "").trim();
   const phone = formatPhone(account.phone || "");
   if (name && phone) return `${name} - ${phone}`;
-  return name || phone || "Novo numero";
+  return name || phone || "Novo número";
 }
 
 function formatWhatsAppAccountMeta(account) {
   if (!account) return "";
   if (isPendingWhatsAppAccount(account)) {
-    return "Numero ainda nao vinculado. Clique em Conectar para ler o QR code.";
+    return "Número ainda não vinculado. Clique em Conectar para ler o QR code.";
   }
   return String(account.wa_jid || "").trim();
 }
@@ -503,7 +576,7 @@ function syncProfilePanel() {
 
   profileAvatarEl.textContent = profileLabel(selectedAccount?.display_name || state.connectedAccountName, selectedAccount?.phone || state.connectedAccountPhone);
   profileNameEl.textContent = name;
-  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexao" : isOnline ? "Conectado" : "Desconectado";
+  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexão" : isOnline ? "Conectado" : "Desconectado";
   profilePhoneEl.textContent = phone;
   profileJidEl.textContent = jid;
   disconnectBtnEl.hidden = !isOnline || !canManageSession;
@@ -539,7 +612,7 @@ function renderHistorySyncStatus(wa = {}) {
   syncHistoryBtnEl.textContent = active ? "Sincronizando..." : "Sincronizar";
   historySyncHintEl.textContent =
     message ||
-    "Para puxar historico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
+    "Para puxar histórico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
   syncOverlayEl.hidden = !active;
   syncOverlayEl.style.display = active ? "flex" : "none";
   syncOverlayMessageEl.textContent =
@@ -567,7 +640,7 @@ function renderQrCode(text) {
   qrCodeBoxEl.innerHTML = "";
 
   if (!window.QRCode) {
-    qrHintEl.textContent = "Gerador de QR indisponivel.";
+    qrHintEl.textContent = "Gerador de QR indisponível.";
     return;
   }
 
@@ -634,6 +707,7 @@ function openConversationMenu(conversationId, x, y) {
     Boolean(state.currentUser) &&
     (state.currentUser.role === "administrador" || isMine || status === "pending" || status === "finalized");
   transferConversationBtnEl.style.display = canTransfer ? "" : "none";
+  conversationAIAgentToggleEl.checked = Boolean(conv?.ai_agent_enabled);
   conversationMenuEl.style.left = `${x}px`;
   conversationMenuEl.style.top = `${y}px`;
   conversationMenuEl.classList.add("open");
@@ -648,33 +722,401 @@ function setRailActive(view) {
   railChatsEl.classList.toggle("active", view === "chats");
   railBulkCreateEl.classList.toggle("active", view === "bulk-create");
   railBulkMonitorEl.classList.toggle("active", view === "bulk-monitor");
+  railAgentEl.classList.toggle("active", view === "agent");
+  railProductsEl.classList.toggle("active", view === "products");
   settingsBtnEl.classList.toggle("active", view === "settings");
+  mobileNavChatsEl?.classList.toggle("active", view === "chats");
+  mobileNavBulkCreateEl?.classList.toggle("active", view === "bulk-create");
+  mobileNavBulkMonitorEl?.classList.toggle("active", view === "bulk-monitor");
+  mobileNavAgentEl?.classList.toggle("active", view === "agent");
+  mobileNavProductsEl?.classList.toggle("active", view === "products");
+  mobileNavSettingsEl?.classList.toggle("active", view === "settings");
+}
+
+function isMobileViewport() {
+  return window.innerWidth <= 980;
+}
+
+function getMobileTopbarCopy() {
+  if (state.currentView === "bulk-create") {
+    return { title: "Disparo em massa", subtitle: "Criar campanha" };
+  }
+  if (state.currentView === "bulk-monitor") {
+    return { title: "Monitorar envios", subtitle: "Acompanhar campanhas" };
+  }
+  if (state.currentView === "agent") {
+    return { title: "Agente IA", subtitle: "Configuração e status" };
+  }
+  if (state.currentView === "products") {
+    const subtitleMap = {
+      create: "Cadastro",
+      list: "Produtos",
+      orders: "Pedidos",
+    };
+    return { title: "Loja", subtitle: subtitleMap[state.productsTab] || "Catálogo" };
+  }
+  if (state.currentView === "settings") {
+    return { title: "Configurações", subtitle: "Ajustes do sistema" };
+  }
+  if (state.mobileChatPane === "conversation" && state.selectedConversation) {
+    return {
+      title: "Conversa",
+      subtitle: formatPhone(state.selectedConversation.phone) || "Voltar para os chats",
+    };
+  }
+  return { title: "NS Chat", subtitle: "Conversas" };
+}
+
+function renderMobileChrome() {
+  const isMobile = isMobileViewport() && state.isAuthenticated;
+  if (mobileTopbarEl) {
+    mobileTopbarEl.hidden = !isMobile;
+  }
+  if (mobileBottomNavEl) {
+    mobileBottomNavEl.hidden = !isMobile;
+  }
+  layoutEl.classList.remove("mobile-hide-topbar");
+  if (!isMobile) return;
+
+  const copy = getMobileTopbarCopy();
+  if (mobileTopbarTitleEl) {
+    mobileTopbarTitleEl.textContent = copy.title;
+  }
+  if (mobileTopbarSubtitleEl) {
+    mobileTopbarSubtitleEl.textContent = copy.subtitle;
+  }
+  if (mobileTopbarBackEl) {
+    mobileTopbarBackEl.hidden = !(state.currentView === "chats" && state.mobileChatPane === "conversation");
+  }
+}
+
+function applyResponsiveLayoutState() {
+  const isMobile = isMobileViewport();
+  layoutEl.classList.toggle("mobile-mode", isMobile);
+
+  if (!isMobile) {
+    layoutEl.classList.remove("mobile-view-chats", "mobile-view-nonchat", "mobile-pane-list", "mobile-pane-conversation");
+    const showSidebar = state.currentView === "chats";
+    chatSidebarEl.style.display = showSidebar ? "" : "none";
+    layoutEl.classList.toggle("no-sidebar", !showSidebar);
+    chatMainEl.classList.toggle("global-scroll", state.currentView !== "chats");
+    renderMobileChrome();
+    return;
+  }
+
+  layoutEl.classList.toggle("mobile-view-chats", state.currentView === "chats");
+  layoutEl.classList.toggle("mobile-view-nonchat", state.currentView !== "chats");
+  layoutEl.classList.toggle("mobile-pane-list", state.currentView === "chats" && state.mobileChatPane === "list");
+  layoutEl.classList.toggle("mobile-pane-conversation", state.currentView === "chats" && state.mobileChatPane === "conversation");
+  chatSidebarEl.style.display = "";
+  layoutEl.classList.remove("no-sidebar");
+  chatMainEl.classList.toggle("global-scroll", state.currentView !== "chats");
+  renderMobileChrome();
 }
 
 function switchView(view) {
   if (!state.isAuthenticated) return;
   state.currentView = view;
+  if (view === "chats" && isMobileViewport()) {
+    state.mobileChatPane = "list";
+  }
   setRailActive(view);
 
   chatViewEl.classList.toggle("active", view === "chats");
   bulkCreateViewEl.classList.toggle("active", view === "bulk-create");
   bulkMonitorViewEl.classList.toggle("active", view === "bulk-monitor");
+  agentViewEl.classList.toggle("active", view === "agent");
+  productsViewEl.classList.toggle("active", view === "products");
   settingsViewEl.classList.toggle("active", view === "settings");
 
-  const showSidebar = view === "chats";
-  chatSidebarEl.style.display = showSidebar ? "" : "none";
-  layoutEl.classList.toggle("no-sidebar", !showSidebar);
-  chatMainEl.classList.toggle("global-scroll", view !== "chats");
+  applyResponsiveLayoutState();
 
   if (view === "bulk-monitor") {
     // Always open monitor focused on the latest dispatch.
     state.selectedBulkJobId = null;
     loadBulkJobs().catch((error) => console.error(error));
+  } else if (view === "agent") {
+    loadAgentStatus().catch((error) => console.error(error));
+  } else if (view === "products") {
+    setProductsTab(state.productsTab || "create");
+    loadProducts().catch((error) => console.error(error));
+    loadAiOrders().catch((error) => console.error(error));
   } else if (view === "settings") {
     renderSettingsHeader();
     setSettingsTab(state.settingsTab || "perfil");
     loadUsersForSettings().catch((error) => console.error(error));
   }
+}
+
+function renderAgentStatus(data = null) {
+  const configured = Boolean(data?.configured);
+  const model = String(data?.model || "-").trim() || "-";
+  agentConfiguredEl.textContent = configured ? "Configurado" : "Não configurado";
+  agentModelEl.textContent = model;
+  if (data && typeof data.productsCount !== "undefined") {
+    agentTestResultEl.textContent = `Catálogo disponível para o agente: ${Number(data.productsCount || 0)} produto(s).`;
+  }
+  agentStatusBadgeEl.textContent = configured ? "Pronto" : "Não configurado";
+  agentStatusBadgeEl.className = `service-status-tag ${configured ? "in_progress" : "finalized"}`;
+}
+
+function renderAgentSettings() {
+  const settings = state.agentSettings || {};
+  agentNameInputEl.value = String(settings.agent_name || "");
+  companyNameInputEl.value = String(settings.company_name || "");
+}
+
+function setProductsTab(tab) {
+  state.productsTab = tab;
+  productsTabCreateEl.classList.toggle("active", tab === "create");
+  productsTabListEl.classList.toggle("active", tab === "list");
+  productsTabOrdersEl.classList.toggle("active", tab === "orders");
+  productsPanelCreateEl.classList.toggle("active", tab === "create");
+  productsPanelListEl.classList.toggle("active", tab === "list");
+  productsPanelOrdersEl.classList.toggle("active", tab === "orders");
+  renderMobileChrome();
+}
+
+function resetProductForm() {
+  state.editingProductId = "";
+  productIdEl.value = "";
+  productsFormEl.reset();
+  productTypeEl.value = "product";
+  productStockEl.required = true;
+  productStockFieldEl.hidden = false;
+  productSubmitBtnEl.innerHTML = '<i class="bi bi-check2-circle"></i> Cadastrar produto';
+  productCancelEditBtnEl.hidden = true;
+  if (productFormHeadingEl) {
+    productFormHeadingEl.textContent = "Cadastrar produto";
+  }
+  if (productFormDescriptionEl) {
+    productFormDescriptionEl.textContent = "Cadastre itens para o agente consultar e sugerir durante o atendimento.";
+  }
+  updateProductPreview();
+}
+
+function fillProductForm(product) {
+  state.editingProductId = String(product?.id || "").trim();
+  productIdEl.value = state.editingProductId;
+  productNameEl.value = String(product?.name || "");
+  productTypeEl.value = String(product?.type || "product");
+  productPriceEl.value = String(product?.price || "");
+  productStockEl.value = String(product?.stock || 0);
+  productDescriptionEl.value = String(product?.description || "");
+  productImageEl.value = "";
+  updateProductTypeState();
+  productSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Salvar alterações';
+  productCancelEditBtnEl.hidden = false;
+  if (productFormHeadingEl) {
+    productFormHeadingEl.textContent = "Editar produto";
+  }
+  if (productFormDescriptionEl) {
+    productFormDescriptionEl.textContent = "Atualize as informações do item e mantenha o catálogo do agente sempre correto.";
+  }
+  updateProductPreview(product);
+  setProductsTab("create");
+}
+
+function updateProductPreview(product = null) {
+  const currentProduct = product || findProductById(state.editingProductId) || null;
+  const typedName = String(productNameEl?.value || "").trim();
+  const typedType = String(productTypeEl?.value || "").trim();
+  const typedPrice = String(productPriceEl?.value || "").trim();
+  const typedStock = String(productStockEl?.value || "").trim();
+  const typedDescription = String(productDescriptionEl?.value || "").trim();
+  const file = productImageEl?.files?.[0] || null;
+  const type = typedType || String(currentProduct?.type || "product");
+
+  const name = typedName || String(currentProduct?.name || "").trim() || "Novo produto";
+  const priceValue = typedPrice || String(currentProduct?.price || "").trim();
+  const stockValue = typedStock || String(currentProduct?.stock || "").trim();
+  const descriptionValue = typedDescription || String(currentProduct?.description || "").trim();
+
+  productPreviewNameEl.textContent = name;
+  if (priceValue) {
+    const priceNumber = Number(priceValue);
+    productPreviewPriceEl.textContent = Number.isFinite(priceNumber)
+      ? `Preço: ${priceNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+      : `Preço: ${priceValue}`;
+  } else {
+    productPreviewPriceEl.textContent = "Preço ainda não informado";
+  }
+
+  const stockLabel =
+    type === "service"
+      ? descriptionValue || "Serviço sem controle de estoque."
+      : stockValue
+        ? `Estoque: ${stockValue}`
+        : "Estoque ainda não informado";
+  productPreviewStockEl.textContent = stockLabel;
+
+  const imageUrl = file ? URL.createObjectURL(file) : String(currentProduct?.image_url || "").trim();
+  if (imageUrl) {
+    productPreviewImageEl.src = imageUrl;
+    productPreviewImageEl.hidden = false;
+    productPreviewPlaceholderEl.hidden = true;
+  } else {
+    productPreviewImageEl.removeAttribute("src");
+    productPreviewImageEl.hidden = true;
+    productPreviewPlaceholderEl.hidden = false;
+  }
+}
+
+function updateProductTypeState() {
+  const isService = String(productTypeEl?.value || "product") === "service";
+  productStockFieldEl.hidden = isService;
+  productStockEl.required = !isService;
+  if (isService) {
+    productStockEl.value = "0";
+  }
+  updateProductPreview();
+}
+
+function findProductById(productId) {
+  const targetId = String(productId || "").trim();
+  return state.products.find((item) => String(item.id || "").trim() === targetId) || null;
+}
+
+function findOrderById(orderId) {
+  const targetId = String(orderId || "").trim();
+  return state.productOrders.find((item) => String(item.id || "").trim() === targetId) || null;
+}
+
+async function loadAgentStatus() {
+  const result = await api("/ai/status", { cache: "no-store" });
+  renderAgentStatus(result);
+  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
+  if (!accountId) {
+    state.agentSettings = { agent_name: "", company_name: "" };
+    renderAgentSettings();
+    return;
+  }
+  const settings = await api(`/ai/settings?account_id=${encodeURIComponent(accountId)}`, { cache: "no-store" });
+  state.agentSettings = settings;
+  renderAgentSettings();
+}
+
+function renderProducts() {
+  productsListEl.innerHTML = "";
+  if (!state.products.length) {
+    productsListEl.innerHTML = '<div class="empty-state">Nenhum produto cadastrado.</div>';
+    return;
+  }
+
+  for (const product of state.products) {
+    const row = document.createElement("div");
+    row.className = "product-item";
+    const price = Number(product.price || 0);
+    const priceText = Number.isFinite(price)
+      ? price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+      : String(product.price || "R$ 0,00");
+    row.innerHTML = `
+      <div class="product-item-media">
+        ${product.image_url ? `<img src="${product.image_url}" alt="${escapeHtml(product.name || "")}" />` : '<div class="product-item-placeholder"><i class="bi bi-box-seam"></i></div>'}
+      </div>
+      <div class="product-item-main">
+        <strong>${escapeHtml(product.name || "-")}</strong>
+        <span>Tipo: ${escapeHtml(product.type === "service" ? "Serviço" : "Produto")}</span>
+        <span>Preço: ${priceText}</span>
+        <span>${product.type === "service" ? "Estoque: não se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
+        ${product.description ? `<span>${escapeHtml(product.description)}</span>` : ""}
+      </div>
+      <div class="product-item-actions">
+        <button type="button" class="btn-secondary" data-action="edit-product" data-product-id="${product.id}">
+          <i class="bi bi-pencil-fill"></i> Editar
+        </button>
+      </div>
+    `;
+    productsListEl.appendChild(row);
+  }
+}
+
+function renderOrders() {
+  ordersListEl.innerHTML = "";
+  if (!state.productOrders.length) {
+    ordersListEl.innerHTML = '<div class="empty-state">Nenhum pedido gerado pelo agente.</div>';
+    return;
+  }
+
+  for (const order of state.productOrders) {
+    const item = document.createElement("div");
+    item.className = "product-item order-item";
+    const total = Number(order.total_estimate || 0);
+    const totalText = Number.isFinite(total) && total > 0
+      ? total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+      : "-";
+    const orderStatus = String(order.status || "").trim();
+    const statusLabel =
+      orderStatus === "confirmed"
+        ? "Confirmado"
+        : orderStatus === "cancelled"
+          ? "Cancelado"
+          : "Pendente de confirmação";
+    const itemsPreview = Array.isArray(order.items) && order.items.length
+      ? order.items
+          .map((entry) => {
+            const name = String(entry.name || entry.product || "item").trim();
+            const qty = String(entry.quantity || entry.qty || "1").trim();
+            return `${name} (${qty})`;
+          })
+          .join(", ")
+      : "Sem itens detalhados";
+    item.innerHTML = `
+      <div class="product-item-main">
+        <strong>${escapeHtml(order.conversation_name || order.customer_phone || "Pedido sem cliente")}</strong>
+        <span>Status: ${escapeHtml(statusLabel)}</span>
+        <span>Resumo: ${escapeHtml(order.summary || "-")}</span>
+        <span>Itens: ${escapeHtml(itemsPreview)}</span>
+        <span>Total estimado: ${escapeHtml(totalText)}</span>
+        <span>Responsável: ${escapeHtml(order.responsible_name || "-")}</span>
+        <span>${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
+        <span>${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
+        <span>${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
+        ${order.ready_time_minutes ? `<span>Tempo mínimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
+        ${order.confirmation_note ? `<span>Observação da confirmação: ${escapeHtml(order.confirmation_note)}</span>` : ""}
+        ${order.cancel_reason ? `<span>Motivo do cancelamento: ${escapeHtml(order.cancel_reason)}</span>` : ""}
+      </div>
+      <div class="product-item-actions">
+        ${
+          orderStatus === "pending_confirmation"
+            ? `<button type="button" class="btn-primary" data-action="confirm-order" data-order-id="${order.id}">
+                <i class="bi bi-check2-circle"></i> Confirmar pedido
+              </button>`
+            : orderStatus === "confirmed"
+              ? `<span class="service-status-tag in_progress order-status-pill">Confirmado</span>`
+              : `<span class="service-status-tag finalized order-status-pill">Cancelado</span>`
+        }
+        ${
+          orderStatus !== "cancelled"
+            ? `<button type="button" class="btn-danger" data-action="cancel-order" data-order-id="${order.id}">
+                <i class="bi bi-x-circle"></i> Cancelar pedido
+              </button>`
+            : ""
+        }
+        <button type="button" class="btn-secondary" data-action="delete-order" data-order-id="${order.id}">
+          <i class="bi bi-trash3"></i> Excluir pedido
+        </button>
+      </div>
+    `;
+    ordersListEl.appendChild(item);
+  }
+}
+
+async function loadProducts() {
+  const result = await api("/products");
+  state.products = Array.isArray(result?.items) ? result.items : [];
+  renderProducts();
+}
+
+async function loadAiOrders() {
+  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
+  const query = new URLSearchParams();
+  if (accountId) {
+    query.set("account_id", accountId);
+  }
+  const result = await api(`/ai/orders?${query.toString()}`);
+  state.productOrders = Array.isArray(result?.items) ? result.items : [];
+  renderOrders();
 }
 
 function showLoginScreen() {
@@ -688,11 +1130,13 @@ function showLoginScreen() {
   closeProfilePanel();
   closeConversationMenu();
   closeRealtime();
+  renderMobileChrome();
 }
 
 function hideLoginScreen() {
   document.body.classList.remove("auth-lock");
   loginScreenEl.classList.add("hidden");
+  renderMobileChrome();
 }
 
 function renderSettingsHeader() {
@@ -722,7 +1166,7 @@ function renderWhatsAppAccountOptions() {
   accountSwitchListEl.innerHTML = "";
 
   if (!items.length) {
-    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum numero vinculado.</div>';
+    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum número vinculado.</div>';
     return;
   }
 
@@ -769,6 +1213,7 @@ function setSettingsTab(tab) {
   settingsPanelListEl.classList.toggle("active", tab === "list");
   settingsPanelSectorsEl.classList.toggle("active", tab === "sectors");
   settingsPanelAccountsEl.classList.toggle("active", tab === "accounts");
+  renderMobileChrome();
 }
 
 function openSettingsModal() {
@@ -776,18 +1221,20 @@ function openSettingsModal() {
   renderSettingsHeader();
   setSettingsTab(state.settingsTab || "perfil");
   switchView("settings");
+  renderMobileChrome();
 }
 
 function closeSettingsModal() {
   if (state.currentView === "settings") {
     switchView("chats");
   }
+  renderMobileChrome();
 }
 
 function renderUsersList(users) {
   settingsUsersListEl.innerHTML = "";
   if (!users || !users.length) {
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuario cadastrado.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuário cadastrado.</div>';
     return;
   }
 
@@ -890,7 +1337,7 @@ async function loadUsersForSettings() {
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador pode ver usuarios.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador pode ver usuários.</div>';
     return;
   }
 
@@ -956,7 +1403,7 @@ async function loadWhatsAppAccounts() {
 function openAccountSwitchModal(mode = "select") {
   accountSwitchMode = mode;
   if (accountSwitchTitleEl) {
-    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover numero" : "Selecionar numero";
+    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover número" : "Selecionar número";
   }
   renderWhatsAppAccountOptions();
   accountSwitchOverlayEl.classList.add("open");
@@ -967,6 +1414,47 @@ function closeAccountSwitchModal() {
   accountSwitchMode = "select";
   accountSwitchOverlayEl.classList.remove("open");
   accountSwitchModalEl.classList.remove("open");
+}
+
+function showOrderConfirmDialog() {
+  return new Promise((resolve) => {
+    let finished = false;
+    const cleanup = () => {
+      orderConfirmOverlayEl.classList.remove("open");
+      orderConfirmModalEl.classList.remove("open");
+      orderConfirmFormEl.removeEventListener("submit", handleSubmit);
+      orderConfirmCancelEl.removeEventListener("click", handleCancel);
+      orderConfirmOverlayEl.removeEventListener("click", handleOverlay);
+    };
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(value);
+    };
+    const handleSubmit = (event) => {
+      event.preventDefault();
+      finish({
+        readyTimeMinutes: String(orderConfirmReadyTimeEl.value || "").trim(),
+        confirmationNote: String(orderConfirmNoteEl.value || "").trim(),
+      });
+    };
+    const handleCancel = () => finish(null);
+    const handleOverlay = (event) => {
+      if (event.target === orderConfirmOverlayEl) {
+        finish(null);
+      }
+    };
+
+    orderConfirmReadyTimeEl.value = "";
+    orderConfirmNoteEl.value = "";
+    orderConfirmOverlayEl.classList.add("open");
+    orderConfirmModalEl.classList.add("open");
+    orderConfirmFormEl.addEventListener("submit", handleSubmit);
+    orderConfirmCancelEl.addEventListener("click", handleCancel);
+    orderConfirmOverlayEl.addEventListener("click", handleOverlay);
+    setTimeout(() => orderConfirmReadyTimeEl.focus(), 10);
+  });
 }
 
 async function switchSelectedWhatsAppAccount(accountId, options = {}) {
@@ -987,6 +1475,11 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
     await loadConversations();
     if (state.currentView === "bulk-monitor") {
       await loadBulkJobs();
+    } else if (state.currentView === "products") {
+      await loadProducts();
+      await loadAiOrders();
+    } else if (state.currentView === "agent") {
+      await loadAgentStatus();
     }
     connectRealtime().catch((error) => console.error(error));
     if (!options.keepOpen) {
@@ -996,6 +1489,10 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
     await showAlert(error.message || "Falha ao selecionar conta WhatsApp.");
     await loadWhatsAppAccounts();
     await loadConversations();
+    if (state.currentView === "products") {
+      await loadProducts().catch(() => undefined);
+      await loadAiOrders().catch(() => undefined);
+    }
     connectRealtime().catch((innerError) => console.error(innerError));
   }
 }
@@ -1007,7 +1504,7 @@ async function handleProvisionWhatsAppAccount() {
     const result = await api("/whatsapp/accounts/provision", {
       method: "POST",
       body: JSON.stringify({
-        display_name: "Novo numero",
+        display_name: "Novo número",
       }),
     });
     if (result?.item?.id) {
@@ -1016,12 +1513,12 @@ async function handleProvisionWhatsAppAccount() {
     openProfilePanel();
     await api("/whatsapp/connect", { method: "POST" });
     qrPanelEl.hidden = false;
-    qrHintEl.textContent = "Escaneie o QR code para vincular o novo numero.";
+    qrHintEl.textContent = "Escaneie o QR code para vincular o novo número.";
     clearQrCode();
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao adicionar numero.");
+    await showAlert(error.message || "Falha ao adicionar número.");
   }
 }
 
@@ -1029,13 +1526,13 @@ async function handleRemoveWhatsAppAccount(accountId) {
   if (!isAdmin()) return;
   const selected = state.whatsappAccounts.find((item) => item.id === accountId) || null;
   if (!selected?.id) {
-    await showAlert("Selecione um numero para remover.");
+    await showAlert("Selecione um número para remover.");
     return;
   }
 
   const confirmed = await showConfirm(
-    `Remover o numero ${formatWhatsAppAccountTitle(selected)}?`,
-    "Remover numero",
+    `Remover o número ${formatWhatsAppAccountTitle(selected)}?`,
+    "Remover número",
     "Remover",
     "Cancelar",
   );
@@ -1049,9 +1546,9 @@ async function handleRemoveWhatsAppAccount(accountId) {
     const fallbackAccount = state.whatsappAccounts[0] || null;
     await switchSelectedWhatsAppAccount(fallbackAccount?.id || "");
     closeAccountSwitchModal();
-    await showAlert("Numero removido com sucesso.");
+    await showAlert("Número removido com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao remover numero.");
+    await showAlert(error.message || "Falha ao remover número.");
   }
 }
 
@@ -1061,7 +1558,7 @@ function populateTransferUsers(selectedUserId = "") {
   if (!agents.length) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "Nenhum atendente disponivel";
+    opt.textContent = "Nenhum atendente disponível";
     transferUserSelectEl.appendChild(opt);
     transferUserSelectEl.disabled = true;
     return;
@@ -1151,8 +1648,8 @@ async function handleDeleteUser(userId) {
   if (!user) return;
 
   const confirmed = await showConfirm(
-    `Excluir o usuario ${user.name}?`,
-    "Excluir usuario",
+    `Excluir o usuário ${user.name}?`,
+    "Excluir usuário",
     "Excluir",
     "Cancelar",
   );
@@ -1161,9 +1658,9 @@ async function handleDeleteUser(userId) {
   try {
     await api(`/auth/users/${user.id}`, { method: "DELETE" });
     await loadUsersForSettings();
-    await showAlert("Usuario excluido com sucesso.");
+    await showAlert("Usuário excluído com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao excluir usuario.");
+    await showAlert(error.message || "Falha ao excluir o usuário.");
   }
 }
 
@@ -1288,7 +1785,7 @@ async function parseContactsFromRows(rows, onProgress) {
 
 async function parseContactsFromExcel(file, onProgress) {
   if (!window.XLSX) {
-    throw new Error("Leitor de Excel nao carregado. Recarregue a pagina.");
+    throw new Error("Leitor de Excel não carregado. Recarregue a página.");
   }
 
   onProgress?.(10, "Lendo arquivo...", "Carregando arquivo Excel...");
@@ -1433,7 +1930,7 @@ async function stopBulkJob(job) {
 
 async function deleteBulkJob(job) {
   const confirmed = await showConfirm(
-    "Excluir este disparo do historico?",
+    "Excluir este disparo do histórico?",
     "Excluir disparo",
     "Excluir",
     "Cancelar",
@@ -1566,11 +2063,18 @@ function resetAppAfterLogout() {
   state.selectedWhatsAppAccountId = "";
   state.search = "";
   state.agents = [];
+  state.products = [];
+  state.productOrders = [];
+  state.productsTab = "create";
+  state.editingProductId = "";
+  state.agentSettings = null;
   state.currentView = "chats";
   writeSessionToken("");
   searchInputEl.value = "";
   clearChatStateForDisconnected();
   renderHeader();
+  resetProductForm();
+  setProductsTab("create");
   syncProfilePanel();
   applyConnectedProfileAvatar();
 }
@@ -1592,10 +2096,13 @@ async function api(path, options = {}) {
     authHeaders["x-session-token"] = state.sessionToken;
   }
 
+  const isFormData = typeof FormData !== "undefined" && fetchOptions.body instanceof FormData;
+  const baseHeaders = isFormData ? {} : { "Content-Type": "application/json" };
+
   const response = await fetch(path, {
     cache: "no-store",
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...authHeaders, ...customHeaders },
+    headers: { ...baseHeaders, ...authHeaders, ...customHeaders },
     ...fetchOptions,
   });
 
@@ -1727,6 +2234,7 @@ async function loadCurrentUser() {
     renderSettingsHeader();
     settingsBtnEl.style.display = "";
     hideLoginScreen();
+    applyResponsiveLayoutState();
     return true;
   } catch {
     state.currentUser = null;
@@ -2143,6 +2651,7 @@ async function ensureConversationReadyForCompose() {
 function renderHeader() {
   if (!state.selectedConversation) {
     chatHeaderEl.innerHTML = '<div class="chat-contact">Selecione uma conversa</div>';
+    renderMobileChrome();
     updateComposerLock();
     return;
   }
@@ -2180,6 +2689,7 @@ function renderHeader() {
 
   const status = String(state.selectedConversation.service_status || "pending");
   const assignedName = state.selectedConversation.assigned_user_name || "";
+  const isMobileHeader = isMobileViewport();
   const isMine = canCurrentUserSendInConversation(state.selectedConversation);
   const canTransfer = Boolean(
     state.currentUser &&
@@ -2187,17 +2697,33 @@ function renderHeader() {
       status === "in_progress",
   );
 
-  const statusTag = document.createElement("span");
-  statusTag.className = `service-status-tag ${status}`;
-  statusTag.textContent =
+  const statusText =
     status === "in_progress"
       ? assignedName
-        ? `Em atendimento: ${assignedName}`
+        ? `Atendente: ${assignedName}`
         : "Em atendimento"
       : status === "finalized"
         ? "Finalizado"
         : "Pendente";
-  actions.appendChild(statusTag);
+
+  if (isMobileHeader) {
+    const attendantEl = document.createElement("div");
+    attendantEl.className = "chat-contact-attendant";
+    attendantEl.textContent = statusText;
+    info.appendChild(attendantEl);
+  } else {
+    const statusTag = document.createElement("span");
+    statusTag.className = `service-status-tag ${status}`;
+    statusTag.textContent =
+      status === "in_progress"
+        ? assignedName
+          ? `Em atendimento: ${assignedName}`
+          : "Em atendimento"
+        : status === "finalized"
+          ? "Finalizado"
+          : "Pendente";
+    actions.appendChild(statusTag);
+  }
 
   if (isMine) {
     const finalizeBtn = document.createElement("button");
@@ -2236,6 +2762,7 @@ function renderHeader() {
   }
 
   chatHeaderEl.appendChild(actions);
+  renderMobileChrome();
   updateComposerLock();
 }
 
@@ -2855,6 +3382,10 @@ async function selectConversation(conversationId) {
   if (!conversationId) return;
 
   if (conversationId === state.selectedConversationId) {
+    if (isMobileViewport() && state.currentView === "chats") {
+      state.mobileChatPane = "conversation";
+      applyResponsiveLayoutState();
+    }
     state.selectedConversation = state.conversations.find((item) => item.id === conversationId) || state.selectedConversation;
     renderConversations();
     renderHeader();
@@ -2869,6 +3400,10 @@ async function selectConversation(conversationId) {
 
   state.selectedConversationId = conversationId;
   state.selectedConversation = state.conversations.find((item) => item.id === conversationId) || null;
+  if (isMobileViewport() && state.currentView === "chats") {
+    state.mobileChatPane = "conversation";
+    applyResponsiveLayoutState();
+  }
   renderConversations();
   renderHeader();
   await loadMessages();
@@ -3008,7 +3543,7 @@ async function startRecording() {
   }
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    await showAlert("Seu navegador nao suporta gravacao de audio.");
+    await showAlert("Seu navegador não suporta gravação de áudio.");
     return;
   }
 
@@ -3067,7 +3602,7 @@ async function startRecording() {
     }, 1000);
     audioTimerEl.textContent = fmtDuration(recordingSeconds);
   } catch (error) {
-    await showAlert(error.message || "Nao foi possivel iniciar a gravacao.");
+    await showAlert(error.message || "Não foi possível iniciar a gravação.");
     setComposerMode("text");
   }
 }
@@ -3121,7 +3656,7 @@ async function deleteContextConversation() {
   const contactName = conv ? conversationDisplayName(conv) : "este contato";
 
   const confirmed = await showConfirm(
-    `Confirma excluir a conversa de ${contactName}?\n\nIsso tambem remove o contato salvo no app (se ele nao estiver em outra conversa).`,
+    `Confirma excluir a conversa de ${contactName}?\n\nIsso também remove o contato salvo no app (se ele não estiver em outra conversa).`,
     "Excluir conversa",
     "Excluir",
     "Cancelar",
@@ -3193,6 +3728,8 @@ async function transferContextConversation() {
 async function refreshHealth() {
   if (!state.isAuthenticated) return;
   try {
+    const previousSelectedAccountId = String(state.selectedWhatsAppAccountId || "").trim();
+    const previousActiveAccountJid = getActiveAccountJid();
     const statusResult = await api("/whatsapp/status");
     const wa = statusResult?.whatsapp || {};
     const online = Boolean(wa.connected);
@@ -3202,6 +3739,8 @@ async function refreshHealth() {
     const previousAccountJid = state.connectedAccountJid;
 
     await loadWhatsAppAccounts();
+    const selectedAccountChanged = previousSelectedAccountId !== String(state.selectedWhatsAppAccountId || "").trim();
+    const activeAccountChanged = previousActiveAccountJid !== getActiveAccountJid();
     const hasAnyConnectedAccount = state.whatsappAccounts.some((item) => item.connected);
 
     waStatusEl.textContent = online ? "Online" : "Offline";
@@ -3225,6 +3764,12 @@ async function refreshHealth() {
       state.selectedConversationId = null;
       state.selectedConversation = null;
       closeRealtime();
+    }
+    if (selectedAccountChanged || activeAccountChanged) {
+      realtimeCursor = 0;
+      state.realtimeCheckpointToken = "";
+      closeRealtime();
+      await loadConversations();
     }
     if (online) {
       qrPanelEl.hidden = true;
@@ -3260,7 +3805,7 @@ async function handleLoginSubmit(event) {
   const username = String(loginUsernameEl.value || "").trim();
   const password = String(loginPasswordEl.value || "").trim();
   if (!username || !password) {
-    await showAlert("Informe usuario e senha.");
+    await showAlert("Informe usuário e senha.");
     return;
   }
 
@@ -3279,6 +3824,7 @@ async function handleLoginSubmit(event) {
     renderSettingsHeader();
     settingsBtnEl.style.display = "";
     hideLoginScreen();
+    applyResponsiveLayoutState();
     loginPasswordEl.value = "";
     await loadAgents();
     await refreshHealth();
@@ -3301,7 +3847,7 @@ async function handleCreateUserSubmit(event) {
   const sectorId = String(newUserSectorEl.value || "").trim();
 
   if (!name || !username || !password || !sectorId) {
-    await showAlert("Preencha nome, usuario, senha e setor.");
+    await showAlert("Preencha nome, usuário, senha e setor.");
     return;
   }
 
@@ -3314,9 +3860,9 @@ async function handleCreateUserSubmit(event) {
     newUserRoleEl.value = "operador";
     renderSectorOptions();
     await loadUsersForSettings();
-    await showAlert("Usuario cadastrado com sucesso.");
+    await showAlert("Usuário cadastrado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao cadastrar usuario.");
+    await showAlert(error.message || "Falha ao cadastrar o usuário.");
   }
 }
 
@@ -3386,10 +3932,29 @@ messageInputEl.addEventListener("focus", async () => {
 railChatsEl.addEventListener("click", () => switchView("chats"));
 railBulkCreateEl.addEventListener("click", () => switchView("bulk-create"));
 railBulkMonitorEl.addEventListener("click", () => switchView("bulk-monitor"));
+railAgentEl.addEventListener("click", () => switchView("agent"));
+railProductsEl.addEventListener("click", () => switchView("products"));
+mobileNavChatsEl?.addEventListener("click", () => switchView("chats"));
+mobileNavBulkCreateEl?.addEventListener("click", () => switchView("bulk-create"));
+mobileNavBulkMonitorEl?.addEventListener("click", () => switchView("bulk-monitor"));
+mobileNavAgentEl?.addEventListener("click", () => switchView("agent"));
+mobileNavProductsEl?.addEventListener("click", () => switchView("products"));
+mobileNavSettingsEl?.addEventListener("click", async () => {
+  if (!state.currentUser) return;
+  renderSettingsHeader();
+  openSettingsModal();
+});
 settingsBtnEl.addEventListener("click", async () => {
   if (!state.currentUser) return;
   renderSettingsHeader();
   openSettingsModal();
+});
+mobileTopbarBackEl?.addEventListener("click", () => {
+  if (state.currentView === "chats" && state.mobileChatPane === "conversation") {
+    state.mobileChatPane = "list";
+    applyResponsiveLayoutState();
+    renderHeader();
+  }
 });
 settingsTabPerfilEl.addEventListener("click", () => setSettingsTab("perfil"));
 settingsTabCreateEl.addEventListener("click", () => setSettingsTab("create"));
@@ -3413,7 +3978,7 @@ settingsUsersListEl.addEventListener("click", async (event) => {
   }
 });
 settingsLogoutBtnEl.addEventListener("click", async () => {
-  const confirmed = await showConfirm("Deseja encerrar sua sessao neste navegador?", "Encerrar sessao", "Sair", "Cancelar");
+  const confirmed = await showConfirm("Deseja encerrar sua sessão neste navegador?", "Encerrar sessão", "Sair", "Cancelar");
   if (!confirmed) return;
   closeSettingsModal();
   await performLogout();
@@ -3630,6 +4195,256 @@ settingsAddNumberBtnEl.addEventListener("click", () => {
 settingsRemoveNumberBtnEl.addEventListener("click", () => {
   openAccountSwitchModal("remove");
 });
+agentTestBtnEl.addEventListener("click", async () => {
+  agentTestBtnEl.disabled = true;
+  agentTestResultEl.textContent = "Testando conexão com a OpenAI...";
+  try {
+    const result = await api("/ai/test", {
+      method: "POST",
+      cache: "no-store",
+    });
+    renderAgentStatus(result);
+    agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
+    agentTestResultEl.textContent = `Conexão OK. Resposta: ${String(result.reply || "").trim() || "ok"}`;
+  } catch (error) {
+    agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
+    agentTestResultEl.textContent = error.message || "Falha ao testar a conexão com a OpenAI.";
+    await showAlert(error.message || "Falha ao testar a conexão com a OpenAI.");
+  } finally {
+    agentTestBtnEl.disabled = false;
+  }
+});
+agentSettingsFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
+  if (!accountId) {
+    await showAlert("Selecione um número para configurar o agente.");
+    return;
+  }
+
+  agentSettingsSaveBtnEl.disabled = true;
+  try {
+    const result = await api("/ai/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        account_id: accountId,
+        agent_name: String(agentNameInputEl.value || "").trim(),
+        company_name: String(companyNameInputEl.value || "").trim(),
+      }),
+    });
+    state.agentSettings = result.settings || null;
+    renderAgentSettings();
+    await showAlert("Configurações do agente salvas com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao salvar as configurações do agente.");
+  } finally {
+    agentSettingsSaveBtnEl.disabled = false;
+  }
+});
+productsTabCreateEl.addEventListener("click", () => setProductsTab("create"));
+productsTabListEl.addEventListener("click", () => setProductsTab("list"));
+productsTabOrdersEl.addEventListener("click", () => setProductsTab("orders"));
+productCancelEditBtnEl.addEventListener("click", () => {
+  resetProductForm();
+  setProductsTab("list");
+});
+productNameEl.addEventListener("input", () => updateProductPreview());
+productTypeEl.addEventListener("change", () => updateProductTypeState());
+productPriceEl.addEventListener("input", () => updateProductPreview());
+productStockEl.addEventListener("input", () => updateProductPreview());
+productDescriptionEl.addEventListener("input", () => updateProductPreview());
+productImageEl.addEventListener("change", () => updateProductPreview());
+updateProductPreview();
+productsListEl.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-action='edit-product']");
+  if (!target) return;
+  const product = findProductById(target.getAttribute("data-product-id"));
+  if (!product) return;
+  fillProductForm(product);
+});
+ordersListEl.addEventListener("click", async (event) => {
+  const actionTarget = event.target.closest("[data-action]");
+  if (!actionTarget) return;
+  const action = String(actionTarget.getAttribute("data-action") || "").trim();
+  const orderId = String(actionTarget.getAttribute("data-order-id") || "").trim();
+  const order = findOrderById(orderId);
+  if (!orderId || !order) return;
+
+  if (action === "confirm-order") {
+    const confirmData = await showOrderConfirmDialog();
+    if (!confirmData) return;
+    const readyTimeMinutes = Number(confirmData.readyTimeMinutes);
+    if (!Number.isFinite(readyTimeMinutes) || readyTimeMinutes <= 0) {
+      await showAlert("Informe um tempo mínimo válido em minutos.");
+      return;
+    }
+    const confirmationNote = String(confirmData.confirmationNote || "").trim();
+    const confirmed = await showConfirm(
+      `Confirmar o pedido de ${order.conversation_name || order.customer_phone || "cliente"}?`,
+      "Confirmar pedido",
+      "Confirmar",
+      "Cancelar"
+    );
+    if (!confirmed) return;
+
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/orders/${encodeURIComponent(orderId)}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          ready_time_minutes: Math.round(readyTimeMinutes),
+          confirmation_note: confirmationNote || "",
+        }),
+      });
+      await loadAiOrders();
+      await loadConversations().catch(() => undefined);
+      if (state.selectedConversationId && String(order.conversation_id || "").trim() === String(state.selectedConversationId || "").trim()) {
+        await loadMessages(state.selectedConversationId).catch(() => undefined);
+      }
+      await showAlert("Pedido confirmado com sucesso. O cliente foi avisado.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao confirmar pedido.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "cancel-order") {
+    const reason = await showPrompt("Informe o motivo do cancelamento:", "", {
+      title: "Cancelar pedido",
+      confirmText: "Cancelar pedido",
+      cancelText: "Voltar",
+      placeholder: "Ex.: item sem estoque, valor desatualizado...",
+    });
+    if (!reason) return;
+
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/orders/${encodeURIComponent(orderId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      await loadAiOrders();
+      await loadConversations().catch(() => undefined);
+      if (state.selectedConversationId && String(order.conversation_id || "").trim() === String(state.selectedConversationId || "").trim()) {
+        await loadMessages(state.selectedConversationId).catch(() => undefined);
+      }
+      await showAlert("Pedido cancelado. O cliente foi avisado com o motivo do cancelamento.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao cancelar pedido.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "delete-order") {
+    const confirmed = await showConfirm(
+      `Excluir o pedido de ${order.conversation_name || order.customer_phone || "cliente"}?`,
+      "Excluir pedido",
+      "Excluir",
+      "Cancelar"
+    );
+    if (!confirmed) return;
+
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/orders/${encodeURIComponent(orderId)}`, {
+        method: "DELETE",
+      });
+      await loadAiOrders();
+      await showAlert("Pedido excluido com sucesso.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao excluir pedido.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+  }
+});
+productsFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const productId = String(productIdEl.value || state.editingProductId || "").trim();
+  const name = String(productNameEl.value || "").trim();
+  const type = String(productTypeEl.value || "product").trim() === "service" ? "service" : "product";
+  const price = String(productPriceEl.value || "").trim();
+  const stock = type === "service" ? "0" : String(productStockEl.value || "").trim();
+  const description = String(productDescriptionEl.value || "").trim();
+  const image = productImageEl.files?.[0] || null;
+
+  if (!name) {
+    await showAlert("Informe o nome do produto.");
+    return;
+  }
+
+  productSubmitBtnEl.disabled = true;
+  try {
+    const form = new FormData();
+    form.append("name", name);
+    form.append("type", type);
+    form.append("description", description);
+    form.append("price", price || "0");
+    form.append("stock", stock || "0");
+    if (image) {
+      form.append("image", image);
+    }
+
+    await api(productId ? `/products/${encodeURIComponent(productId)}` : "/products", {
+      method: productId ? "PUT" : "POST",
+      body: form,
+    });
+
+    resetProductForm();
+    await loadProducts();
+    await loadAgentStatus().catch(() => undefined);
+    setProductsTab("list");
+    await showAlert(productId ? "Produto atualizado com sucesso." : "Produto cadastrado com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || (productId ? "Falha ao atualizar produto." : "Falha ao cadastrar produto."));
+  } finally {
+    productSubmitBtnEl.disabled = false;
+  }
+});
+conversationAIAgentToggleEl.addEventListener("change", async () => {
+  const conversationId = String(state.contextConversationId || "").trim();
+  if (!conversationId) return;
+
+  const enabled = Boolean(conversationAIAgentToggleEl.checked);
+  try {
+    const result = await api(`/conversations/${conversationId}/ai-agent`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    const conv = state.conversations.find((item) => item.id === conversationId);
+    if (conv) {
+      conv.ai_agent_enabled = enabled;
+    }
+    if (state.selectedConversationId === conversationId && state.selectedConversation) {
+      state.selectedConversation.ai_agent_enabled = enabled;
+    }
+    if (enabled && result?.automation && !result.automation.replied) {
+      const reason = String(result.automation.reason || "").trim();
+      const reasonMap = {
+        busy: "O agente já está processando esta conversa.",
+        conversation_not_found: "Conversa não encontrada para o agente.",
+        disabled: "O agente ainda está desabilitado neste chat.",
+        human_in_charge: "Existe um atendente humano em atendimento neste chat.",
+        missing_account_or_phone: "Falta conta WhatsApp ou telefone válido para o agente responder.",
+        no_messages: "Não há mensagens suficientes nesta conversa para o agente responder.",
+        last_message_from_company: "A última mensagem ainda é da empresa. O agente vai responder na próxima mensagem do cliente.",
+        model_chose_not_to_reply: "O agente analisou a conversa e decidiu não responder agora.",
+      };
+      if (reason && reasonMap[reason]) {
+        await showAlert(reasonMap[reason]);
+      } else if (reason) {
+        await showAlert(`O agente não respondeu agora: ${reason}`);
+      }
+    }
+  } catch (error) {
+    conversationAIAgentToggleEl.checked = !enabled;
+    await showAlert(error.message || "Falha ao atualizar o agente de venda no chat.");
+  }
+});
 disconnectBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm("Desconectar este telefone do app?", "Desconectar", "Sair", "Cancelar");
   if (!confirmed) return;
@@ -3654,13 +4469,13 @@ connectBtnEl.addEventListener("click", async () => {
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao iniciar conexao.");
+    await showAlert(error.message || "Falha ao iniciar a conexão.");
   }
 });
 syncHistoryBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm(
-    "O app vai remover a conexao atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe nao houver sincronizacao pendente, nada sera importado.",
-    "Sincronizar historico",
+    "O app vai remover a conexão atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe não houver sincronização pendente, nada será importado.",
+    "Sincronizar histórico",
     "Sincronizar",
     "Cancelar",
   );
@@ -3738,7 +4553,7 @@ editUserFormEl.addEventListener("submit", async (event) => {
   const password = String(editUserPasswordEl.value || "").trim();
 
   if (!name || !username || !role || !sectorId) {
-    await showAlert("Preencha nome, usuario, cargo e setor.");
+    await showAlert("Preencha nome, usuário, cargo e setor.");
     return;
   }
   if (!["administrador", "operador"].includes(role)) {
@@ -3763,9 +4578,9 @@ editUserFormEl.addEventListener("submit", async (event) => {
     });
     closeEditUserModal();
     await loadUsersForSettings();
-    await showAlert("Usuario atualizado com sucesso.");
+    await showAlert("Usuário atualizado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao editar usuario.");
+    await showAlert(error.message || "Falha ao editar o usuário.");
   }
 });
 document.addEventListener("click", (event) => {
@@ -3833,6 +4648,7 @@ async function boot() {
   showLoginScreen();
   settingsBtnEl.style.display = "none";
   switchView("chats");
+  applyResponsiveLayoutState();
   renderServiceTabs();
   renderBulkContacts();
   renderBulkMessagesBuilder();
@@ -3868,4 +4684,16 @@ async function boot() {
 
 boot().catch((error) => {
   console.error(error);
+});
+
+window.addEventListener("resize", () => {
+  if (!state.isAuthenticated) {
+    renderMobileChrome();
+    return;
+  }
+  if (!isMobileViewport()) {
+    state.mobileChatPane = "list";
+  }
+  applyResponsiveLayoutState();
+  renderHeader();
 });
