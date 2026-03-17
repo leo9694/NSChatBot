@@ -1432,6 +1432,10 @@ body.auth-lock {
   font-size: 14px;
 }
 
+.product-preview-body #productPreviewDiscount {
+  color: #7ff0cb;
+}
+
 .products-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));
@@ -1465,6 +1469,23 @@ body.auth-lock {
 
 .products-form .product-description-field {
   grid-column: 1 / -1;
+}
+
+.products-form .product-discount-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #2a3a43;
+  border-radius: 12px;
+  background: #132129;
+}
+
+.products-form .product-discount-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #00b894;
 }
 
 .products-form .product-image-field small {

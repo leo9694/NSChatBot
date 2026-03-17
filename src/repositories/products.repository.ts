@@ -6,6 +6,8 @@ export interface ProductRow {
   type: "product" | "service";
   description: string | null;
   price: string;
+  discount_enabled: boolean;
+  discount_price: string | null;
   stock: number;
   image_url: string | null;
   is_active: boolean;
@@ -25,6 +27,8 @@ export async function ensureProductsSchema(): Promise<void> {
           type VARCHAR(20) NOT NULL DEFAULT 'product',
           description TEXT,
           price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+          discount_enabled BOOLEAN NOT NULL DEFAULT false,
+          discount_price NUMERIC(12, 2),
           stock INTEGER NOT NULL DEFAULT 0,
           image_url TEXT,
           is_active BOOLEAN NOT NULL DEFAULT true,
@@ -40,6 +44,14 @@ export async function ensureProductsSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE products
         ADD COLUMN IF NOT EXISTS description TEXT
+      `);
+      await pool.query(`
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS discount_enabled BOOLEAN NOT NULL DEFAULT false
+      `);
+      await pool.query(`
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS discount_price NUMERIC(12, 2)
       `);
 
       await pool.query(`
@@ -60,6 +72,8 @@ export async function createProduct(input: {
   type: "product" | "service";
   description?: string | null;
   price: number;
+  discountEnabled?: boolean;
+  discountPrice?: number | null;
   stock: number;
   imageUrl?: string | null;
   createdBy?: string | null;
@@ -67,21 +81,33 @@ export async function createProduct(input: {
   await ensureProductsSchema();
   const result = await pool.query<ProductRow>(
     `
-    INSERT INTO products (name, type, description, price, stock, image_url, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO products (name, type, description, price, discount_enabled, discount_price, stock, image_url, created_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING
       id,
       name,
       type,
       description,
       price::text,
+      discount_enabled,
+      discount_price::text,
       stock,
       image_url,
       is_active,
       created_at::text,
       updated_at::text
     `,
-    [input.name, input.type, input.description || null, input.price, input.stock, input.imageUrl || null, input.createdBy || null],
+    [
+      input.name,
+      input.type,
+      input.description || null,
+      input.price,
+      Boolean(input.discountEnabled),
+      input.discountEnabled ? input.discountPrice ?? null : null,
+      input.stock,
+      input.imageUrl || null,
+      input.createdBy || null,
+    ],
   );
 
   return result.rows[0];
@@ -93,6 +119,8 @@ export async function updateProduct(input: {
   type: "product" | "service";
   description?: string | null;
   price: number;
+  discountEnabled?: boolean;
+  discountPrice?: number | null;
   stock: number;
   imageUrl?: string | null;
 }): Promise<ProductRow | null> {
@@ -105,8 +133,10 @@ export async function updateProduct(input: {
       type = $3,
       description = $4,
       price = $5,
-      stock = $6,
-      image_url = COALESCE($7, image_url),
+      discount_enabled = $6,
+      discount_price = $7,
+      stock = $8,
+      image_url = COALESCE($9, image_url),
       updated_at = NOW()
     WHERE id = $1
     RETURNING
@@ -115,13 +145,25 @@ export async function updateProduct(input: {
       type,
       description,
       price::text,
+      discount_enabled,
+      discount_price::text,
       stock,
       image_url,
       is_active,
       created_at::text,
       updated_at::text
     `,
-    [input.id, input.name, input.type, input.description || null, input.price, input.stock, input.imageUrl || null],
+    [
+      input.id,
+      input.name,
+      input.type,
+      input.description || null,
+      input.price,
+      Boolean(input.discountEnabled),
+      input.discountEnabled ? input.discountPrice ?? null : null,
+      input.stock,
+      input.imageUrl || null,
+    ],
   );
 
   return result.rows[0] || null;
@@ -137,6 +179,8 @@ export async function listProducts(): Promise<ProductRow[]> {
       type,
       description,
       price::text,
+      discount_enabled,
+      discount_price::text,
       stock,
       image_url,
       is_active,
@@ -151,11 +195,20 @@ export async function listProducts(): Promise<ProductRow[]> {
   return result.rows;
 }
 
-export async function listProductsForAgentContext(): Promise<Array<{ name: string; type: string; description: string | null; price: string; stock: number; image_url: string | null }>> {
+export async function listProductsForAgentContext(): Promise<Array<{
+  name: string;
+  type: string;
+  description: string | null;
+  price: string;
+  discount_enabled: boolean;
+  discount_price: string | null;
+  stock: number;
+  image_url: string | null;
+}>> {
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT name, type, description, price::text, stock, image_url
+    SELECT name, type, description, price::text, discount_enabled, discount_price::text, stock, image_url
     FROM products
     WHERE is_active = true
     ORDER BY name ASC
@@ -171,13 +224,15 @@ export async function listProductsForAgentDetailedContext(): Promise<Array<{
   type: string;
   description: string | null;
   price: string;
+  discount_enabled: boolean;
+  discount_price: string | null;
   stock: number;
   image_url: string | null;
 }>> {
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT id, name, type, description, price::text, stock, image_url
+    SELECT id, name, type, description, price::text, discount_enabled, discount_price::text, stock, image_url
     FROM products
     WHERE is_active = true
     ORDER BY name ASC

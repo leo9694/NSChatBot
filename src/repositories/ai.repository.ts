@@ -5,6 +5,12 @@ export interface AiAccountSettingsRow {
   agent_name: string | null;
   company_name: string | null;
   mood: string | null;
+  store_name: string | null;
+  store_description: string | null;
+  store_cnpj: string | null;
+  store_address: string | null;
+  store_payment_methods: Array<string>;
+  store_delivery_fees: Array<Record<string, unknown>>;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +61,12 @@ export async function ensureAiSchema(): Promise<void> {
           agent_name VARCHAR(160),
           company_name VARCHAR(180),
           mood VARCHAR(20),
+          store_name VARCHAR(180),
+          store_description TEXT,
+          store_cnpj VARCHAR(40),
+          store_address TEXT,
+          store_payment_methods JSONB NOT NULL DEFAULT '[]'::jsonb,
+          store_delivery_fees JSONB NOT NULL DEFAULT '[]'::jsonb,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
@@ -63,6 +75,30 @@ export async function ensureAiSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE ai_account_settings
         ADD COLUMN IF NOT EXISTS mood VARCHAR(20)
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_name VARCHAR(180)
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_description TEXT
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_cnpj VARCHAR(40)
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_address TEXT
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_payment_methods JSONB NOT NULL DEFAULT '[]'::jsonb
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS store_delivery_fees JSONB NOT NULL DEFAULT '[]'::jsonb
       `);
 
       await pool.query(`
@@ -162,6 +198,12 @@ export async function getAiAccountSettings(accountId: string): Promise<AiAccount
       agent_name,
       company_name,
       mood,
+      store_name,
+      store_description,
+      store_cnpj,
+      store_address,
+      COALESCE(store_payment_methods, '[]'::jsonb) AS store_payment_methods,
+      COALESCE(store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
       created_at::text,
       updated_at::text
     FROM ai_account_settings
@@ -179,26 +221,66 @@ export async function upsertAiAccountSettings(input: {
   agentName?: string | null;
   companyName?: string | null;
   mood?: string | null;
+  storeName?: string | null;
+  storeDescription?: string | null;
+  storeCnpj?: string | null;
+  storeAddress?: string | null;
+  storePaymentMethods?: Array<string>;
+  storeDeliveryFees?: Array<Record<string, unknown>>;
 }): Promise<AiAccountSettingsRow> {
   await ensureAiSchema();
   const result = await pool.query<AiAccountSettingsRow>(
     `
-    INSERT INTO ai_account_settings (account_id, agent_name, company_name, mood)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO ai_account_settings (
+      account_id,
+      agent_name,
+      company_name,
+      mood,
+      store_name,
+      store_description,
+      store_cnpj,
+      store_address,
+      store_payment_methods,
+      store_delivery_fees
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
     ON CONFLICT (account_id) DO UPDATE
       SET agent_name = EXCLUDED.agent_name,
           company_name = EXCLUDED.company_name,
           mood = EXCLUDED.mood,
+          store_name = EXCLUDED.store_name,
+          store_description = EXCLUDED.store_description,
+          store_cnpj = EXCLUDED.store_cnpj,
+          store_address = EXCLUDED.store_address,
+          store_payment_methods = EXCLUDED.store_payment_methods,
+          store_delivery_fees = EXCLUDED.store_delivery_fees,
           updated_at = NOW()
     RETURNING
       account_id,
       agent_name,
       company_name,
       mood,
+      store_name,
+      store_description,
+      store_cnpj,
+      store_address,
+      COALESCE(store_payment_methods, '[]'::jsonb) AS store_payment_methods,
+      COALESCE(store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
       created_at::text,
       updated_at::text
     `,
-    [input.accountId, input.agentName || null, input.companyName || null, input.mood || null],
+    [
+      input.accountId,
+      input.agentName || null,
+      input.companyName || null,
+      input.mood || null,
+      input.storeName || null,
+      input.storeDescription || null,
+      input.storeCnpj || null,
+      input.storeAddress || null,
+      JSON.stringify(Array.isArray(input.storePaymentMethods) ? input.storePaymentMethods : []),
+      JSON.stringify(Array.isArray(input.storeDeliveryFees) ? input.storeDeliveryFees : []),
+    ],
   );
 
   return result.rows[0];

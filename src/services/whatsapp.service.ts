@@ -12,6 +12,7 @@ import { rm } from "node:fs/promises";
 import { env } from "../config/env";
 import {
   detectMessageType,
+  extractQuotedContext,
   extractImagePreviewDataUrl,
   extractMessageText,
   getUnwrappedMessage,
@@ -23,8 +24,9 @@ import {
 } from "../utils/whatsapp";
 import { getWhatsAppHistorySyncState, listWhatsAppAccounts, setWhatsAppHistorySyncBaseline, upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { saveInboundMessage, saveOutboundMessage, updateOutboundMessageStatus } from "../repositories/messages.repository";
-import { handleInboundAiAutomation } from "./ai-agent.service";
+import { handleInboundAiAutomation, registerCustomerTypingActivity, scheduleInboundAiAutomation } from "./ai-agent.service";
 import { saveMediaBuffer } from "./media.service";
+import { pool } from "../db/pool";
 
 export interface SendWhatsAppTextInput {
   to: string;
@@ -159,6 +161,28 @@ function logUpsert(data: Record<string, unknown>): void {
 function logStatus(data: Record<string, unknown>): void {
   const timestamp = new Date().toISOString();
   console.log(`[WA_STATUS ${timestamp}]`, JSON.stringify(data));
+}
+
+async function findConversationIdForPresence(accountJid: string, waJid: string): Promise<string | null> {
+  const normalizedAccountJid = normalizeChatJid(String(accountJid || ""));
+  const normalizedWaJid = normalizeChatJid(String(waJid || ""));
+  if (!normalizedAccountJid || !normalizedWaJid) {
+    return null;
+  }
+
+  const result = await pool.query(
+    `
+      SELECT c.id
+      FROM conversations c
+      JOIN whatsapp_accounts a ON a.id = c.account_id
+      WHERE a.wa_jid = $1
+        AND c.wa_jid = $2
+      LIMIT 1
+    `,
+    [normalizedAccountJid, normalizedWaJid],
+  );
+
+  return result.rows[0]?.id || null;
 }
 
 function isHistorySyncActive(session: WhatsAppSessionState): boolean {
@@ -322,6 +346,7 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
   }
 
   const body = extractMessageText(message.message);
+  const quotedContext = extractQuotedContext(message.message);
   const unwrapped = getUnwrappedMessage(message.message);
   const imagePreview = await extractBestImageUrl(session, message);
   const videoInfo = await extractBestVideoInfo(session, message);
@@ -414,6 +439,8 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
       displayName: inboundDisplayName,
       metadata: {
         media_type: mediaType,
+        quoted_message_id: quotedContext.stanzaId,
+        quoted_body: quotedContext.body,
         image_preview_url: imagePreview,
         video_url: videoInfo.url,
         video_mime_type: videoMimeType,
@@ -425,7 +452,7 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
     });
 
     if (inboundResult.conversationId) {
-      void handleInboundAiAutomation(inboundResult.conversationId).catch(() => undefined);
+      scheduleInboundAiAutomation(inboundResult.conversationId, { reason: "inbound_message" });
     }
 
     logUpsert({
@@ -896,6 +923,38 @@ export async function startWhatsAppSession(
         });
         console.error("Erro ao salvar mensagem do WhatsApp:", error);
       }
+    }
+  });
+
+  session.sock.ev.on("presence.update", async (event: any) => {
+    if (sessionToken !== session.activeSessionToken) {
+      return;
+    }
+
+    try {
+      const remoteJid = normalizeChatJid(String(event?.id || ""));
+      if (!remoteJid || !isDirectChatJid(remoteJid)) {
+        return;
+      }
+
+      const presences = event?.presences && typeof event.presences === "object" ? Object.values(event.presences) : [];
+      const hasTypingSignal = presences.some((presence: any) => {
+        const state = String(presence?.lastKnownPresence || presence?.presence || "").toLowerCase();
+        return state === "composing" || state === "recording" || state === "available";
+      });
+
+      if (!hasTypingSignal || !session.selfJid) {
+        return;
+      }
+
+      const conversationId = await findConversationIdForPresence(session.selfJid, remoteJid).catch(() => null);
+      if (!conversationId) {
+        return;
+      }
+
+      registerCustomerTypingActivity(conversationId);
+    } catch {
+      // Ignore presence parsing failures; fallback debounce by message still works.
     }
   });
 

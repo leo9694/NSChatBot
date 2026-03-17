@@ -387,6 +387,14 @@
                       Preço
                       <input id="productPrice" type="number" min="0" step="0.01" required />
                     </label>
+                    <label class="product-discount-toggle">
+                      <span>Desconto habilitado</span>
+                      <input id="productDiscountEnabled" type="checkbox" />
+                    </label>
+                    <label id="productDiscountPriceField" hidden>
+                      Preço com desconto
+                      <input id="productDiscountPrice" type="number" min="0" step="0.01" />
+                    </label>
                     <label id="productStockField">
                       Estoque
                       <input id="productStock" type="number" min="0" step="1" required />
@@ -421,6 +429,7 @@
                         <div class="product-preview-body">
                           <strong id="productPreviewName">Novo produto</strong>
                           <span id="productPreviewPrice">Preço ainda não informado</span>
+                          <span id="productPreviewDiscount" hidden></span>
                           <span id="productPreviewStock">Estoque ainda não informado</span>
                         </div>
                       </div>

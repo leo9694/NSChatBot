@@ -75,6 +75,12 @@ router.get("/settings", async (req, res) => {
       agent_name: settings?.agent_name || "",
       company_name: settings?.company_name || "",
       mood: settings?.mood || "informal",
+      store_name: settings?.store_name || "",
+      store_description: settings?.store_description || "",
+      store_cnpj: settings?.store_cnpj || "",
+      store_address: settings?.store_address || "",
+      store_payment_methods: Array.isArray(settings?.store_payment_methods) ? settings.store_payment_methods : [],
+      store_delivery_fees: Array.isArray(settings?.store_delivery_fees) ? settings.store_delivery_fees : [],
     });
   } catch (error) {
     return res.status(500).json({
@@ -90,6 +96,21 @@ router.put("/settings", async (req, res) => {
   const companyName = String(req.body?.company_name || "").trim();
   const rawMood = String(req.body?.mood || "").trim().toLowerCase();
   const mood = ["amigavel", "informal", "formal"].includes(rawMood) ? rawMood : "informal";
+  const storeName = String(req.body?.store_name || "").trim();
+  const storeDescription = String(req.body?.store_description || "").trim();
+  const storeCnpj = String(req.body?.store_cnpj || "").trim();
+  const storeAddress = String(req.body?.store_address || "").trim();
+  const storePaymentMethods = Array.isArray(req.body?.store_payment_methods)
+    ? req.body.store_payment_methods.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const storeDeliveryFees = Array.isArray(req.body?.store_delivery_fees)
+    ? req.body.store_delivery_fees
+        .map((item: any) => ({
+          label: String(item?.label || "").trim(),
+          price: String(item?.price || "").trim(),
+        }))
+        .filter((item: { label: string; price: string }) => item.label || item.price)
+    : [];
 
   if (!authReq.authUser?.id) {
     return res.status(401).json({ error: "Sessao invalida." });
@@ -104,6 +125,12 @@ router.put("/settings", async (req, res) => {
       agentName,
       companyName,
       mood,
+      storeName,
+      storeDescription,
+      storeCnpj,
+      storeAddress,
+      storePaymentMethods,
+      storeDeliveryFees,
     });
     return res.status(200).json({
       status: "ok",

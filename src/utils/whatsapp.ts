@@ -127,6 +127,30 @@ export function extractMessageText(message: any): string {
   );
 }
 
+export function extractQuotedContext(message: any): { stanzaId: string | null; body: string | null } {
+  const msg = unwrapMessage(message);
+  const contextInfo =
+    msg?.extendedTextMessage?.contextInfo ||
+    msg?.imageMessage?.contextInfo ||
+    msg?.videoMessage?.contextInfo ||
+    msg?.documentMessage?.contextInfo ||
+    msg?.buttonsResponseMessage?.contextInfo ||
+    msg?.listResponseMessage?.contextInfo ||
+    null;
+
+  const stanzaId = String(contextInfo?.stanzaId || "").trim() || null;
+  const quotedMessage = contextInfo?.quotedMessage || null;
+  if (!quotedMessage) {
+    return { stanzaId, body: null };
+  }
+
+  const body = extractMessageText(quotedMessage);
+  return {
+    stanzaId,
+    body: body && body !== "[mensagem sem texto]" ? body : null,
+  };
+}
+
 export function detectMessageType(message: any): string {
   const msg = unwrapMessage(message);
 

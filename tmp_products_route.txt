@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import multer from "multer";
@@ -44,26 +44,6 @@ type AuthRequest = Express.Request & {
   };
 };
 
-function parseDiscountInput(body: any, basePrice: number) {
-  const discountEnabled = String(body?.discount_enabled || "").trim() === "true";
-  const discountPriceRaw = String(body?.discount_price || "").trim();
-  const discountPrice = discountEnabled && discountPriceRaw ? Number(discountPriceRaw) : null;
-
-  if (!discountEnabled) {
-    return { discountEnabled: false, discountPrice: null };
-  }
-
-  if (!Number.isFinite(discountPrice) || Number(discountPrice) < 0) {
-    throw new Error("Informe um desconto válido.");
-  }
-
-  if (Number(discountPrice) >= basePrice) {
-    throw new Error("O preço com desconto deve ser menor que o preço base.");
-  }
-
-  return { discountEnabled: true, discountPrice: Number(discountPrice) };
-}
-
 router.get("/", async (_req, res) => {
   const items = await listProducts();
   return res.status(200).json({ items });
@@ -85,22 +65,19 @@ router.post("/", upload.single("image"), async (req, res) => {
     }
 
     if (!Number.isFinite(price) || price < 0) {
-      return res.status(400).json({ error: "Informe um preço válido." });
+      return res.status(400).json({ error: "Informe um preÃ§o vÃ¡lido." });
     }
 
     if (!Number.isFinite(stock) || stock < 0) {
-      return res.status(400).json({ error: "Informe um estoque válido." });
+      return res.status(400).json({ error: "Informe um estoque vÃ¡lido." });
     }
 
-    const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
     const product = await createProduct({
       name,
       type,
       description,
       price,
-      discountEnabled,
-      discountPrice,
       stock: Math.floor(stock),
       imageUrl,
       createdBy: authReq.authUser?.id || null,
@@ -126,19 +103,18 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
     const stock = type === "service" ? 0 : Number(req.body?.stock || 0);
 
     if (!productId) {
-      return res.status(400).json({ error: "Produto inválido." });
+      return res.status(400).json({ error: "Produto invÃ¡lido." });
     }
     if (!name) {
       return res.status(400).json({ error: "Informe o nome do produto." });
     }
     if (!Number.isFinite(price) || price < 0) {
-      return res.status(400).json({ error: "Informe um preço válido." });
+      return res.status(400).json({ error: "Informe um preÃ§o vÃ¡lido." });
     }
     if (!Number.isFinite(stock) || stock < 0) {
-      return res.status(400).json({ error: "Informe um estoque válido." });
+      return res.status(400).json({ error: "Informe um estoque vÃ¡lido." });
     }
 
-    const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
     const product = await updateProduct({
       id: productId,
@@ -146,14 +122,12 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
       type,
       description,
       price,
-      discountEnabled,
-      discountPrice,
       stock: Math.floor(stock),
       imageUrl,
     });
 
     if (!product) {
-      return res.status(404).json({ error: "Produto não encontrado." });
+      return res.status(404).json({ error: "Produto nÃ£o encontrado." });
     }
 
     return res.status(200).json({ status: "ok", product });

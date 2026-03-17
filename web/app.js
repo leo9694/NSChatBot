@@ -246,6 +246,9 @@ const productIdEl = document.getElementById("productId");
 const productNameEl = document.getElementById("productName");
 const productTypeEl = document.getElementById("productType");
 const productPriceEl = document.getElementById("productPrice");
+const productDiscountEnabledEl = document.getElementById("productDiscountEnabled");
+const productDiscountPriceFieldEl = document.getElementById("productDiscountPriceField");
+const productDiscountPriceEl = document.getElementById("productDiscountPrice");
 const productStockEl = document.getElementById("productStock");
 const productStockFieldEl = document.getElementById("productStockField");
 const productDescriptionEl = document.getElementById("productDescription");
@@ -258,6 +261,7 @@ const productPreviewImageEl = document.getElementById("productPreviewImage");
 const productPreviewPlaceholderEl = document.getElementById("productPreviewPlaceholder");
 const productPreviewNameEl = document.getElementById("productPreviewName");
 const productPreviewPriceEl = document.getElementById("productPreviewPrice");
+const productPreviewDiscountEl = document.getElementById("productPreviewDiscount");
 const productPreviewStockEl = document.getElementById("productPreviewStock");
 const productsListEl = document.getElementById("productsList");
 const ordersListEl = document.getElementById("ordersList");
@@ -885,8 +889,12 @@ function resetProductForm() {
   productIdEl.value = "";
   productsFormEl.reset();
   productTypeEl.value = "product";
+  productDiscountEnabledEl.checked = false;
+  productDiscountPriceEl.value = "";
   productStockEl.required = true;
   productStockFieldEl.hidden = false;
+  productDiscountPriceFieldEl.hidden = true;
+  productDiscountPriceEl.required = false;
   productSubmitBtnEl.innerHTML = '<i class="bi bi-check2-circle"></i> Cadastrar produto';
   productCancelEditBtnEl.hidden = true;
   if (productFormHeadingEl) {
@@ -904,6 +912,8 @@ function fillProductForm(product) {
   productNameEl.value = String(product?.name || "");
   productTypeEl.value = String(product?.type || "product");
   productPriceEl.value = String(product?.price || "");
+  productDiscountEnabledEl.checked = Boolean(product?.discount_enabled);
+  productDiscountPriceEl.value = product?.discount_price != null ? String(product.discount_price) : "";
   productStockEl.value = String(product?.stock || 0);
   productDescriptionEl.value = String(product?.description || "");
   productImageEl.value = "";
@@ -925,13 +935,16 @@ function updateProductPreview(product = null) {
   const typedName = String(productNameEl?.value || "").trim();
   const typedType = String(productTypeEl?.value || "").trim();
   const typedPrice = String(productPriceEl?.value || "").trim();
+  const typedDiscountPrice = String(productDiscountPriceEl?.value || "").trim();
   const typedStock = String(productStockEl?.value || "").trim();
   const typedDescription = String(productDescriptionEl?.value || "").trim();
   const file = productImageEl?.files?.[0] || null;
   const type = typedType || String(currentProduct?.type || "product");
+  const discountEnabled = Boolean(productDiscountEnabledEl?.checked || currentProduct?.discount_enabled);
 
   const name = typedName || String(currentProduct?.name || "").trim() || "Novo produto";
   const priceValue = typedPrice || String(currentProduct?.price || "").trim();
+  const discountValue = typedDiscountPrice || String(currentProduct?.discount_price || "").trim();
   const stockValue = typedStock || String(currentProduct?.stock || "").trim();
   const descriptionValue = typedDescription || String(currentProduct?.description || "").trim();
 
@@ -943,6 +956,17 @@ function updateProductPreview(product = null) {
       : `Preço: ${priceValue}`;
   } else {
     productPreviewPriceEl.textContent = "Preço ainda não informado";
+  }
+
+  if (discountEnabled && discountValue) {
+    const discountNumber = Number(discountValue);
+    productPreviewDiscountEl.textContent = Number.isFinite(discountNumber)
+      ? `Desconto: ${discountNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+      : `Desconto: ${discountValue}`;
+    productPreviewDiscountEl.hidden = false;
+  } else {
+    productPreviewDiscountEl.textContent = "";
+    productPreviewDiscountEl.hidden = true;
   }
 
   const stockLabel =
@@ -971,6 +995,16 @@ function updateProductTypeState() {
   productStockEl.required = !isService;
   if (isService) {
     productStockEl.value = "0";
+  }
+  updateProductPreview();
+}
+
+function updateProductDiscountState() {
+  const enabled = Boolean(productDiscountEnabledEl?.checked);
+  productDiscountPriceFieldEl.hidden = !enabled;
+  productDiscountPriceEl.required = enabled;
+  if (!enabled) {
+    productDiscountPriceEl.value = "";
   }
   updateProductPreview();
 }
@@ -1021,6 +1055,7 @@ function renderProducts() {
         <strong>${escapeHtml(product.name || "-")}</strong>
         <span>Tipo: ${escapeHtml(product.type === "service" ? "Serviço" : "Produto")}</span>
         <span>Preço: ${priceText}</span>
+        ${product.discount_enabled && product.discount_price ? `<span>Desconto: ${Number(product.discount_price).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>` : ""}
         <span>${product.type === "service" ? "Estoque: não se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
         ${product.description ? `<span>${escapeHtml(product.description)}</span>` : ""}
       </div>
@@ -4255,6 +4290,8 @@ productCancelEditBtnEl.addEventListener("click", () => {
 productNameEl.addEventListener("input", () => updateProductPreview());
 productTypeEl.addEventListener("change", () => updateProductTypeState());
 productPriceEl.addEventListener("input", () => updateProductPreview());
+productDiscountEnabledEl.addEventListener("change", () => updateProductDiscountState());
+productDiscountPriceEl.addEventListener("input", () => updateProductPreview());
 productStockEl.addEventListener("input", () => updateProductPreview());
 productDescriptionEl.addEventListener("input", () => updateProductPreview());
 productImageEl.addEventListener("change", async () => {
@@ -4268,6 +4305,7 @@ productImageEl.addEventListener("change", async () => {
   updateProductPreview();
 });
 updateProductPreview();
+updateProductDiscountState();
 productsListEl.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action='edit-product']");
   if (!target) return;
@@ -4381,6 +4419,8 @@ productsFormEl.addEventListener("submit", async (event) => {
   const name = String(productNameEl.value || "").trim();
   const type = String(productTypeEl.value || "product").trim() === "service" ? "service" : "product";
   const price = String(productPriceEl.value || "").trim();
+  const discountEnabled = Boolean(productDiscountEnabledEl.checked);
+  const discountPrice = String(productDiscountPriceEl.value || "").trim();
   const stock = type === "service" ? "0" : String(productStockEl.value || "").trim();
   const description = String(productDescriptionEl.value || "").trim();
   const image = productImageEl.files?.[0] || null;
@@ -4393,6 +4433,16 @@ productsFormEl.addEventListener("submit", async (event) => {
     await showAlert("A imagem do produto deve estar em JPG, JPEG ou PNG.");
     return;
   }
+  if (discountEnabled) {
+    if (!discountPrice) {
+      await showAlert("Informe o preço com desconto.");
+      return;
+    }
+    if (Number(discountPrice) >= Number(price || 0)) {
+      await showAlert("O preço com desconto deve ser menor que o preço base.");
+      return;
+    }
+  }
 
   productSubmitBtnEl.disabled = true;
   try {
@@ -4401,6 +4451,8 @@ productsFormEl.addEventListener("submit", async (event) => {
     form.append("type", type);
     form.append("description", description);
     form.append("price", price || "0");
+    form.append("discount_enabled", discountEnabled ? "true" : "false");
+    form.append("discount_price", discountEnabled ? (discountPrice || "0") : "");
     form.append("stock", stock || "0");
     if (image) {
       form.append("image", image);
