@@ -115,6 +115,79 @@ function buildCustomerTurnContext(messages: any[]): {
   };
 }
 
+function wasAwaitingOrderConfirmation(messages: any[]): boolean {
+  const recentOutbound = messages
+    .filter((item) => item?.from_me)
+    .slice(-4)
+    .map((item) => normalizeText(String(item?.body || "")));
+
+  return recentOutbound.some((body) =>
+    /(quer que eu confirme|posso confirmar|se estiver certo[, ]*posso confirmar|se voce confirmar[, ]*eu gero|se você confirmar[, ]*eu gero|confirma que eu gero|pode confirmar o pedido|quer confirmar o pedido|preciso da sua confirmacao final|me responda com uma confirmacao)/.test(
+      body,
+    ),
+  );
+}
+
+function hasDirectOrderConfirmation(body: string, quotedBody?: string | null, awaitingConfirmation = false): boolean {
+  const text = normalizeText(body);
+  const quoted = normalizeText(quotedBody || "");
+  const combined = [text, quoted].filter(Boolean).join(" ");
+  if (!combined) return false;
+
+  const strongConfirmation =
+    /\b(pode confirmar|pode gerar|pode registrar|pode fechar|pode prosseguir|pode seguir|gera o pedido|gerar o pedido|confirmo|confirma|confirmar pedido|fechar pedido|pedido confirmado|fechado)\b/.test(
+      combined,
+    );
+  if (strongConfirmation) return true;
+
+  if (!awaitingConfirmation) {
+    return false;
+  }
+
+  return /^(sim|isso|isso mesmo|pode ser|ok|okay|beleza|certo|fechado|confirmo|pode)$/i.test(String(body || "").trim());
+}
+
+function buildOrderConfirmationPrompt(params: {
+  items: Array<{ name?: string; quantity?: number | null }>;
+  summary?: string | null;
+  totalEstimate?: number | null;
+  fulfillmentType?: string | null;
+  paymentMethod?: string | null;
+}): string {
+  const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirmação final."];
+  const itemLines = Array.isArray(params.items)
+    ? params.items
+        .map((item) => {
+          const name = String(item?.name || "").trim();
+          const quantity = Number(item?.quantity || 0);
+          if (!name) return "";
+          if (quantity > 0) return `- ${quantity}x ${name}`;
+          return `- ${name}`;
+        })
+        .filter(Boolean)
+    : [];
+
+  if (itemLines.length) {
+    lines.push("", "Resumo do pedido:");
+    lines.push(...itemLines);
+  } else if (String(params.summary || "").trim()) {
+    lines.push("", `Resumo: ${String(params.summary || "").trim()}`);
+  }
+
+  if (params.totalEstimate !== null && params.totalEstimate !== undefined) {
+    lines.push(`Total estimado: R$ ${Number(params.totalEstimate).toFixed(2).replace(".", ",")}`);
+  }
+  if (String(params.fulfillmentType || "").trim()) {
+    lines.push(`Entrega/retirada: ${String(params.fulfillmentType || "").trim()}`);
+  }
+  if (String(params.paymentMethod || "").trim()) {
+    lines.push(`Pagamento: ${String(params.paymentMethod || "").trim()}`);
+  }
+
+  lines.push("", "Se estiver tudo certo, me responda com uma confirmação, por exemplo: \"sim\", \"pode confirmar\" ou \"pode gerar\".");
+  return lines.join("\n");
+}
+
 function indicatesQuotedOrderIntent(body: string): boolean {
   const text = normalizeText(body);
   if (!text) return false;
@@ -425,6 +498,12 @@ function isClosingMessage(body: string): boolean {
   if (!text) return false;
 
   const closingPatterns = [
+    /^ok bot$/,
+    /^ok[, ]*bot$/,
+    /^beleza[, ]*bot$/,
+    /^valeu[, ]*bot$/,
+    /^fechou[, ]*bot$/,
+    /^blz[, ]*bot$/,
     /^nao[, ]*obrigado/,
     /^nao precisa/,
     /^so isso$/,
@@ -450,6 +529,14 @@ function isClosingMessage(body: string): boolean {
   ];
 
   return closingPatterns.some((pattern) => pattern.test(text));
+}
+
+function isShortAcknowledgeMessage(body: string): boolean {
+  const text = normalizeText(body);
+  if (!text) return false;
+  return /^(ok|ok bot|beleza|beleza bot|valeu|valeu bot|fechou|fechou bot|blz|blz bot|certo|tudo certo)$/i.test(
+    String(body || "").trim(),
+  ) || /^(ok|ok bot|beleza|beleza bot|valeu|valeu bot|fechou|fechou bot|blz|blz bot|certo|tudo certo)$/.test(text);
 }
 
 function isGreetingMessage(body: string): boolean {
@@ -1105,8 +1192,14 @@ export async function handleInboundAiAutomation(
     const quotedBody = customerTurn.combinedQuotedBody || (typeof lastMessage.metadata?.quoted_body === "string" ? lastMessage.metadata.quoted_body : null);
     const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
     const latestCustomerBody = String(lastMessage.body || "");
+    const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
+    const customerDirectConfirmation = hasDirectOrderConfirmation(
+      lastCustomerTurnBody,
+      quotedBody,
+      awaitingOrderConfirmation,
+    );
 
-    if (isClosingMessage(latestCustomerBody)) {
+    if (isClosingMessage(latestCustomerBody) || isShortAcknowledgeMessage(latestCustomerBody)) {
       const closingReply = buildClosingReply(mood);
       if (shouldSuppressDuplicateReply(id, closingReply)) {
         return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
@@ -1204,7 +1297,7 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: true, reason: "deterministic_store_reply" };
     }
 
-    if (isClosingMessage(lastCustomerTurnBody)) {
+    if (isClosingMessage(lastCustomerTurnBody) || isShortAcknowledgeMessage(lastCustomerTurnBody)) {
       const closingReply = buildClosingReply(mood);
       if (shouldSuppressDuplicateReply(id, closingReply)) {
         return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
@@ -1302,7 +1395,7 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: true, reason: "discount_not_allowed" };
     }
 
-    if (!isSalesScopeMessage(lastCustomerTurnBody, catalog, quotedBody)) {
+    if (!customerDirectConfirmation && !isSalesScopeMessage(lastCustomerTurnBody, catalog, quotedBody)) {
       const offTopicReply = buildOffTopicReply(mood);
       if (shouldSuppressDuplicateReply(id, offTopicReply)) {
         return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
@@ -1385,13 +1478,13 @@ export async function handleInboundAiAutomation(
         buildAiTurnBody(lastCustomerTurnBody, quotedBody),
       );
     }
-    const hasRequiredOrderData =
+    const hasOrderDataReadyForConfirmation =
       Boolean(mergedOrder.summary) &&
       Boolean(mergedOrder.responsibleName) &&
       Boolean(mergedOrder.paymentMethod) &&
-      Boolean(aiResult.order.customerConfirmedDetails) &&
       Boolean(mergedOrder.fulfillmentType) &&
       (!requiresDeliveryAddress || hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || "")));
+    const hasRequiredOrderData = hasOrderDataReadyForConfirmation && customerDirectConfirmation;
 
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
@@ -1461,6 +1554,21 @@ export async function handleInboundAiAutomation(
 
     if (deliveryHasOnlyMissingReference) {
       replyText = buildMissingReferenceReply(mergedOrder.deliveryAddress, buildAiTurnBody(lastCustomerTurnBody, quotedBody));
+    }
+
+    const shouldAskForFinalConfirmation =
+      hasOrderDataReadyForConfirmation &&
+      !customerDirectConfirmation &&
+      !deliveryHasOnlyMissingReference;
+
+    if (shouldAskForFinalConfirmation) {
+      replyText = buildOrderConfirmationPrompt({
+        items: mergedOrder.items,
+        summary: mergedOrder.summary,
+        totalEstimate: mergedOrder.totalEstimate,
+        fulfillmentType: mergedOrder.fulfillmentType,
+        paymentMethod: mergedOrder.paymentMethod,
+      });
     }
 
     if (
