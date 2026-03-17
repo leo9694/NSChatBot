@@ -195,9 +195,75 @@ function hasCompleteDeliveryAddress(value: string | null | undefined): boolean {
     /\btravessa\b/.test(normalized) ||
     /\balameda\b/.test(normalized) ||
     /\brodovia\b/.test(normalized);
-  const hasNumber = /\b(n[ÂºoÂ°]?|numero)\b/.test(normalized) || /\d+/.test(normalized);
+  const hasNoNumber =
+    /\bsem numero\b/.test(normalized) ||
+    /\bsem numero definido\b/.test(normalized) ||
+    /\bsem n[ºo°]?\b/.test(normalized) ||
+    /\bs\/n\b/.test(normalized) ||
+    /\bsn\b/.test(normalized) ||
+    /\bnao tem numero\b/.test(normalized) ||
+    /\bnão tem numero\b/.test(normalized) ||
+    /\bnao sei o numero\b/.test(normalized) ||
+    /\bnão sei o numero\b/.test(normalized) ||
+    /\bo numero da casa eu nao sei\b/.test(normalized) ||
+    /\bo numero da casa eu não sei\b/.test(normalized) ||
+    /\bnumero da casa nao sei\b/.test(normalized) ||
+    /\bnumero da casa não sei\b/.test(normalized);
+  const hasNumber =
+    /\b(?:n[ºo°]?|numero)\s*[:\-]?\s*\d+\b/.test(normalized) ||
+    /\b(?:rua|avenida|av|travessa|alameda|rodovia)[^,\n]{0,80},\s*\d+\b/.test(normalized) ||
+    /\b(?:rua|avenida|av|travessa|alameda|rodovia)[^,\n]{0,80}\s+\d+\b/.test(normalized);
   const hasDistrict = /\bbairro\b/.test(normalized) || /\bjd\b/.test(normalized) || /\bjardim\b/.test(normalized);
-  return hasCity && hasStreet && hasNumber && hasDistrict;
+  const hasReference =
+    /\breferencia\b/.test(normalized) ||
+    /\breferência\b/.test(normalized) ||
+    /\bponto de referencia\b/.test(normalized) ||
+    /\bponto de referência\b/.test(normalized) ||
+    /\bem frente\b/.test(normalized) ||
+    /\bde frente\b/.test(normalized) ||
+    /\bquase em frente\b/.test(normalized) ||
+    /\bquase de frente\b/.test(normalized) ||
+    /\bao lado\b/.test(normalized) ||
+    /\bdo lado\b/.test(normalized) ||
+    /\bproximo\b/.test(normalized) ||
+    /\bpróximo\b/.test(normalized) ||
+    /\bperto\b/.test(normalized) ||
+    /\bperto do\b/.test(normalized) ||
+    /\bperto da\b/.test(normalized) ||
+    /\bantes do\b/.test(normalized) ||
+    /\bantes da\b/.test(normalized) ||
+    /\bdepois do\b/.test(normalized) ||
+    /\bdepois da\b/.test(normalized) ||
+    /\besquina\b/.test(normalized) ||
+    /\bcasa verde\b/.test(normalized) ||
+    /\bcasa azul\b/.test(normalized) ||
+    /\bportao verde\b/.test(normalized) ||
+    /\bportao azul\b/.test(normalized) ||
+    /\bnao tem erro\b/.test(normalized) ||
+    /\bnão tem erro\b/.test(normalized) ||
+    /\bfacil de achar\b/.test(normalized) ||
+    /\bfácil de achar\b/.test(normalized);
+  return hasCity && hasStreet && (hasNumber || hasNoNumber) && hasDistrict && hasReference;
+}
+
+function textIndicatesNoNumber(value: string | null | undefined): boolean {
+  const normalized = normalizeText(String(value || ""));
+  if (!normalized) return false;
+  return (
+    /\bsem numero\b/.test(normalized) ||
+    /\bsem numero definido\b/.test(normalized) ||
+    /\bsem n[ºo°]?\b/.test(normalized) ||
+    /\bs\/n\b/.test(normalized) ||
+    /\bsn\b/.test(normalized) ||
+    /\bnao tem numero\b/.test(normalized) ||
+    /\bnão tem numero\b/.test(normalized) ||
+    /\bnao sei o numero\b/.test(normalized) ||
+    /\bnão sei o numero\b/.test(normalized) ||
+    /\bo numero da casa eu nao sei\b/.test(normalized) ||
+    /\bo numero da casa eu não sei\b/.test(normalized) ||
+    /\bnumero da casa nao sei\b/.test(normalized) ||
+    /\bnumero da casa não sei\b/.test(normalized)
+  );
 }
 
 function buildDeliveryAddressForm() {
@@ -206,8 +272,140 @@ function buildDeliveryAddressForm() {
     "",
     "Cidade:",
     "Rua:",
-    "Número:",
+    "Número: (se não tiver, informe: sem número)",
     "Bairro:",
+    "Ponto de referência:",
+  ].join("\n");
+}
+
+function parseStructuredDeliveryAddress(value: string | null | undefined) {
+  const source = String(value || "").trim();
+  const parts: {
+    city: string | null;
+    street: string | null;
+    number: string | null;
+    neighborhood: string | null;
+    reference: string | null;
+  } = {
+    city: null,
+    street: null,
+    number: null,
+    neighborhood: null,
+    reference: null,
+  };
+
+  if (!source) {
+    return parts;
+  }
+
+  const segments = source
+    .split(/[\n;|]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  for (const segment of segments) {
+    const match = segment.match(/^(cidade|rua|numero|número|bairro|ponto de referencia|ponto de referência|referencia|referência)\s*:\s*(.+)$/i);
+    if (!match) continue;
+    const label = normalizeText(match[1]);
+    const valuePart = String(match[2] || "").trim();
+    if (!valuePart) continue;
+    if (label === "cidade") parts.city = valuePart;
+    if (label === "rua") parts.street = valuePart;
+    if (label === "numero" || label === "número") parts.number = valuePart;
+    if (label === "bairro") parts.neighborhood = valuePart;
+    if (label.includes("referencia")) parts.reference = valuePart;
+  }
+
+  return parts;
+}
+
+function extractDeliveryReferenceFromText(value: string | null | undefined): string | null {
+  const source = String(value || "").trim();
+  if (!source) return null;
+
+  const explicitMatch = source.match(
+    /(?:ponto de refer(?:e|ê)n(?:c|ç)ia|refer(?:e|ê)n(?:c|ç)ia)\s*[:\-]\s*([^\n.;]+)/iu,
+  );
+  let reference = explicitMatch?.[1]?.trim() || "";
+
+  if (!reference) {
+    const contextualMatch = source.match(
+      /((?:quase em frente|quase de frente|em frente|de frente|ao lado|do lado|perto do|perto da|antes do|antes da|depois do|depois da)[^\n.;]*)/iu,
+    );
+    reference = contextualMatch?.[1]?.trim() || "";
+  }
+
+  const colorMatch = source.match(/((?:casa|port[aã]o)\s+(?:verde|azul|amarelo|branco|branca|preto|preta|rosa))/iu);
+  if (colorMatch?.[1]) {
+    const colorText = colorMatch[1].trim();
+    if (!reference) {
+      reference = colorText;
+    } else if (!normalizeText(reference).includes(normalizeText(colorText))) {
+      reference = `${reference}, ${colorText}`;
+    }
+  }
+
+  if (!reference) return null;
+  return reference.replace(/\s+/g, " ").trim();
+}
+
+function enrichDeliveryAddressWithCustomerText(
+  currentAddress: string | null | undefined,
+  customerText: string | null | undefined,
+): string | null {
+  const current = parseStructuredDeliveryAddress(currentAddress);
+  const sourceText = String(customerText || "").trim();
+  if (!sourceText) {
+    return String(currentAddress || "").trim() || null;
+  }
+
+  if (!current.number) {
+    if (textIndicatesNoNumber(sourceText)) {
+      current.number = "sem número";
+    }
+  }
+
+  if (!current.reference) {
+    current.reference = extractDeliveryReferenceFromText(sourceText);
+  }
+
+  const orderedLines = [
+    current.city ? `Cidade: ${current.city}` : "",
+    current.street ? `Rua: ${current.street}` : "",
+    current.number ? `Número: ${current.number}` : "",
+    current.neighborhood ? `Bairro: ${current.neighborhood}` : "",
+    current.reference ? `Ponto de referência: ${current.reference}` : "",
+  ].filter(Boolean);
+
+  if (!orderedLines.length) {
+    return String(currentAddress || "").trim() || null;
+  }
+
+  return orderedLines.join("\n");
+}
+
+function buildMissingReferenceReply(
+  deliveryAddress: string | null | undefined,
+  customerText: string | null | undefined,
+): string {
+  const parsed = parseStructuredDeliveryAddress(deliveryAddress);
+  const noNumber = textIndicatesNoNumber(customerText) || normalizeText(String(parsed.number || "")).includes("sem numero");
+  const city = parsed.city || "";
+  const street = parsed.street || "";
+  const number = noNumber ? "sem número" : parsed.number || "";
+  const neighborhood = parsed.neighborhood || "";
+
+  return [
+    "Falta só o ponto de referência para eu gerar o pedido.",
+    "",
+    "Confirma assim:",
+    city ? `Cidade: ${city}` : "Cidade:",
+    street ? `Rua: ${street}` : "Rua:",
+    number ? `Número: ${number}` : "Número:",
+    neighborhood ? `Bairro: ${neighborhood}` : "Bairro:",
+    "Ponto de referência:",
+    "",
+    "Assim que você me enviar o ponto de referência, eu gero o pedido e deixo pendente de confirmação interna.",
   ].join("\n");
 }
 
@@ -217,7 +415,8 @@ function hasDeliveryAddressForm(value: string | null | undefined): boolean {
     normalized.includes("cidade:") &&
     normalized.includes("rua:") &&
     normalized.includes("numero:") &&
-    normalized.includes("bairro:")
+    normalized.includes("bairro:") &&
+    normalized.includes("ponto de referencia:")
   );
 }
 
@@ -520,6 +719,167 @@ function buildDeterministicCatalogReply(input: {
   return "";
 }
 
+function parseStoreInfo(settings: any) {
+  const rawAddress = String(settings?.store_address || "").trim();
+  const addressParts = {
+    city: "",
+    street: "",
+    number: "",
+    neighborhood: "",
+    complement: "",
+  };
+
+  if (rawAddress) {
+    rawAddress
+      .split("|")
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        const [label, ...rest] = part.split(":");
+        const value = rest.join(":").trim();
+        const normalizedLabel = normalizeText(label);
+        if (normalizedLabel === "cidade") addressParts.city = value;
+        if (normalizedLabel === "rua") addressParts.street = value;
+        if (normalizedLabel === "numero" || normalizedLabel === "número") addressParts.number = value;
+        if (normalizedLabel === "bairro") addressParts.neighborhood = value;
+        if (normalizedLabel === "complemento") addressParts.complement = value;
+      });
+  }
+
+  const paymentMethods = Array.isArray(settings?.store_payment_methods)
+    ? settings.store_payment_methods.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const deliveryFees = Array.isArray(settings?.store_delivery_fees)
+    ? settings.store_delivery_fees
+        .map((item: any) => ({
+          label: String(item?.label || "").trim(),
+          price: String(item?.price || "").trim(),
+        }))
+        .filter((item: { label: string; price: string }) => item.label || item.price)
+    : [];
+
+  return {
+    name: String(settings?.store_name || "").trim(),
+    description: String(settings?.store_description || "").trim(),
+    cnpj: String(settings?.store_cnpj || "").trim(),
+    rawAddress,
+    addressParts,
+    paymentMethods,
+    deliveryFees,
+  };
+}
+
+function buildDeterministicStoreReply(input: {
+  body: string;
+  quotedBody?: string | null;
+  settings: any;
+}) {
+  const text = normalizeText([input.body, input.quotedBody].filter(Boolean).join(" "));
+  if (!text) return "";
+
+  const store = parseStoreInfo(input.settings);
+
+  const asksStoreName = /\bnome da loja\b/.test(text) || /\bqual o nome\b/.test(text);
+  const asksCnpj = /\bcnpj\b/.test(text);
+  const asksAddress =
+    /\bendereco\b/.test(text) ||
+    /\bendereço\b/.test(text) ||
+    /\bonde fica\b/.test(text) ||
+    /\blocalizacao\b/.test(text) ||
+    /\blocalização\b/.test(text);
+  const asksPaymentMethods =
+    /\bforma de pagamento\b/.test(text) ||
+    /\bformas de pagamento\b/.test(text) ||
+    /\baceita\b/.test(text) ||
+    /\baceitam\b/.test(text) ||
+    /\bpagamento\b/.test(text) ||
+    /\bpix\b/.test(text) ||
+    /\bcartao\b/.test(text) ||
+    /\bcartão\b/.test(text) ||
+    /\bdinheiro\b/.test(text);
+  const asksDeliveryFee =
+    /\btaxa de entrega\b/.test(text) ||
+    /\bfrete\b/.test(text) ||
+    /\bentregam\b/.test(text) ||
+    /\bentrega\b/.test(text);
+  const asksAboutStore =
+    /\bsobre a loja\b/.test(text) ||
+    /\bme fala sobre a loja\b/.test(text) ||
+    /\bquais informacoes da loja\b/.test(text) ||
+    /\bquais informações da loja\b/.test(text);
+
+  if (asksStoreName && store.name) {
+    return `O nome da loja é ${store.name}.`;
+  }
+
+  if (asksCnpj && store.cnpj) {
+    return `O CNPJ da loja é ${store.cnpj}.`;
+  }
+
+  if (asksAddress && store.rawAddress) {
+    const lines = [
+      store.name ? `Endereço da ${store.name}:` : "Endereço da loja:",
+      store.addressParts.city ? `Cidade: ${store.addressParts.city}` : "",
+      store.addressParts.street ? `Rua: ${store.addressParts.street}` : "",
+      store.addressParts.number ? `Número: ${store.addressParts.number}` : "",
+      store.addressParts.neighborhood ? `Bairro: ${store.addressParts.neighborhood}` : "",
+      store.addressParts.complement ? `Complemento: ${store.addressParts.complement}` : "",
+    ].filter(Boolean);
+    return lines.join("\n");
+  }
+
+  if (asksPaymentMethods && store.paymentMethods.length) {
+    if (/\bdinheiro\b/.test(text)) {
+      return store.paymentMethods.some((item: string) => normalizeText(item).includes("dinheiro"))
+        ? "Sim, aceitamos dinheiro."
+        : "No momento, dinheiro não está cadastrado como forma de pagamento.";
+    }
+    return `Aceitamos:\n- ${store.paymentMethods.join("\n- ")}`;
+  }
+
+  if (asksDeliveryFee && store.deliveryFees.length) {
+    const matchedFee = store.deliveryFees.find((item: { label: string; price: string }) => {
+      const label = normalizeText(item.label);
+      return label && text.includes(label);
+    });
+
+    if (matchedFee) {
+      return `A taxa de entrega para ${matchedFee.label} é ${matchedFee.price}.`;
+    }
+
+    if (/\bentregam\b/.test(text) || /\bentrega\b/.test(text)) {
+      return `Sim, fazemos entregas.\nPreços:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`;
+    }
+  }
+
+  if (asksAboutStore) {
+    const blocks = [
+      store.name || "",
+      store.description || "",
+      store.cnpj ? `CNPJ: ${store.cnpj}` : "",
+      store.rawAddress
+        ? [
+            "Endereço:",
+            store.addressParts.city ? `- Cidade: ${store.addressParts.city}` : "",
+            store.addressParts.street ? `- Rua: ${store.addressParts.street}` : "",
+            store.addressParts.number ? `- Número: ${store.addressParts.number}` : "",
+            store.addressParts.neighborhood ? `- Bairro: ${store.addressParts.neighborhood}` : "",
+            store.addressParts.complement ? `- Complemento: ${store.addressParts.complement}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "",
+      store.paymentMethods.length ? `Formas de pagamento:\n- ${store.paymentMethods.join("\n- ")}` : "",
+      store.deliveryFees.length
+        ? `Preços de entrega:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`
+        : "",
+    ].filter(Boolean);
+    return blocks.join("\n\n");
+  }
+
+  return "";
+}
+
 function isSalesScopeMessage(
   body: string,
   catalog: Array<{ name: string; description: string | null; type: string }>,
@@ -530,6 +890,23 @@ function isSalesScopeMessage(
   if (isGreetingMessage(body) || isClosingMessage(body)) return true;
 
   const salesKeywords = [
+    "loja",
+    "endereco",
+    "endereço",
+    "cnpj",
+    "bairro",
+    "rua",
+    "avenida",
+    "numero",
+    "número",
+    "cidade",
+    "forma de pagamento",
+    "formas de pagamento",
+    "taxa de entrega",
+    "frete",
+    "localizacao",
+    "localização",
+    "onde fica",
     "produto",
     "produtos",
     "servico",
@@ -793,6 +1170,40 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: true, reason: "direct_catalog_reply" };
     }
 
+    const deterministicStoreReply = buildDeterministicStoreReply({
+      body: lastCustomerTurnBody,
+      quotedBody,
+      settings: accountSettings,
+    });
+    if (deterministicStoreReply) {
+      if (shouldSuppressDuplicateReply(id, deterministicStoreReply)) {
+        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
+      }
+      const waResponse = await sendWhatsAppText({
+        to: context.phone,
+        message: deterministicStoreReply,
+        accountJid: context.account_wa_jid,
+      });
+
+      await saveOutboundMessage({
+        accountJid: context.account_wa_jid,
+        accountDisplayName: null,
+        phone: context.phone,
+        body: deterministicStoreReply,
+        messageType: "text",
+        externalMessageId: waResponse?.key?.id || null,
+        status: "sent",
+        payload: waResponse,
+        metadata: {
+          ai_generated: true,
+          ai_agent: true,
+          ai_store_info_reply: true,
+        },
+      });
+
+      return { ok: true, replied: true, reason: "deterministic_store_reply" };
+    }
+
     if (isClosingMessage(lastCustomerTurnBody)) {
       const closingReply = buildClosingReply(mood);
       if (shouldSuppressDuplicateReply(id, closingReply)) {
@@ -968,6 +1379,12 @@ export async function handleInboundAiAutomation(
 
     const normalizedFulfillment = normalizeName(String(mergedOrder.fulfillmentType || ""));
     const requiresDeliveryAddress = normalizedFulfillment.includes("entrega");
+    if (requiresDeliveryAddress) {
+      mergedOrder.deliveryAddress = enrichDeliveryAddressWithCustomerText(
+        String(mergedOrder.deliveryAddress || ""),
+        buildAiTurnBody(lastCustomerTurnBody, quotedBody),
+      );
+    }
     const hasRequiredOrderData =
       Boolean(mergedOrder.summary) &&
       Boolean(mergedOrder.responsibleName) &&
@@ -1031,6 +1448,19 @@ export async function handleInboundAiAutomation(
       replyText = buildNoDiscountPermissionReply(mood);
     } else if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);
+    }
+
+    const parsedDeliveryAddress = parseStructuredDeliveryAddress(mergedOrder.deliveryAddress);
+    const deliveryHasOnlyMissingReference =
+      normalizedFulfillment.includes("entrega") &&
+      Boolean(parsedDeliveryAddress.city) &&
+      Boolean(parsedDeliveryAddress.street) &&
+      Boolean(parsedDeliveryAddress.neighborhood) &&
+      Boolean(parsedDeliveryAddress.number) &&
+      !parsedDeliveryAddress.reference;
+
+    if (deliveryHasOnlyMissingReference) {
+      replyText = buildMissingReferenceReply(mergedOrder.deliveryAddress, buildAiTurnBody(lastCustomerTurnBody, quotedBody));
     }
 
     if (

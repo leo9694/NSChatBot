@@ -1467,6 +1467,147 @@ body.auth-lock {
   grid-column: 1 / -1;
 }
 
+.store-info-form {
+  grid-template-columns: 1fr;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.store-form-section {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #2f434f;
+  border-radius: 14px;
+  background: #172730;
+}
+
+.store-form-section-primary {
+  gap: 12px;
+}
+
+.store-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.store-info-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #c8d7dd;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.store-info-form input,
+.store-info-form textarea,
+.store-info-form select {
+  width: 100%;
+  border: 1px solid #314753;
+  border-radius: 10px;
+  background: #22333d;
+  color: #eaf3f7;
+  padding: 11px 12px;
+  font-size: 15px;
+  outline: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.store-info-form input::placeholder,
+.store-info-form textarea::placeholder {
+  color: #8fa6b1;
+}
+
+.store-info-form input:focus,
+.store-info-form textarea:focus,
+.store-info-form select:focus {
+  border-color: #00a884;
+  box-shadow: 0 0 0 3px rgba(0, 168, 132, 0.12);
+  background: #263a45;
+}
+
+.store-info-form textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.store-form-section-head {
+  display: grid;
+  gap: 4px;
+}
+
+.store-form-section-head strong {
+  color: #eef6fa;
+  font-size: 16px;
+}
+
+.store-form-section-head span {
+  color: #8fa6b1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.store-address-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.store-address-complement {
+  grid-column: 1 / -1;
+}
+
+.store-repeat-block {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #2a3a43;
+  border-radius: 12px;
+  background: #132129;
+}
+
+.store-repeat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.store-repeat-head strong {
+  color: #eef6fa;
+  font-size: 15px;
+}
+
+.store-repeat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.store-repeat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.store-repeat-row-double {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 180px) auto;
+}
+
+.store-repeat-row input {
+  min-height: 46px;
+}
+
+.store-repeat-row .btn-secondary {
+  min-height: 44px;
+  min-width: 44px;
+  padding-inline: 12px;
+}
+
 .products-form .product-description-field {
   grid-column: 1 / -1;
 }
@@ -3115,6 +3256,44 @@ body.auth-lock {
     grid-template-columns: 1fr;
   }
 
+  .store-info-form {
+    gap: 12px;
+  }
+
+  .store-form-section {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .store-form-section-head strong {
+    font-size: 15px;
+  }
+
+  .store-form-section-head span {
+    font-size: 12px;
+  }
+
+  .store-form-grid,
+  .store-address-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .store-repeat-row,
+  .store-repeat-row-double {
+    grid-template-columns: 1fr;
+  }
+
+  .store-repeat-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .store-repeat-head .btn-secondary,
+  .store-repeat-row .btn-secondary,
+  .store-info-form .products-form-actions > button {
+    width: 100%;
+  }
+
   .products-shell,
   .settings-shell {
     display: flex;
@@ -3272,6 +3451,36 @@ body.auth-lock {
     width: 100%;
     justify-content: center;
     padding-inline: 8px;
+  }
+
+  .store-info-form {
+    gap: 10px;
+  }
+
+  .store-form-section {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .store-info-form label {
+    font-size: 13px;
+  }
+
+  .store-info-form input,
+  .store-info-form textarea,
+  .store-info-form select {
+    font-size: 16px;
+    padding: 10px 11px;
+    border-radius: 9px;
+  }
+
+  .store-repeat-block {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .store-repeat-head strong {
+    font-size: 14px;
   }
 
   .msg-bubble {

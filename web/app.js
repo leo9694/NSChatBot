@@ -37,7 +37,7 @@ const state = {
   realtimeCheckpointToken: "",
   products: [],
   productOrders: [],
-  productsTab: "create",
+  productsTab: "store-info",
   editingProductId: "",
   agentSettings: null,
   mobileChatPane: "list",
@@ -265,9 +265,25 @@ const productPreviewDiscountEl = document.getElementById("productPreviewDiscount
 const productPreviewStockEl = document.getElementById("productPreviewStock");
 const productsListEl = document.getElementById("productsList");
 const ordersListEl = document.getElementById("ordersList");
+const storeInfoFormEl = document.getElementById("storeInfoForm");
+const storeNameInputEl = document.getElementById("storeNameInput");
+const storeCnpjInputEl = document.getElementById("storeCnpjInput");
+const storeAddressCityInputEl = document.getElementById("storeAddressCityInput");
+const storeAddressStreetInputEl = document.getElementById("storeAddressStreetInput");
+const storeAddressNumberInputEl = document.getElementById("storeAddressNumberInput");
+const storeAddressNeighborhoodInputEl = document.getElementById("storeAddressNeighborhoodInput");
+const storeAddressComplementInputEl = document.getElementById("storeAddressComplementInput");
+const storeDescriptionInputEl = document.getElementById("storeDescriptionInput");
+const storePaymentMethodsListEl = document.getElementById("storePaymentMethodsList");
+const storeAddPaymentMethodBtnEl = document.getElementById("storeAddPaymentMethodBtn");
+const storeDeliveryFeesListEl = document.getElementById("storeDeliveryFeesList");
+const storeAddDeliveryFeeBtnEl = document.getElementById("storeAddDeliveryFeeBtn");
+const storeInfoSaveBtnEl = document.getElementById("storeInfoSaveBtn");
+const productsTabStoreInfoEl = document.getElementById("productsTabStoreInfo");
 const productsTabCreateEl = document.getElementById("productsTabCreate");
 const productsTabListEl = document.getElementById("productsTabList");
 const productsTabOrdersEl = document.getElementById("productsTabOrders");
+const productsPanelStoreInfoEl = document.getElementById("productsPanelStoreInfo");
 const productsPanelCreateEl = document.getElementById("productsPanelCreate");
 const productsPanelListEl = document.getElementById("productsPanelList");
 const productsPanelOrdersEl = document.getElementById("productsPanelOrders");
@@ -755,6 +771,7 @@ function getMobileTopbarCopy() {
   }
   if (state.currentView === "products") {
     const subtitleMap = {
+      "store-info": "Loja",
       create: "Cadastro",
       list: "Produtos",
       orders: "Pedidos",
@@ -844,7 +861,8 @@ function switchView(view) {
   } else if (view === "agent") {
     loadAgentStatus().catch((error) => console.error(error));
   } else if (view === "products") {
-    setProductsTab(state.productsTab || "create");
+    setProductsTab(state.productsTab || "store-info");
+    loadAgentStatus().catch((error) => console.error(error));
     loadProducts().catch((error) => console.error(error));
     loadAiOrders().catch((error) => console.error(error));
   } else if (view === "settings") {
@@ -871,17 +889,139 @@ function renderAgentSettings() {
   agentMoodInputEl.value = String(settings.mood || "informal");
   agentNameInputEl.value = String(settings.agent_name || "");
   companyNameInputEl.value = String(settings.company_name || "");
+  if (storeNameInputEl) storeNameInputEl.value = String(settings.store_name || "");
+  if (storeCnpjInputEl) storeCnpjInputEl.value = String(settings.store_cnpj || "");
+  const parsedStoreAddress = parseStoreAddressParts(String(settings.store_address || ""));
+  if (storeAddressCityInputEl) storeAddressCityInputEl.value = parsedStoreAddress.city;
+  if (storeAddressStreetInputEl) storeAddressStreetInputEl.value = parsedStoreAddress.street;
+  if (storeAddressNumberInputEl) storeAddressNumberInputEl.value = parsedStoreAddress.number;
+  if (storeAddressNeighborhoodInputEl) storeAddressNeighborhoodInputEl.value = parsedStoreAddress.neighborhood;
+  if (storeAddressComplementInputEl) storeAddressComplementInputEl.value = parsedStoreAddress.complement;
+  if (storeDescriptionInputEl) storeDescriptionInputEl.value = String(settings.store_description || "");
+  renderStorePaymentMethods(Array.isArray(settings.store_payment_methods) ? settings.store_payment_methods : []);
+  renderStoreDeliveryFees(Array.isArray(settings.store_delivery_fees) ? settings.store_delivery_fees : []);
 }
 
 function setProductsTab(tab) {
   state.productsTab = tab;
+  productsTabStoreInfoEl.classList.toggle("active", tab === "store-info");
   productsTabCreateEl.classList.toggle("active", tab === "create");
   productsTabListEl.classList.toggle("active", tab === "list");
   productsTabOrdersEl.classList.toggle("active", tab === "orders");
+  productsPanelStoreInfoEl.classList.toggle("active", tab === "store-info");
   productsPanelCreateEl.classList.toggle("active", tab === "create");
   productsPanelListEl.classList.toggle("active", tab === "list");
   productsPanelOrdersEl.classList.toggle("active", tab === "orders");
   renderMobileChrome();
+}
+
+function createStorePaymentMethodRow(value = "") {
+  const row = document.createElement("div");
+  row.className = "store-repeat-row";
+  row.innerHTML = `
+    <input type="text" data-store-payment-method placeholder="Ex.: PIX" value="${escapeHtml(value)}" />
+    <button type="button" class="btn-secondary" data-store-remove-row>
+      <i class="bi bi-trash3"></i>
+    </button>
+  `;
+  return row;
+}
+
+function createStoreDeliveryFeeRow(item = {}) {
+  const label = String(item.label || "").trim();
+  const price = String(item.price || "").trim();
+  const row = document.createElement("div");
+  row.className = "store-repeat-row store-repeat-row-double";
+  row.innerHTML = `
+    <input type="text" data-store-delivery-label placeholder="Ex.: Centro" value="${escapeHtml(label)}" />
+    <input type="text" data-store-delivery-price placeholder="Ex.: R$ 10,00" value="${escapeHtml(price)}" />
+    <button type="button" class="btn-secondary" data-store-remove-row>
+      <i class="bi bi-trash3"></i>
+    </button>
+  `;
+  return row;
+}
+
+function renderStorePaymentMethods(items = []) {
+  if (!storePaymentMethodsListEl) return;
+  storePaymentMethodsListEl.innerHTML = "";
+  const values = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!values.length) {
+    storePaymentMethodsListEl.appendChild(createStorePaymentMethodRow(""));
+    return;
+  }
+  values.forEach((item) => storePaymentMethodsListEl.appendChild(createStorePaymentMethodRow(item)));
+}
+
+function renderStoreDeliveryFees(items = []) {
+  if (!storeDeliveryFeesListEl) return;
+  storeDeliveryFeesListEl.innerHTML = "";
+  const values = Array.isArray(items) ? items.filter((item) => item && (item.label || item.price)) : [];
+  if (!values.length) {
+    storeDeliveryFeesListEl.appendChild(createStoreDeliveryFeeRow({}));
+    return;
+  }
+  values.forEach((item) => storeDeliveryFeesListEl.appendChild(createStoreDeliveryFeeRow(item)));
+}
+
+function readStorePaymentMethods() {
+  if (!storePaymentMethodsListEl) return [];
+  return Array.from(storePaymentMethodsListEl.querySelectorAll("[data-store-payment-method]"))
+    .map((input) => String(input.value || "").trim())
+    .filter(Boolean);
+}
+
+function readStoreDeliveryFees() {
+  if (!storeDeliveryFeesListEl) return [];
+  return Array.from(storeDeliveryFeesListEl.querySelectorAll(".store-repeat-row"))
+    .map((row) => ({
+      label: String(row.querySelector("[data-store-delivery-label]")?.value || "").trim(),
+      price: String(row.querySelector("[data-store-delivery-price]")?.value || "").trim(),
+    }))
+    .filter((item) => item.label || item.price);
+}
+
+function parseStoreAddressParts(rawAddress) {
+  const raw = String(rawAddress || "").trim();
+  const parsed = {
+    city: "",
+    street: "",
+    number: "",
+    neighborhood: "",
+    complement: "",
+  };
+
+  if (!raw) return parsed;
+
+  const labeledParts = raw.split("|").map((item) => String(item || "").trim()).filter(Boolean);
+  if (labeledParts.some((item) => item.includes(":"))) {
+    labeledParts.forEach((item) => {
+      const [label, ...rest] = item.split(":");
+      const value = rest.join(":").trim();
+      const normalizedLabel = String(label || "").trim().toLowerCase();
+      if (normalizedLabel === "cidade") parsed.city = value;
+      if (normalizedLabel === "rua") parsed.street = value;
+      if (normalizedLabel === "número" || normalizedLabel === "numero") parsed.number = value;
+      if (normalizedLabel === "bairro") parsed.neighborhood = value;
+      if (normalizedLabel === "complemento") parsed.complement = value;
+    });
+    return parsed;
+  }
+
+  parsed.complement = raw;
+  return parsed;
+}
+
+function buildStoreAddressText() {
+  const parts = [
+    ["Cidade", String(storeAddressCityInputEl?.value || "").trim()],
+    ["Rua", String(storeAddressStreetInputEl?.value || "").trim()],
+    ["Número", String(storeAddressNumberInputEl?.value || "").trim()],
+    ["Bairro", String(storeAddressNeighborhoodInputEl?.value || "").trim()],
+    ["Complemento", String(storeAddressComplementInputEl?.value || "").trim()],
+  ].filter(([, value]) => value);
+
+  return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
 }
 
 function resetProductForm() {
@@ -1024,7 +1164,17 @@ async function loadAgentStatus() {
   renderAgentStatus(result);
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    state.agentSettings = { agent_name: "", company_name: "", mood: "informal" };
+    state.agentSettings = {
+      agent_name: "",
+      company_name: "",
+      mood: "informal",
+      store_name: "",
+      store_description: "",
+      store_cnpj: "",
+      store_address: "",
+      store_payment_methods: [],
+      store_delivery_fees: [],
+    };
     renderAgentSettings();
     return;
   }
@@ -2103,7 +2253,7 @@ function resetAppAfterLogout() {
   state.agents = [];
   state.products = [];
   state.productOrders = [];
-  state.productsTab = "create";
+  state.productsTab = "store-info";
   state.editingProductId = "";
   state.agentSettings = null;
   state.currentView = "chats";
@@ -2112,7 +2262,7 @@ function resetAppAfterLogout() {
   clearChatStateForDisconnected();
   renderHeader();
   resetProductForm();
-  setProductsTab("create");
+  setProductsTab("store-info");
   syncProfilePanel();
   applyConnectedProfileAvatar();
 }
@@ -4269,6 +4419,12 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
         mood: String(agentMoodInputEl.value || "informal").trim(),
         agent_name: String(agentNameInputEl.value || "").trim(),
         company_name: String(companyNameInputEl.value || "").trim(),
+        store_name: String(storeNameInputEl?.value || state.agentSettings?.store_name || "").trim(),
+        store_cnpj: String(storeCnpjInputEl?.value || state.agentSettings?.store_cnpj || "").trim(),
+        store_address: buildStoreAddressText() || String(state.agentSettings?.store_address || "").trim(),
+        store_description: String(storeDescriptionInputEl?.value || state.agentSettings?.store_description || "").trim(),
+        store_payment_methods: readStorePaymentMethods(),
+        store_delivery_fees: readStoreDeliveryFees(),
       }),
     });
     state.agentSettings = result.settings || null;
@@ -4280,9 +4436,70 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
     agentSettingsSaveBtnEl.disabled = false;
   }
 });
+storeInfoFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
+  if (!accountId) {
+    await showAlert("Selecione um número para configurar a loja.");
+    return;
+  }
+
+  storeInfoSaveBtnEl.disabled = true;
+  try {
+    const result = await api("/ai/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        account_id: accountId,
+        mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
+        agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
+        company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),
+        store_name: String(storeNameInputEl.value || "").trim(),
+        store_cnpj: String(storeCnpjInputEl.value || "").trim(),
+        store_address: buildStoreAddressText(),
+        store_description: String(storeDescriptionInputEl.value || "").trim(),
+        store_payment_methods: readStorePaymentMethods(),
+        store_delivery_fees: readStoreDeliveryFees(),
+      }),
+    });
+    state.agentSettings = result.settings || null;
+    renderAgentSettings();
+    await showAlert("Informações da loja salvas com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao salvar as informações da loja.");
+  } finally {
+    storeInfoSaveBtnEl.disabled = false;
+  }
+});
+productsTabStoreInfoEl.addEventListener("click", () => setProductsTab("store-info"));
 productsTabCreateEl.addEventListener("click", () => setProductsTab("create"));
 productsTabListEl.addEventListener("click", () => setProductsTab("list"));
 productsTabOrdersEl.addEventListener("click", () => setProductsTab("orders"));
+storeAddPaymentMethodBtnEl.addEventListener("click", () => {
+  storePaymentMethodsListEl.appendChild(createStorePaymentMethodRow(""));
+});
+storeAddDeliveryFeeBtnEl.addEventListener("click", () => {
+  storeDeliveryFeesListEl.appendChild(createStoreDeliveryFeeRow({}));
+});
+storePaymentMethodsListEl.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-store-remove-row]");
+  if (!button) return;
+  const row = button.closest(".store-repeat-row");
+  if (!row) return;
+  row.remove();
+  if (!storePaymentMethodsListEl.children.length) {
+    storePaymentMethodsListEl.appendChild(createStorePaymentMethodRow(""));
+  }
+});
+storeDeliveryFeesListEl.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-store-remove-row]");
+  if (!button) return;
+  const row = button.closest(".store-repeat-row");
+  if (!row) return;
+  row.remove();
+  if (!storeDeliveryFeesListEl.children.length) {
+    storeDeliveryFeesListEl.appendChild(createStoreDeliveryFeeRow({}));
+  }
+});
 productCancelEditBtnEl.addEventListener("click", () => {
   resetProductForm();
   setProductsTab("list");

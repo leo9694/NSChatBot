@@ -1,0 +1,169 @@
+[
+  {
+    "name": "Loja + pagamento",
+    "reply": "Sim. Aceitamos PIX, cartão de crédito e cartão de débito.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Loja + endere?o",
+    "reply": "Ficamos em Jaciara (MT): Rua Tocantins, 374, Centro — Norte Sul Sementes - Loja Centro.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Entrega + taxa",
+    "reply": "Entrega no Centro: R$ 10,00.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Produto + pagamento",
+    "reply": "Perfeito — vou registrar assim:\n\n- 2x Semente de abobora — R$4.10 un. — Total R$8.20\n- Pagamento: PIX\n\nMe confirma:\n1) Retirada na loja ou entrega?\n2) Nome do responsável para o pedido?\n\nSe for entrega, envie o endereço neste formato:\nCidade:\nRua:\nNúmero:\nBairro:\n\nAssim que confirmar, eu gero o pedido (fica pendente de confirmação interna).",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Produto + entrega incompleta",
+    "reply": "Confirmando 1 Malathion CE 500 — R$45,00. Entrega no Centro (taxa R$10,00). Total estimado: R$55,00.\n\nPreciso só destes dados para gerar o pedido:\n- Nome do responsável:\n- Forma de pagamento (PIX, cartão de crédito, cartão de débito):\n- Endereço para entrega — preencha:\nCidade:\nRua:\nNúmero:\nBairro: Centro\n\nQuando confirmar, eu gero o pedido e ele ficará pendente de confirmação interna.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Pedido completo com entrega",
+    "reply": "Pedido recebido — resumo:\n\nItens:\n- Malathion CE 500 — 1 x R$ 45,00 = R$ 45,00\n\nEntrega:\n- Endereço: Jaciara, Rua Tocantins, 374, Centro\n- Taxa de entrega (Centro): R$ 10,00\n\nPagamento: Cartão\nTotal estimado: R$ 55,00\n\nPedido registrado e ficou pendente de confirmação interna. Volto em breve com a confirmação final.",
+    "shouldReply": true,
+    "shouldCreate": true,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Pedido completo com retirada",
+    "reply": "Perfeito — registrei o pedido com esses dados:\n\nItens:\n- 2x Semente de abobora — R$4,10 (total R$8,20)\n\nRetirada: Loja Centro (retirada na loja)\nPagamento: PIX\nResponsável: Leo Gabriel\n\nPedido registrado internamente e está pendente de confirmação final pela empresa. Aviso aqui assim que confirmarmos.",
+    "shouldReply": true,
+    "shouldCreate": true,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Produto + imagem",
+    "reply": "Estou enviando a foto da Semente de abobora agora.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": true,
+    "products": [
+      "Semente de abobora"
+    ]
+  },
+  {
+    "name": "Todos os produtos com imagem",
+    "reply": "Vou enviar as fotos a seguir dos produtos com imagem.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": true,
+    "products": [
+      "Emenda de cano",
+      "Malathion ce 500",
+      "Semente Agriao",
+      "Semente de abobora"
+    ]
+  },
+  {
+    "name": "Pergunta fora de escopo",
+    "reply": "Desculpe, não tenho acesso a esse tipo de informação geral aqui. Posso ajudar com produtos, pedidos ou suporte da Norte Sul Sementes?",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Loja info n?o cadastrada",
+    "reply": "No momento não tenho o horário de funcionamento cadastrado no sistema.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Duas mensagens seguidas contexto de compra",
+    "reply": "Ótimo — vamos fechar a semente de abóbora e pagamento por PIX. Antes de eu gerar o pedido, só preciso confirmar algumas coisas:\n\n- Quantidade da Semente de abóbora:\n- Retirada na loja (Loja Centro) ou entrega?\n\nSe for entrega, envie o endereço neste formato:\nCidade:\nRua:\nNúmero:\nBairro:\n\n- Nome do responsável pelo pedido:\n\nQuando você confirmar esses dados, eu gero o pedido (ficará pendente de confirmação interna).",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Tr?s mensagens seguidas contexto de entrega",
+    "reply": "Anotei: Malathion ce 500 — R$45,00.\nEntrega no Centro (taxa R$10,00) — total estimado R$55,00.\n\nFalta só o endereço completo e a forma de pagamento. Por favor preencha:\n\nCidade:\nRua:\nNúmero:\nBairro:\n\nForma de pagamento: PIX / Cartão de crédito / Cartão de débito\n\nQuando confirmar esses dados eu gero o pedido (fica pendente de confirmação interna).",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Mensagem citada curta",
+    "reply": "Perfeito — você quer 2x Semente de abóbora (R$4,10 cada). Total R$8,20.\n\nPara eu gerar o pedido, confirma por favor:\n- Nome do responsável:\n- Retirada na loja ou entrega? (se entrega, envie o endereço no formato abaixo)\n  Cidade:\n  Rua:\n  Número:\n  Bairro:\n- Forma de pagamento: PIX / Cartão de crédito / Cartão de débito\n\nDepois que confirmar esses dados eu registro o pedido pendente.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Mensagem citada sobre loja",
+    "reply": "Aceitamos PIX, cartão de crédito e cartão de débito.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Desconto gen?rico",
+    "reply": "No momento não tenho permissão para oferecer desconto em nenhum produto.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Absurdo fora do padr?o",
+    "reply": "Não consigo atender esse pedido como foi feito:\n\n- Quantidade 999999 não é viável — estoque disponível:\n  Emenda de cano: 4\n  Malathion ce 500: 12\n  Semente Agriao: 20\n  Semente de abóbora: 3\n- Frete grátis para o Japão não é possível — não realizamos entregas internacionais.\n  Nossos preços de entrega locais: Centro R$ 10,00 | Bairros próximos R$ 15,00 | Zona rural próxima R$ 25,00\n- Também não posso gerar link de pagamento automático.\n\nSe quiser prosseguir com um pedido viável, me envie:\n- Nome do responsável:\n- Produto e quantidade (dentro do estoque):\n- Retirada ou Entrega (se entrega, envie endereço no formato abaixo):\n  Cidade:\n  Rua:\n  Número:\n  Bairro:\n- Forma de pagamento (PIX / Cartão de crédito / Cartão de débito)",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Agradecimento e pausa",
+    "reply": "Beleza, obrigado. Até mais.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Pergunta mista venda + loja",
+    "reply": "Aceitamos PIX, cartão de crédito e cartão de débito.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  },
+  {
+    "name": "Pergunta sobre CNPJ",
+    "reply": "O CNPJ da loja é 12.345.678/0001-90.",
+    "shouldReply": true,
+    "shouldCreate": false,
+    "sendImages": false,
+    "products": []
+  }
+]

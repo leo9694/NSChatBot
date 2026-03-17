@@ -350,7 +350,10 @@
           <section class="products-body">
             <div class="products-shell">
               <aside class="products-nav">
-                <button id="productsTabCreate" type="button" class="products-nav-item active">
+                <button id="productsTabStoreInfo" type="button" class="products-nav-item active">
+                  <i class="bi bi-shop"></i> Informações da loja
+                </button>
+                <button id="productsTabCreate" type="button" class="products-nav-item">
                   <i class="bi bi-box2-heart-fill"></i> Cadastro de produtos
                 </button>
                 <button id="productsTabList" type="button" class="products-nav-item">
@@ -362,7 +365,91 @@
               </aside>
 
               <div class="products-content">
-                <div id="productsPanelCreate" class="bulk-card products-panel active">
+                <div id="productsPanelStoreInfo" class="bulk-card products-panel active">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Informações da loja</h3>
+                      <p>Esses dados ficam disponíveis para o agente responder dúvidas sobre a sua loja.</p>
+                    </div>
+                  </div>
+
+                  <form id="storeInfoForm" class="new-chat-form products-form store-info-form">
+                    <div class="store-form-section store-form-section-primary">
+                      <div class="store-form-grid">
+                        <label>
+                          Nome da loja
+                          <input id="storeNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
+                        </label>
+                        <label>
+                          CNPJ
+                          <input id="storeCnpjInput" type="text" placeholder="00.000.000/0000-00" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="store-form-section">
+                      <div class="store-form-section-head">
+                        <strong>Endereço da loja</strong>
+                        <span>Preencha cada campo separadamente para o agente responder melhor.</span>
+                      </div>
+                      <div class="store-address-grid">
+                        <label>
+                          Cidade
+                          <input id="storeAddressCityInput" type="text" placeholder="Ex.: Jaciara - MT" />
+                        </label>
+                        <label>
+                          Rua
+                          <input id="storeAddressStreetInput" type="text" placeholder="Ex.: Rua Tocantins" />
+                        </label>
+                        <label>
+                          Número
+                          <input id="storeAddressNumberInput" type="text" placeholder="Ex.: 374" />
+                        </label>
+                        <label>
+                          Bairro
+                          <input id="storeAddressNeighborhoodInput" type="text" placeholder="Ex.: Centro" />
+                        </label>
+                        <label class="store-address-complement">
+                          Complemento
+                          <input id="storeAddressComplementInput" type="text" placeholder="Ex.: Sala 2, próximo à praça" />
+                        </label>
+                      </div>
+                    </div>
+
+                    <label class="product-description-field">
+                      Descrição da loja
+                      <textarea id="storeDescriptionInput" rows="4" placeholder="Descreva a loja, o foco do atendimento e os principais diferenciais."></textarea>
+                    </label>
+
+                    <div class="store-repeat-block">
+                      <div class="store-repeat-head">
+                        <strong>Formas de pagamento aceitas</strong>
+                        <button id="storeAddPaymentMethodBtn" type="button" class="btn-secondary">
+                          <i class="bi bi-plus-lg"></i> Adicionar
+                        </button>
+                      </div>
+                      <div id="storePaymentMethodsList" class="store-repeat-list"></div>
+                    </div>
+
+                    <div class="store-repeat-block">
+                      <div class="store-repeat-head">
+                        <strong>Preços de entrega</strong>
+                        <button id="storeAddDeliveryFeeBtn" type="button" class="btn-secondary">
+                          <i class="bi bi-plus-lg"></i> Adicionar
+                        </button>
+                      </div>
+                      <div id="storeDeliveryFeesList" class="store-repeat-list"></div>
+                    </div>
+
+                    <div class="products-form-actions">
+                      <button id="storeInfoSaveBtn" type="submit" class="btn-primary">
+                        <i class="bi bi-check2-circle"></i> Salvar informações da loja
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div id="productsPanelCreate" class="bulk-card products-panel">
                   <div class="products-create-layout">
                     <form id="productsForm" class="new-chat-form products-form">
                       <div class="agent-card-head products-create-head">
