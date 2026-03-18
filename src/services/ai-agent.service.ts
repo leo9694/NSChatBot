@@ -7,6 +7,7 @@ import {
   updatePendingAiOrder,
   upsertConversationAiMemory,
 } from "../repositories/ai.repository";
+import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { listProductsForAgentDetailedContext } from "../repositories/products.repository";
 import { generateAiSalesReply } from "./openai.service";
 import { loadMediaBufferFromUrl } from "./media.service";
@@ -537,6 +538,21 @@ function isShortAcknowledgeMessage(body: string): boolean {
   return /^(ok|ok bot|beleza|beleza bot|valeu|valeu bot|fechou|fechou bot|blz|blz bot|certo|tudo certo)$/i.test(
     String(body || "").trim(),
   ) || /^(ok|ok bot|beleza|beleza bot|valeu|valeu bot|fechou|fechou bot|blz|blz bot|certo|tudo certo)$/.test(text);
+}
+
+function isStandaloneAgentMention(body: string, agentName?: string | null): boolean {
+  const normalizedBody = normalizeText(body).replace(/[^\p{L}\p{N}\s]/gu, "").trim();
+  const normalizedAgentName = normalizeText(String(agentName || "")).replace(/[^\p{L}\p{N}\s]/gu, "").trim();
+  if (!normalizedBody || !normalizedAgentName) return false;
+
+  return (
+    normalizedBody === normalizedAgentName ||
+    normalizedBody === `ok ${normalizedAgentName}` ||
+    normalizedBody === `beleza ${normalizedAgentName}` ||
+    normalizedBody === `valeu ${normalizedAgentName}` ||
+    normalizedBody === `fechou ${normalizedAgentName}` ||
+    normalizedBody === `blz ${normalizedAgentName}`
+  );
 }
 
 function isGreetingMessage(body: string): boolean {
@@ -1162,6 +1178,7 @@ export async function handleInboundAiAutomation(
 
     const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
     const mood = getAgentMood(accountSettings?.mood);
+    const configuredAgentName = String(accountSettings?.agent_name || "").trim();
 
     const messages = await listConversationMessagesForAi(id, 80);
     if (!messages.length) {
@@ -1183,7 +1200,8 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: false, reason: "no_customer_message_after_queue" };
     }
 
-    const catalog = await listProductsForAgentDetailedContext();
+    const account = context.account_id ? await getWhatsAppAccountById(String(context.account_id || "").trim(), null).catch(() => null) : null;
+    const catalog = await listProductsForAgentDetailedContext(account?.company_id || null);
     const customerTurn = buildCustomerTurnContext(effectiveMessages);
     const lastMessage = customerTurn.turnMessages[customerTurn.turnMessages.length - 1] || effectiveMessages[effectiveMessages.length - 1];
     if (!lastMessage || lastMessage.from_me) {
@@ -1199,7 +1217,11 @@ export async function handleInboundAiAutomation(
       awaitingOrderConfirmation,
     );
 
-    if (isClosingMessage(latestCustomerBody) || isShortAcknowledgeMessage(latestCustomerBody)) {
+    if (
+      isClosingMessage(latestCustomerBody) ||
+      isShortAcknowledgeMessage(latestCustomerBody) ||
+      isStandaloneAgentMention(latestCustomerBody, configuredAgentName)
+    ) {
       const closingReply = buildClosingReply(mood);
       if (shouldSuppressDuplicateReply(id, closingReply)) {
         return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
@@ -1297,7 +1319,11 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: true, reason: "deterministic_store_reply" };
     }
 
-    if (isClosingMessage(lastCustomerTurnBody) || isShortAcknowledgeMessage(lastCustomerTurnBody)) {
+    if (
+      isClosingMessage(lastCustomerTurnBody) ||
+      isShortAcknowledgeMessage(lastCustomerTurnBody) ||
+      isStandaloneAgentMention(lastCustomerTurnBody, configuredAgentName)
+    ) {
       const closingReply = buildClosingReply(mood);
       if (shouldSuppressDuplicateReply(id, closingReply)) {
         return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };

@@ -65,6 +65,7 @@ interface WhatsAppSessionState {
   sessionPath: string;
   sock: ReturnType<typeof makeWASocket> | null;
   started: boolean;
+  allowQrOnCurrentStart: boolean;
   connected: boolean;
   selfJid: string;
   latestQr: string;
@@ -98,6 +99,7 @@ function createSessionState(sessionPath: string): WhatsAppSessionState {
     sessionPath,
     sock: null,
     started: false,
+    allowQrOnCurrentStart: false,
     connected: false,
     selfJid: "",
     latestQr: "",
@@ -576,6 +578,7 @@ async function teardownCurrentSocket(session: WhatsAppSessionState, logout = fal
 
   session.sock = null;
   session.started = false;
+  session.allowQrOnCurrentStart = false;
   session.connected = false;
   session.hasOpenedConnection = false;
   session.selfJid = "";
@@ -854,6 +857,7 @@ export async function startWhatsAppSession(
   force = false,
   options?: {
     sessionPath?: string;
+    allowQr?: boolean;
   },
 ): Promise<void> {
   const nextSessionPath = normalizeSessionPath(options?.sessionPath);
@@ -868,6 +872,7 @@ export async function startWhatsAppSession(
 
   activeSessionPath = nextSessionPath;
   session.started = true;
+  session.allowQrOnCurrentStart = Boolean(options?.allowQr);
   const sessionToken = ++session.activeSessionToken;
 
   const { state, saveCreds } = await useMultiFileAuthState(session.sessionPath);
@@ -1110,6 +1115,14 @@ export async function startWhatsAppSession(
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      if (!session.allowQrOnCurrentStart) {
+        session.latestQr = "";
+        session.latestQrAt = null;
+        session.historySyncMessage = "Esta sessao precisa de novo QR. Clique em Conectar para gerar um novo QR code.";
+        console.log(`Sessao ${session.sessionPath} precisa de QR. Reconexao automatica pausada.`);
+        await teardownCurrentSocket(session, false);
+        return;
+      }
       session.latestQr = qr;
       session.latestQrAt = new Date();
       console.log(`Escaneie o QR abaixo com o WhatsApp (${session.sessionPath}):`);
@@ -1135,11 +1148,27 @@ export async function startWhatsAppSession(
       session.latestQr = "";
       session.latestQrAt = null;
       if (session.selfJid) {
-        await upsertWhatsAppAccount({
-          waJid: session.selfJid,
-          displayName: currentAccountName(session) || null,
-          sessionPath: session.sessionPath,
-        }).catch(() => undefined);
+        try {
+          await upsertWhatsAppAccount({
+            waJid: session.selfJid,
+            displayName: currentAccountName(session) || null,
+            sessionPath: session.sessionPath,
+          });
+        } catch (error: any) {
+          if (error?.code === "WHATSAPP_ACCOUNT_ASSIGNED_TO_OTHER_COMPANY") {
+            session.connected = false;
+            session.started = false;
+            session.historySyncProgress = 0;
+            session.historySyncImportedCount = 0;
+            session.historySyncMessage = error.companyName
+              ? `Este numero ja esta vinculado a outra empresa: ${error.companyName}. Remova-o da empresa atual antes de conectar aqui.`
+              : "Este numero ja esta vinculado a outra empresa. Remova-o da empresa atual antes de conectar aqui.";
+            await disconnectWhatsAppSession(session.sessionPath).catch(() => undefined);
+            console.warn(`Numero ${session.selfJid} bloqueado por estar vinculado a outra empresa.`);
+            return;
+          }
+          throw error;
+        }
         await ensureHistoryBaselineOnConnect(session).catch((error) => {
           console.error("Erro ao registrar baseline de historico:", error);
         });
@@ -1212,18 +1241,17 @@ export async function startKnownWhatsAppSessions(): Promise<void> {
   const sessionPaths = new Set<string>();
 
   for (const account of accounts) {
+    if (String(account.wa_jid || "").startsWith("pending:")) {
+      continue;
+    }
     const sessionPath = String(account.session_path || "").trim();
     if (!sessionPath || sessionPaths.has(sessionPath)) {
       continue;
     }
     sessionPaths.add(sessionPath);
-    await startWhatsAppSession(false, { sessionPath }).catch((error) => {
+    await startWhatsAppSession(false, { sessionPath, allowQr: false }).catch((error) => {
       console.error(`Falha ao iniciar sessao WhatsApp ${sessionPath}:`, error);
     });
-  }
-
-  if (sessionPaths.size === 0) {
-    await startWhatsAppSession(false, { sessionPath: env.whatsappSessionPath });
   }
 }
 
@@ -1388,7 +1416,7 @@ export async function requestWhatsAppConnect(sessionPath?: string): Promise<void
   session.historySyncMessage =
     "Leia o novo QR code. O app vai mostrar apenas as conversas ja salvas no banco e as novas mensagens recebidas daqui para frente.";
   await resetAuthSessionFiles(session.sessionPath);
-  await startWhatsAppSession(true, { sessionPath: session.sessionPath });
+  await startWhatsAppSession(true, { sessionPath: session.sessionPath, allowQr: true });
 }
 
 export async function requestWhatsAppHistorySync(sessionPath?: string): Promise<void> {
@@ -1401,5 +1429,5 @@ export async function requestWhatsAppHistorySync(sessionPath?: string): Promise<
   session.reconnectWindowStartedAt = 0;
   session.hasOpenedConnection = false;
   await resetAuthSessionFiles(session.sessionPath);
-  await startWhatsAppSession(true, { sessionPath: session.sessionPath });
+  await startWhatsAppSession(true, { sessionPath: session.sessionPath, allowQr: true });
 }

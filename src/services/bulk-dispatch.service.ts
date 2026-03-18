@@ -12,6 +12,7 @@ interface ContactInput {
 
 interface CreateBulkJobInput {
   userId?: string | null;
+  companyId?: string | null;
   contacts: ContactInput[];
   message: string;
   messages?: string[];
@@ -355,7 +356,7 @@ export async function createBulkDispatchJob(input: CreateBulkJobInput): Promise<
     throw new Error("Intervalo maximo permitido: 3600 segundos.");
   }
 
-  const accountContext = await requireActiveWhatsAppAccount(input.userId);
+  const accountContext = await requireActiveWhatsAppAccount(input.userId, input.companyId || null);
   const connected = accountContext.effective!;
 
   const account = await upsertWhatsAppAccount({
@@ -449,7 +450,7 @@ export async function createBulkDispatchJob(input: CreateBulkJobInput): Promise<
   }
 }
 
-export async function listBulkDispatchJobs(limit: number): Promise<any[]> {
+export async function listBulkDispatchJobs(limit: number, companyId?: string | null): Promise<any[]> {
   await ensureBulkDispatchSchema();
   const result = await pool.query(
     `
@@ -469,32 +470,41 @@ export async function listBulkDispatchJobs(limit: number): Promise<any[]> {
       j.created_at,
       j.updated_at
     FROM bulk_dispatch_jobs j
+    LEFT JOIN whatsapp_accounts wa ON wa.id = j.account_id
+    WHERE ($2::uuid IS NULL OR wa.company_id = $2)
     ORDER BY j.created_at DESC
     LIMIT $1
     `,
-    [limit],
+    [limit, companyId || null],
   );
   return result.rows;
 }
 
-export async function getBulkDispatchJob(jobId: string): Promise<{ job: any; items: any[] } | null> {
+export async function getBulkDispatchJob(jobId: string, companyId?: string | null): Promise<{ job: any; items: any[] } | null> {
   await ensureBulkDispatchSchema();
   const jobResult = await pool.query(
     `
     SELECT
-      id,
-      account_wa_jid,
-      message_text,
-      interval_seconds,
-      COALESCE(interval_min_seconds, interval_seconds) AS interval_min_seconds,
-      COALESCE(interval_max_seconds, interval_seconds) AS interval_max_seconds,
-      status,
-      total_count,
-      sent_count, failed_count, started_at, finished_at, created_at, updated_at
-    FROM bulk_dispatch_jobs
-    WHERE id = $1
+      j.id,
+      j.account_wa_jid,
+      j.message_text,
+      j.interval_seconds,
+      COALESCE(j.interval_min_seconds, j.interval_seconds) AS interval_min_seconds,
+      COALESCE(j.interval_max_seconds, j.interval_seconds) AS interval_max_seconds,
+      j.status,
+      j.total_count,
+      j.sent_count,
+      j.failed_count,
+      j.started_at,
+      j.finished_at,
+      j.created_at,
+      j.updated_at
+    FROM bulk_dispatch_jobs j
+    LEFT JOIN whatsapp_accounts wa ON wa.id = j.account_id
+    WHERE j.id = $1
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
     `,
-    [jobId],
+    [jobId, companyId || null],
   );
   if (jobResult.rows.length === 0) {
     return null;
@@ -513,21 +523,39 @@ export async function getBulkDispatchJob(jobId: string): Promise<{ job: any; ite
   return { job: jobResult.rows[0], items: itemsResult.rows };
 }
 
-export async function stopBulkDispatchJob(jobId: string): Promise<void> {
+export async function stopBulkDispatchJob(jobId: string, companyId?: string | null): Promise<void> {
   await ensureBulkDispatchSchema();
+  if (companyId) {
+    const allowed = await pool.query(
+      `
+      SELECT 1
+      FROM bulk_dispatch_jobs j
+      LEFT JOIN whatsapp_accounts wa ON wa.id = j.account_id
+      WHERE j.id = $1
+        AND wa.company_id = $2
+      LIMIT 1
+      `,
+      [jobId, companyId],
+    );
+    if (!allowed.rows.length) {
+      throw new Error("DISPATCH_NOT_FOUND");
+    }
+  }
   await updateJobStatus(jobId, "stopped", true);
 }
 
-export async function deleteBulkDispatchJob(jobId: string): Promise<boolean> {
+export async function deleteBulkDispatchJob(jobId: string, companyId?: string | null): Promise<boolean> {
   await ensureBulkDispatchSchema();
   const existing = await pool.query<{ status: string }>(
     `
-    SELECT status
-    FROM bulk_dispatch_jobs
-    WHERE id = $1
+    SELECT j.status
+    FROM bulk_dispatch_jobs j
+    LEFT JOIN whatsapp_accounts wa ON wa.id = j.account_id
+    WHERE j.id = $1
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
     LIMIT 1
     `,
-    [jobId],
+    [jobId, companyId || null],
   );
   if (!existing.rows.length) {
     return false;

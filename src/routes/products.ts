@@ -40,7 +40,8 @@ type AuthRequest = Express.Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
   };
 };
 
@@ -64,8 +65,12 @@ function parseDiscountInput(body: any, basePrice: number) {
   return { discountEnabled: true, discountPrice: Number(discountPrice) };
 }
 
-router.get("/", async (_req, res) => {
-  const items = await listProducts();
+router.get("/", async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+  const items = await listProducts(authReq.authUser?.company_id || null);
   return res.status(200).json({ items });
 });
 
@@ -94,7 +99,11 @@ router.post("/", upload.single("image"), async (req, res) => {
 
     const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
+    if (!authReq.authUser?.company_id) {
+      return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+    }
     const product = await createProduct({
+      companyId: authReq.authUser.company_id,
       name,
       type,
       description,
@@ -115,6 +124,7 @@ router.post("/", upload.single("image"), async (req, res) => {
 });
 
 router.put("/:productId", upload.single("image"), async (req, res) => {
+  const authReq = req as AuthRequest;
   const productId = String(req.params.productId || "").trim();
   try {
     await ensureProductsSchema();
@@ -140,8 +150,12 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
 
     const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
+    if (!authReq.authUser?.company_id) {
+      return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+    }
     const product = await updateProduct({
       id: productId,
+      companyId: authReq.authUser.company_id,
       name,
       type,
       description,

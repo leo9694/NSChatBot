@@ -13,7 +13,8 @@ type AuthRequest = Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
   };
@@ -30,6 +31,7 @@ router.post("/jobs", async (req, res) => {
 
     const created = await createBulkDispatchJob({
       userId: authReq.authUser?.id || null,
+      companyId: authReq.authUser?.company_id || null,
       message,
       messages,
       intervalMinSeconds,
@@ -50,13 +52,15 @@ router.post("/jobs", async (req, res) => {
 });
 
 router.get("/jobs", async (req, res) => {
+  const authReq = req as AuthRequest;
   const limit = Math.max(1, Math.min(Number(req.query.limit || 20), 100));
-  const jobs = await listBulkDispatchJobs(limit);
+  const jobs = await listBulkDispatchJobs(limit, authReq.authUser?.company_id || null);
   return res.status(200).json({ items: jobs });
 });
 
 router.get("/jobs/:jobId", async (req, res) => {
-  const data = await getBulkDispatchJob(req.params.jobId);
+  const authReq = req as AuthRequest;
+  const data = await getBulkDispatchJob(req.params.jobId, authReq.authUser?.company_id || null);
   if (!data) {
     return res.status(404).json({ error: "Disparo nao encontrado." });
   }
@@ -64,13 +68,22 @@ router.get("/jobs/:jobId", async (req, res) => {
 });
 
 router.patch("/jobs/:jobId/stop", async (req, res) => {
-  await stopBulkDispatchJob(req.params.jobId);
-  return res.status(200).json({ status: "ok" });
+  const authReq = req as AuthRequest;
+  try {
+    await stopBulkDispatchJob(req.params.jobId, authReq.authUser?.company_id || null);
+    return res.status(200).json({ status: "ok" });
+  } catch (error) {
+    if (error instanceof Error && error.message === "DISPATCH_NOT_FOUND") {
+      return res.status(404).json({ error: "Disparo nao encontrado." });
+    }
+    throw error;
+  }
 });
 
 router.delete("/jobs/:jobId", async (req, res) => {
+  const authReq = req as AuthRequest;
   try {
-    const ok = await deleteBulkDispatchJob(req.params.jobId);
+    const ok = await deleteBulkDispatchJob(req.params.jobId, authReq.authUser?.company_id || null);
     if (!ok) {
       return res.status(404).json({ error: "Disparo nao encontrado." });
     }

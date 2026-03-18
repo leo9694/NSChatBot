@@ -1,13 +1,25 @@
-import { randomBytes, createHash } from "node:crypto";
+﻿import { randomBytes, createHash } from "node:crypto";
 import { pool } from "../db/pool";
 
-export type AppUserRole = "administrador" | "operador";
+export type AppUserRole = "ceo" | "administrador" | "operador";
+
+export interface AppCompany {
+  id: string;
+  name: string;
+  cnpj: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface AppUser {
   id: string;
   name: string;
   username: string;
   role: AppUserRole;
+  company_id?: string | null;
+  company_name?: string | null;
+  company_cnpj?: string | null;
   sector_id?: string | null;
   sector_name?: string | null;
   is_active: boolean;
@@ -17,6 +29,7 @@ export interface AppUser {
 
 export interface AppSector {
   id: string;
+  company_id: string;
   name: string;
   created_at: string;
 }
@@ -24,31 +37,128 @@ export interface AppSector {
 export interface SessionUser {
   sessionId: string;
   tokenHash: string;
-  user: Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name">;
+  user: Pick<
+    AppUser,
+    "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"
+  >;
 }
 
 let ensureAuthSchemaPromise: Promise<void> | null = null;
+
+async function getDefaultCompanyId(): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `
+    SELECT id
+    FROM app_companies
+    WHERE lower(name) IN (lower('Norte Sul Sementes'), lower('Empresa Principal'))
+    ORDER BY CASE
+      WHEN lower(name) = lower('Norte Sul Sementes') THEN 0
+      ELSE 1
+    END
+    LIMIT 1
+    `,
+  );
+  if (!result.rows.length) {
+    throw new Error("DEFAULT_COMPANY_NOT_FOUND");
+  }
+  return result.rows[0].id;
+}
+
+async function migrateLegacyDefaultCompanyData(targetCompanyId: string): Promise<void> {
+  const legacyResult = await pool.query<{ id: string }>(
+    `SELECT id FROM app_companies WHERE lower(name) = lower('Empresa Principal') LIMIT 1`,
+  );
+  const legacyCompanyId = legacyResult.rows[0]?.id || "";
+  if (!legacyCompanyId || legacyCompanyId === targetCompanyId) {
+    return;
+  }
+
+  const legacySectors = await pool.query<{ id: string; name: string }>(
+    `SELECT id, name FROM app_sectors WHERE company_id = $1 ORDER BY created_at ASC`,
+    [legacyCompanyId],
+  );
+
+  const sectorMap = new Map<string, string>();
+  for (const sector of legacySectors.rows) {
+    await pool.query(
+      `
+      INSERT INTO app_sectors (company_id, name)
+      VALUES ($1, $2)
+      ON CONFLICT DO NOTHING
+      `,
+      [targetCompanyId, sector.name],
+    );
+
+    const targetSector = await pool.query<{ id: string }>(
+      `
+      SELECT id
+      FROM app_sectors
+      WHERE company_id = $1
+        AND lower(name) = lower($2)
+      LIMIT 1
+      `,
+      [targetCompanyId, sector.name],
+    );
+    if (targetSector.rows[0]?.id) {
+      sectorMap.set(sector.id, targetSector.rows[0].id);
+    }
+  }
+
+  for (const [legacySectorId, targetSectorId] of sectorMap.entries()) {
+    await pool.query(
+      `
+      UPDATE app_users
+      SET
+        company_id = $1,
+        sector_id = $2,
+        updated_at = NOW()
+      WHERE company_id = $3
+        AND sector_id = $4
+      `,
+      [targetCompanyId, targetSectorId, legacyCompanyId, legacySectorId],
+    );
+  }
+
+  await pool.query(
+    `
+    UPDATE app_users
+    SET
+      company_id = $1,
+      updated_at = NOW()
+    WHERE company_id = $2
+    `,
+    [targetCompanyId, legacyCompanyId],
+  );
+
+  await pool.query(`UPDATE whatsapp_accounts SET company_id = $1 WHERE company_id = $2`, [targetCompanyId, legacyCompanyId]);
+  await pool.query(`UPDATE products SET company_id = $1 WHERE company_id = $2`, [targetCompanyId, legacyCompanyId]).catch(() => undefined);
+  await pool.query(`DELETE FROM app_sectors WHERE company_id = $1`, [legacyCompanyId]);
+
+  const remainingRefs = await pool.query<{ total: string }>(
+    `
+    SELECT (
+      (SELECT COUNT(*) FROM app_users WHERE company_id = $1)
+      + (SELECT COUNT(*) FROM app_sectors WHERE company_id = $1)
+      + (SELECT COUNT(*) FROM whatsapp_accounts WHERE company_id = $1)
+      + COALESCE((SELECT COUNT(*) FROM products WHERE company_id = $1), 0)
+    )::text AS total
+    `,
+    [legacyCompanyId],
+  ).catch(() => ({ rows: [{ total: "1" }] }));
+
+  if (Number(remainingRefs.rows[0]?.total || 0) === 0) {
+    await pool.query(`DELETE FROM app_companies WHERE id = $1`, [legacyCompanyId]).catch(() => undefined);
+  }
+}
 
 export async function ensureAuthSchema(): Promise<void> {
   if (!ensureAuthSchemaPromise) {
     ensureAuthSchemaPromise = (async () => {
       await pool.query(`
-        CREATE TABLE IF NOT EXISTS app_sectors (
+        CREATE TABLE IF NOT EXISTS app_companies (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          name VARCHAR(120) NOT NULL UNIQUE,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS app_users (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          name VARCHAR(160) NOT NULL,
-          username VARCHAR(80) NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL,
-          role VARCHAR(30) NOT NULL DEFAULT 'operador' CHECK (role IN ('administrador', 'operador')),
-          sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL,
+          name VARCHAR(180) NOT NULL,
+          cnpj VARCHAR(40),
           is_active BOOLEAN NOT NULL DEFAULT true,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -56,9 +166,62 @@ export async function ensureAuthSchema(): Promise<void> {
       `);
 
       await pool.query(`
-        ALTER TABLE app_users
-        ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_app_companies_name ON app_companies(lower(name));
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_app_companies_cnpj ON app_companies(cnpj) WHERE cnpj IS NOT NULL AND cnpj <> '';
       `);
+
+      await pool.query(`
+        INSERT INTO app_companies (name)
+        VALUES ('Norte Sul Sementes')
+        ON CONFLICT DO NOTHING
+      `);
+      await pool.query(`
+        UPDATE app_companies
+        SET
+          name = 'Norte Sul Sementes',
+          updated_at = NOW()
+        WHERE lower(name) = lower('Empresa Principal')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app_companies existing
+            WHERE existing.id <> app_companies.id
+              AND lower(existing.name) = lower('Norte Sul Sementes')
+          )
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS app_sectors (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE,
+          name VARCHAR(120) NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await pool.query(`ALTER TABLE app_sectors ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE`);
+      await pool.query(`ALTER TABLE app_sectors DROP CONSTRAINT IF EXISTS app_sectors_name_key`);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS app_users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE,
+          name VARCHAR(160) NOT NULL,
+          username VARCHAR(80) NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          role VARCHAR(30) NOT NULL DEFAULT 'operador',
+          sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE`);
+      await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check`);
+      await pool.query(`ALTER TABLE app_users ADD CONSTRAINT app_users_role_check CHECK (role IN ('ceo', 'administrador', 'operador')) NOT VALID`);
+      await pool.query(`ALTER TABLE app_users VALIDATE CONSTRAINT app_users_role_check`);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS app_user_sessions (
@@ -75,7 +238,6 @@ export async function ensureAuthSchema(): Promise<void> {
         )
       `);
 
-      // Compatibilidade com versoes antigas que limitavam 1 sessao por usuario.
       await pool.query(`
         ALTER TABLE app_user_sessions DROP CONSTRAINT IF EXISTS app_user_sessions_user_id_key;
         ALTER TABLE app_user_sessions DROP CONSTRAINT IF EXISTS uq_app_user_sessions_user_id;
@@ -83,36 +245,66 @@ export async function ensureAuthSchema(): Promise<void> {
         DROP INDEX IF EXISTS uq_app_user_sessions_user_id;
       `);
 
+      const defaultCompanyId = await getDefaultCompanyId();
+      await migrateLegacyDefaultCompanyData(defaultCompanyId);
+
+      await pool.query(`UPDATE app_sectors SET company_id = $1 WHERE company_id IS NULL`, [defaultCompanyId]);
+      await pool.query(`UPDATE app_users SET company_id = $1 WHERE company_id IS NULL`, [defaultCompanyId]);
+
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_app_sectors_company_name
+        ON app_sectors(company_id, lower(name))
+      `);
       await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_app_users_username ON app_users(lower(username));
         CREATE INDEX IF NOT EXISTS idx_app_users_sector_id ON app_users(sector_id);
+        CREATE INDEX IF NOT EXISTS idx_app_users_company_id ON app_users(company_id);
+        CREATE INDEX IF NOT EXISTS idx_app_sectors_company_id ON app_sectors(company_id);
         CREATE INDEX IF NOT EXISTS idx_app_sectors_name ON app_sectors(lower(name));
         CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
       `);
 
-      await pool.query(`
-        INSERT INTO app_sectors (name)
-        VALUES ('Administrativo')
-        ON CONFLICT (name) DO NOTHING
-      `);
+      await pool.query(
+        `
+        INSERT INTO app_sectors (company_id, name)
+        VALUES ($1, 'Administrativo')
+        ON CONFLICT (company_id, lower(name)) DO NOTHING
+        `,
+        [defaultCompanyId],
+      ).catch(async () => {
+        await pool.query(
+          `
+          INSERT INTO app_sectors (company_id, name)
+          SELECT $1, 'Administrativo'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM app_sectors WHERE company_id = $1 AND lower(name) = lower('Administrativo')
+          )
+          `,
+          [defaultCompanyId],
+        );
+      });
 
       await pool.query(`
-        INSERT INTO app_users (name, username, password_hash, role, sector_id)
-        SELECT 'Leonardo', 'leonardo', crypt('123456', gen_salt('bf')), 'administrador', s.id
+        INSERT INTO app_users (company_id, name, username, password_hash, role, sector_id)
+        SELECT $1, 'Leonardo', 'leonardo', crypt('123456', gen_salt('bf')), 'ceo', s.id
         FROM app_sectors s
-        WHERE s.name = 'Administrativo'
+        WHERE s.company_id = $1
+          AND lower(s.name) = lower('Administrativo')
         ON CONFLICT (username) DO NOTHING
-      `);
+      `, [defaultCompanyId]);
 
       await pool.query(`
         UPDATE app_users u
-        SET sector_id = s.id, updated_at = NOW()
+        SET company_id = $1,
+            role = 'ceo',
+            sector_id = s.id,
+            updated_at = NOW()
         FROM app_sectors s
         WHERE lower(u.username) = 'leonardo'
-          AND s.name = 'Administrativo'
-          AND u.sector_id IS NULL
-      `);
+          AND s.company_id = $1
+          AND lower(s.name) = lower('Administrativo')
+      `, [defaultCompanyId]);
     })().catch((error) => {
       ensureAuthSchemaPromise = null;
       throw error;
@@ -129,14 +321,20 @@ function hashSessionToken(token: string): string {
 export async function authenticateUser(
   username: string,
   password: string,
-): Promise<Pick<AppUser, "id" | "name" | "username" | "role"> | null> {
+): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"> | null> {
   await ensureAuthSchema();
 
-  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name">>(
+  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name">>(
     `
-    SELECT u.id, u.name, u.username, u.role, u.sector_id, s.name AS sector_name
+    SELECT u.id, u.name, u.username, u.role,
+           u.company_id,
+           c.name AS company_name,
+           c.cnpj AS company_cnpj,
+           u.sector_id,
+           s.name AS sector_name
     FROM app_users u
     LEFT JOIN app_sectors s ON s.id = u.sector_id
+    LEFT JOIN app_companies c ON c.id = u.company_id
     WHERE lower(u.username) = lower($1)
       AND u.is_active = true
       AND u.password_hash = crypt($2, u.password_hash)
@@ -185,6 +383,9 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
     name: string;
     username: string;
     role: AppUserRole;
+    company_id: string | null;
+    company_name: string | null;
+    company_cnpj: string | null;
     sector_id: string | null;
     sector_name: string | null;
   }>(
@@ -196,11 +397,15 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
       u.name,
       u.username,
       u.role,
+      u.company_id,
+      c.name AS company_name,
+      c.cnpj AS company_cnpj,
       u.sector_id,
       sec.name AS sector_name
     FROM app_user_sessions s
     JOIN app_users u ON u.id = s.user_id
     LEFT JOIN app_sectors sec ON sec.id = u.sector_id
+    LEFT JOIN app_companies c ON c.id = u.company_id
     WHERE s.token_hash = $1
       AND s.revoked_at IS NULL
       AND s.expires_at > NOW()
@@ -233,6 +438,9 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
       name: row.name,
       username: row.username,
       role: row.role,
+      company_id: row.company_id,
+      company_name: row.company_name,
+      company_cnpj: row.company_cnpj,
       sector_id: row.sector_id,
       sector_name: row.sector_name,
     },
@@ -255,117 +463,145 @@ export async function revokeSessionByToken(token: string): Promise<void> {
   );
 }
 
-export async function listUsers(): Promise<Array<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name" | "is_active" | "created_at">>> {
+export async function listUsers(companyId: string): Promise<Array<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>> {
   await ensureAuthSchema();
 
-  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name" | "is_active" | "created_at">>(
+  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>(
     `
     SELECT
       u.id,
       u.name,
       u.username,
       u.role,
+      u.company_id,
+      c.name AS company_name,
+      c.cnpj AS company_cnpj,
       u.sector_id,
       s.name AS sector_name,
       u.is_active,
       u.created_at
     FROM app_users u
     LEFT JOIN app_sectors s ON s.id = u.sector_id
+    LEFT JOIN app_companies c ON c.id = u.company_id
     WHERE u.is_active = true
+      AND u.company_id = $1
     ORDER BY u.created_at DESC
     `,
+    [companyId],
   );
 
   return result.rows;
 }
 
 export async function createUser(input: {
+  companyId: string;
   name: string;
   username: string;
   password: string;
   role: AppUserRole;
   sectorId: string;
-}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name" | "is_active" | "created_at">> {
+}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">> {
   await ensureAuthSchema();
 
-  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name" | "is_active" | "created_at">>(
+  const sectorCheck = await pool.query<{ id: string }>(`SELECT id FROM app_sectors WHERE id = $1 AND company_id = $2 LIMIT 1`, [input.sectorId, input.companyId]);
+  if (!sectorCheck.rows.length) {
+    const err: any = new Error("SECTOR_NOT_IN_COMPANY");
+    err.code = 'SECTOR_NOT_IN_COMPANY';
+    throw err;
+  }
+
+  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "sector_id" | "is_active" | "created_at">>(
     `
-    INSERT INTO app_users (name, username, password_hash, role, sector_id)
-    VALUES ($1, lower($2), crypt($3, gen_salt('bf')), $4, $5)
-    RETURNING id, name, username, role, sector_id, is_active, created_at
+    INSERT INTO app_users (company_id, name, username, password_hash, role, sector_id)
+    VALUES ($1, $2, lower($3), crypt($4, gen_salt('bf')), $5, $6)
+    RETURNING id, name, username, role, company_id, sector_id, is_active, created_at
     `,
-    [input.name, input.username, input.password, input.role, input.sectorId],
+    [input.companyId, input.name, input.username, input.password, input.role, input.sectorId],
   );
 
   const user = result.rows[0];
-  const sector = await pool.query<{ name: string }>(`SELECT name FROM app_sectors WHERE id = $1`, [user.sector_id]);
-  return {
-    ...user,
-    sector_name: sector.rows[0]?.name || null,
-  };
+  const meta = await pool.query<{ sector_name: string | null; company_name: string | null; company_cnpj: string | null }>(
+    `
+    SELECT s.name AS sector_name, c.name AS company_name, c.cnpj AS company_cnpj
+    FROM app_companies c
+    LEFT JOIN app_sectors s ON s.id = $1
+    WHERE c.id = $2
+    LIMIT 1
+    `,
+    [user.sector_id, user.company_id],
+  );
+
+  return { ...user, sector_name: meta.rows[0]?.sector_name || null, company_name: meta.rows[0]?.company_name || null, company_cnpj: meta.rows[0]?.company_cnpj || null };
 }
 
 export async function updateUser(input: {
   id: string;
+  companyId: string;
   name: string;
   username: string;
   role: AppUserRole;
   sectorId: string;
   password?: string;
-}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "sector_name" | "is_active" | "created_at"> | null> {
+}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at"> | null> {
   await ensureAuthSchema();
 
-  if (input.password && input.password.trim()) {
-    const withPass = await pool.query<
-      Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "is_active" | "created_at">
-    >(
-      `
-      UPDATE app_users
-      SET
-        name = $2,
-        username = lower($3),
-        role = $4,
-        sector_id = $5,
-        password_hash = crypt($6, gen_salt('bf')),
-        updated_at = NOW()
-      WHERE id = $1
-        AND is_active = true
-      RETURNING id, name, username, role, sector_id, is_active, created_at
-      `,
-      [input.id, input.name, input.username, input.role, input.sectorId, input.password],
-    );
-
-    if (!withPass.rows.length) return null;
-    const user = withPass.rows[0];
-    const sector = await pool.query<{ name: string }>(`SELECT name FROM app_sectors WHERE id = $1`, [user.sector_id]);
-    return { ...user, sector_name: sector.rows[0]?.name || null };
+  const sectorCheck = await pool.query<{ id: string }>(`SELECT id FROM app_sectors WHERE id = $1 AND company_id = $2 LIMIT 1`, [input.sectorId, input.companyId]);
+  if (!sectorCheck.rows.length) {
+    const err: any = new Error("SECTOR_NOT_IN_COMPANY");
+    err.code = 'SECTOR_NOT_IN_COMPANY';
+    throw err;
   }
 
-  const withoutPass = await pool.query<
-    Pick<AppUser, "id" | "name" | "username" | "role" | "sector_id" | "is_active" | "created_at">
-  >(
-    `
-    UPDATE app_users
-    SET
-      name = $2,
-      username = lower($3),
-      role = $4,
-      sector_id = $5,
-      updated_at = NOW()
-    WHERE id = $1
-      AND is_active = true
-    RETURNING id, name, username, role, sector_id, is_active, created_at
-    `,
-    [input.id, input.name, input.username, input.role, input.sectorId],
-  );
+  const query = input.password && input.password.trim()
+    ? {
+        sql: `
+          UPDATE app_users
+          SET name = $3,
+              username = lower($4),
+              role = $5,
+              sector_id = $6,
+              password_hash = crypt($7, gen_salt('bf')),
+              updated_at = NOW()
+          WHERE id = $1
+            AND company_id = $2
+            AND is_active = true
+          RETURNING id, name, username, role, company_id, sector_id, is_active, created_at
+        `,
+        params: [input.id, input.companyId, input.name, input.username, input.role, input.sectorId, input.password],
+      }
+    : {
+        sql: `
+          UPDATE app_users
+          SET name = $3,
+              username = lower($4),
+              role = $5,
+              sector_id = $6,
+              updated_at = NOW()
+          WHERE id = $1
+            AND company_id = $2
+            AND is_active = true
+          RETURNING id, name, username, role, company_id, sector_id, is_active, created_at
+        `,
+        params: [input.id, input.companyId, input.name, input.username, input.role, input.sectorId],
+      };
 
-  if (!withoutPass.rows.length) return null;
-  const user = withoutPass.rows[0];
-  const sector = await pool.query<{ name: string }>(`SELECT name FROM app_sectors WHERE id = $1`, [user.sector_id]);
-  return { ...user, sector_name: sector.rows[0]?.name || null };
+  const result = await pool.query<any>(query.sql, query.params);
+  if (!result.rows.length) return null;
+  const user = result.rows[0];
+  const meta = await pool.query<{ sector_name: string | null; company_name: string | null; company_cnpj: string | null }>(
+    `
+    SELECT s.name AS sector_name, c.name AS company_name, c.cnpj AS company_cnpj
+    FROM app_companies c
+    LEFT JOIN app_sectors s ON s.id = $1
+    WHERE c.id = $2
+    LIMIT 1
+    `,
+    [user.sector_id, user.company_id],
+  );
+  return { ...user, sector_name: meta.rows[0]?.sector_name || null, company_name: meta.rows[0]?.company_name || null, company_cnpj: meta.rows[0]?.company_cnpj || null };
 }
 
-export async function deactivateUser(userId: string): Promise<boolean> {
+export async function deactivateUser(userId: string, companyId: string): Promise<boolean> {
   await ensureAuthSchema();
 
   const result = await pool.query(
@@ -373,9 +609,10 @@ export async function deactivateUser(userId: string): Promise<boolean> {
     UPDATE app_users
     SET is_active = false, updated_at = NOW()
     WHERE id = $1
+      AND company_id = $2
       AND is_active = true
     `,
-    [userId],
+    [userId, companyId],
   );
 
   if (!result.rowCount) return false;
@@ -393,27 +630,105 @@ export async function deactivateUser(userId: string): Promise<boolean> {
   return true;
 }
 
-export async function listSectors(): Promise<AppSector[]> {
+export async function listSectors(companyId: string): Promise<AppSector[]> {
   await ensureAuthSchema();
   const result = await pool.query<AppSector>(
     `
-    SELECT id, name, created_at
+    SELECT id, company_id, name, created_at
     FROM app_sectors
+    WHERE company_id = $1
     ORDER BY name ASC
+    `,
+    [companyId],
+  );
+  return result.rows;
+}
+
+export async function createSector(name: string, companyId: string): Promise<AppSector> {
+  await ensureAuthSchema();
+  const result = await pool.query<AppSector>(
+    `
+    INSERT INTO app_sectors (company_id, name)
+    VALUES ($1, $2)
+    RETURNING id, company_id, name, created_at
+    `,
+    [companyId, name],
+  );
+  return result.rows[0];
+}
+
+export async function listCompanies(): Promise<AppCompany[]> {
+  await ensureAuthSchema();
+  const result = await pool.query<AppCompany>(
+    `
+    SELECT id, name, cnpj, is_active, created_at::text, updated_at::text
+    FROM app_companies
+    WHERE is_active = true
+    ORDER BY created_at DESC, name ASC
     `,
   );
   return result.rows;
 }
 
-export async function createSector(name: string): Promise<AppSector> {
+export async function createCompanyWithAdmin(input: {
+  companyName: string;
+  companyCnpj?: string | null;
+  adminName: string;
+  adminUsername: string;
+  adminPassword: string;
+}): Promise<{
+  company: AppCompany;
+  adminUser: Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">;
+}> {
   await ensureAuthSchema();
-  const result = await pool.query<AppSector>(
-    `
-    INSERT INTO app_sectors (name)
-    VALUES ($1)
-    RETURNING id, name, created_at
-    `,
-    [name],
-  );
-  return result.rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const companyResult = await client.query<AppCompany>(
+      `
+      INSERT INTO app_companies (name, cnpj)
+      VALUES ($1, $2)
+      RETURNING id, name, cnpj, is_active, created_at::text, updated_at::text
+      `,
+      [input.companyName, input.companyCnpj || null],
+    );
+    const company = companyResult.rows[0];
+
+    const sectorResult = await client.query<AppSector>(
+      `
+      INSERT INTO app_sectors (company_id, name)
+      VALUES ($1, 'Administrativo')
+      RETURNING id, company_id, name, created_at
+      `,
+      [company.id],
+    );
+    const sector = sectorResult.rows[0];
+
+    const userResult = await client.query<any>(
+      `
+      INSERT INTO app_users (company_id, name, username, password_hash, role, sector_id)
+      VALUES ($1, $2, lower($3), crypt($4, gen_salt('bf')), 'administrador', $5)
+      RETURNING id, name, username, role, company_id, sector_id, is_active, created_at
+      `,
+      [company.id, input.adminName, input.adminUsername, input.adminPassword, sector.id],
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      company,
+      adminUser: {
+        ...userResult.rows[0],
+        company_name: company.name,
+        company_cnpj: company.cnpj,
+        sector_name: sector.name,
+      },
+    };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }

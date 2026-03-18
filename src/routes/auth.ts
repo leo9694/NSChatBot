@@ -1,11 +1,13 @@
 import { Router } from "express";
 import {
   authenticateUser,
+  createCompanyWithAdmin,
   deactivateUser,
   createUser,
   createUserSession,
   createSector,
   ensureAuthSchema,
+  listCompanies,
   listSectors,
   listUsers,
   revokeSessionByToken,
@@ -13,6 +15,7 @@ import {
 } from "../repositories/auth.repository";
 import {
   clearSessionCookie,
+  requireCEO,
   getSessionCookieToken,
   getSessionHeaderToken,
   requireAdmin,
@@ -26,7 +29,10 @@ type AuthRequest = Parameters<typeof requireAuth>[0] & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
+    company_name?: string | null;
+    company_cnpj?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
   };
@@ -76,13 +82,21 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
-router.get("/users", requireAuth, requireAdmin, async (_req, res) => {
-  const users = await listUsers();
+router.get("/users", requireAuth, requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  const users = await listUsers(authReq.authUser.company_id);
   return res.status(200).json({ items: users });
 });
 
-router.get("/agents", requireAuth, async (_req, res) => {
-  const users = await listUsers();
+router.get("/agents", requireAuth, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  const users = await listUsers(authReq.authUser.company_id);
   return res.status(200).json({
     items: users.map((user) => ({
       id: user.id,
@@ -96,18 +110,26 @@ router.get("/agents", requireAuth, async (_req, res) => {
 });
 
 router.post("/users", requireAuth, requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
   const name = String(req.body?.name || "").trim();
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "").trim();
   const sectorId = String(req.body?.sector_id || "").trim();
-  const role = String(req.body?.role || "").trim() as "administrador" | "operador";
+  const role = String(req.body?.role || "").trim() as "ceo" | "administrador" | "operador";
 
   if (!name || !username || !password || !role || !sectorId) {
     return res.status(400).json({ error: "Informe nome, usuario, senha, cargo e setor." });
   }
 
-  if (!["administrador", "operador"].includes(role)) {
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+
+  if (!["ceo", "administrador", "operador"].includes(role)) {
     return res.status(400).json({ error: "Cargo invalido." });
+  }
+  if (role === "ceo" && authReq.authUser.role !== "ceo") {
+    return res.status(403).json({ error: "Somente um CEO pode conceder cargo de CEO." });
   }
 
   if (password.length < 6) {
@@ -115,14 +137,21 @@ router.post("/users", requireAuth, requireAdmin, async (req, res) => {
   }
 
   try {
-    const user = await createUser({ name, username, password, role, sectorId });
+    const user = await createUser({
+      companyId: authReq.authUser.company_id,
+      name,
+      username,
+      password,
+      role,
+      sectorId,
+    });
     return res.status(201).json({ status: "ok", user });
   } catch (error: any) {
     if (error?.code === "23505") {
       return res.status(409).json({ error: "Ja existe usuario com esse login." });
     }
-    if (error?.code === "23503") {
-      return res.status(400).json({ error: "Setor informado nao existe." });
+    if (error?.code === "23503" || error?.code === "SECTOR_NOT_IN_COMPANY") {
+      return res.status(400).json({ error: "Setor informado nao existe para esta empresa." });
     }
     return res.status(500).json({
       error: "Falha ao criar usuario.",
@@ -136,7 +165,7 @@ router.put("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   const userId = String(req.params?.id || "").trim();
   const name = String(req.body?.name || "").trim();
   const username = String(req.body?.username || "").trim().toLowerCase();
-  const role = String(req.body?.role || "").trim() as "administrador" | "operador";
+  const role = String(req.body?.role || "").trim() as "ceo" | "administrador" | "operador";
   const sectorId = String(req.body?.sector_id || "").trim();
   const password = String(req.body?.password || "").trim();
 
@@ -146,19 +175,26 @@ router.put("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   if (!name || !username || !role || !sectorId) {
     return res.status(400).json({ error: "Informe nome, usuario, cargo e setor." });
   }
-  if (!["administrador", "operador"].includes(role)) {
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  if (!["ceo", "administrador", "operador"].includes(role)) {
     return res.status(400).json({ error: "Cargo invalido." });
+  }
+  if (role === "ceo" && authReq.authUser.role !== "ceo") {
+    return res.status(403).json({ error: "Somente um CEO pode conceder cargo de CEO." });
   }
   if (password && password.length < 6) {
     return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres." });
   }
-  if (authReq.authUser?.id === userId && role !== "administrador") {
-    return res.status(400).json({ error: "Voce nao pode remover seu proprio cargo de administrador." });
+  if (authReq.authUser?.id === userId && role !== authReq.authUser.role) {
+    return res.status(400).json({ error: "Voce nao pode remover seu proprio cargo atual." });
   }
 
   try {
     const user = await updateUser({
       id: userId,
+      companyId: authReq.authUser.company_id,
       name,
       username,
       role,
@@ -175,8 +211,8 @@ router.put("/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (error?.code === "23505") {
       return res.status(409).json({ error: "Ja existe usuario com esse login." });
     }
-    if (error?.code === "23503") {
-      return res.status(400).json({ error: "Setor informado nao existe." });
+    if (error?.code === "23503" || error?.code === "SECTOR_NOT_IN_COMPANY") {
+      return res.status(400).json({ error: "Setor informado nao existe para esta empresa." });
     }
     return res.status(500).json({
       error: "Falha ao editar usuario.",
@@ -194,9 +230,12 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   if (authReq.authUser?.id === userId) {
     return res.status(400).json({ error: "Voce nao pode excluir seu proprio usuario." });
   }
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
 
   try {
-    const ok = await deactivateUser(userId);
+    const ok = await deactivateUser(userId, authReq.authUser.company_id);
     if (!ok) {
       return res.status(404).json({ error: "Usuario nao encontrado." });
     }
@@ -209,19 +248,27 @@ router.delete("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/sectors", requireAuth, requireAdmin, async (_req, res) => {
-  const items = await listSectors();
+router.get("/sectors", requireAuth, requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  const items = await listSectors(authReq.authUser.company_id);
   return res.status(200).json({ items });
 });
 
 router.post("/sectors", requireAuth, requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
   const name = String(req.body?.name || "").trim();
   if (!name) {
     return res.status(400).json({ error: "Informe o nome do setor." });
   }
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
 
   try {
-    const sector = await createSector(name);
+    const sector = await createSector(name, authReq.authUser.company_id);
     return res.status(201).json({ status: "ok", sector });
   } catch (error: any) {
     if (error?.code === "23505") {
@@ -229,6 +276,47 @@ router.post("/sectors", requireAuth, requireAdmin, async (req, res) => {
     }
     return res.status(500).json({
       error: "Falha ao criar setor.",
+      details: error?.message || "Unknown error",
+    });
+  }
+});
+
+router.get("/companies", requireAuth, requireCEO, async (_req, res) => {
+  const items = await listCompanies();
+  return res.status(200).json({ items });
+});
+
+router.post("/companies", requireAuth, requireCEO, async (req, res) => {
+  const companyName = String(req.body?.company_name || "").trim();
+  const companyCnpj = String(req.body?.company_cnpj || "").trim();
+  const adminName = String(req.body?.admin_name || "").trim();
+  const adminUsername = String(req.body?.admin_username || "").trim().toLowerCase();
+  const adminPassword = String(req.body?.admin_password || "").trim();
+
+  if (!companyName || !adminName || !adminUsername || !adminPassword) {
+    return res.status(400).json({
+      error: "Informe nome da empresa, nome do administrador, login e senha do administrador.",
+    });
+  }
+  if (adminPassword.length < 6) {
+    return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres." });
+  }
+
+  try {
+    const created = await createCompanyWithAdmin({
+      companyName,
+      companyCnpj: companyCnpj || null,
+      adminName,
+      adminUsername,
+      adminPassword,
+    });
+    return res.status(201).json({ status: "ok", ...created });
+  } catch (error: any) {
+    if (error?.code === "23505") {
+      return res.status(409).json({ error: "Ja existe empresa, CNPJ ou usuario administrador com esses dados." });
+    }
+    return res.status(500).json({
+      error: "Falha ao criar empresa.",
       details: error?.message || "Unknown error",
     });
   }

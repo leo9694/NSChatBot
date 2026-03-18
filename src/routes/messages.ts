@@ -125,7 +125,8 @@ type AuthRequest = Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
   };
@@ -162,7 +163,7 @@ router.post("/send", async (req, res) => {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
     const signedMessage = buildSignedTextMessage(body.message, authReq.authUser?.name || "");
 
-    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
     const account = accountContext.effective!;
 
     const waResponse = await sendWhatsAppText({
@@ -245,7 +246,7 @@ router.post("/send-audio", async (req, res) => {
   try {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
 
-    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
     const account = accountContext.effective!;
 
     const sourceBuffer = parseBase64Audio(body.audio_base64);
@@ -325,7 +326,7 @@ router.post("/send-media", async (req, res) => {
   try {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
 
-    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
     const account = accountContext.effective!;
 
     const mediaBuffer = parseBase64(body.file_base64);

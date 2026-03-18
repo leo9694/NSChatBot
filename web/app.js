@@ -30,6 +30,7 @@ const state = {
   sectors: [],
   settingsUsers: [],
   agents: [],
+  companies: [],
   currentUser: null,
   isAuthenticated: false,
   sessionToken: "",
@@ -205,16 +206,19 @@ const settingsTabPerfilEl = document.getElementById("settingsTabPerfil");
 const settingsTabCreateEl = document.getElementById("settingsTabCreate");
 const settingsTabListEl = document.getElementById("settingsTabList");
 const settingsTabSectorsEl = document.getElementById("settingsTabSectors");
+const settingsTabCompaniesEl = document.getElementById("settingsTabCompanies");
 const settingsTabAccountsEl = document.getElementById("settingsTabAccounts");
 const settingsPanelPerfilEl = document.getElementById("settingsPanelPerfil");
 const settingsPanelCreateEl = document.getElementById("settingsPanelCreate");
 const settingsPanelListEl = document.getElementById("settingsPanelList");
 const settingsPanelSectorsEl = document.getElementById("settingsPanelSectors");
+const settingsPanelCompaniesEl = document.getElementById("settingsPanelCompanies");
 const settingsPanelAccountsEl = document.getElementById("settingsPanelAccounts");
 const settingsProfileNameEl = document.getElementById("settingsProfileName");
 const settingsProfileUsernameEl = document.getElementById("settingsProfileUsername");
 const settingsProfileRoleEl = document.getElementById("settingsProfileRole");
 const settingsProfileSectorEl = document.getElementById("settingsProfileSector");
+const settingsProfileCompanyEl = document.getElementById("settingsProfileCompany");
 const settingsAdminActionsEl = document.getElementById("settingsAdminActions");
 const settingsFinalizePendingBtnEl = document.getElementById("settingsFinalizePendingBtn");
 const settingsSwitchNumberBtnEl = document.getElementById("settingsSwitchNumberBtn");
@@ -229,6 +233,13 @@ const newUserSectorEl = document.getElementById("newUserSector");
 const createSectorFormEl = document.getElementById("createSectorForm");
 const newSectorNameEl = document.getElementById("newSectorName");
 const settingsSectorsListEl = document.getElementById("settingsSectorsList");
+const createCompanyFormEl = document.getElementById("createCompanyForm");
+const companyCreateNameEl = document.getElementById("companyCreateName");
+const companyCreateCnpjEl = document.getElementById("companyCreateCnpj");
+const companyAdminNameEl = document.getElementById("companyAdminName");
+const companyAdminUsernameEl = document.getElementById("companyAdminUsername");
+const companyAdminPasswordEl = document.getElementById("companyAdminPassword");
+const settingsCompaniesListEl = document.getElementById("settingsCompaniesList");
 const settingsLogoutBtnEl = document.getElementById("settingsLogoutBtn");
 const agentStatusBadgeEl = document.getElementById("agentStatusBadge");
 const agentConfiguredEl = document.getElementById("agentConfigured");
@@ -473,7 +484,7 @@ function getActiveAccountJid() {
   if (selected?.wa_jid) {
     return String(selected.wa_jid).trim();
   }
-  return String(state.connectedAccountJid || "").trim();
+  return "";
 }
 
 function profileLabel(name, phone) {
@@ -577,11 +588,31 @@ function closeProfilePanel() {
 }
 
 function canManageWhatsAppSession() {
-  return String(state.currentUser?.role || "") === "administrador";
+  return ["administrador", "ceo"].includes(String(state.currentUser?.role || ""));
 }
 
 function isAdmin() {
   return canManageWhatsAppSession();
+}
+
+function isCEO() {
+  return String(state.currentUser?.role || "") === "ceo";
+}
+
+function renderRoleOptions(selectEl, selectedRole = "operador") {
+  if (!selectEl) return;
+  const current = String(selectedRole || "operador").trim().toLowerCase();
+  const options = [
+    { value: "operador", label: "operador" },
+    { value: "administrador", label: "administrador" },
+  ];
+  if (isCEO()) {
+    options.push({ value: "ceo", label: "ceo" });
+  }
+  selectEl.innerHTML = options
+    .map((item) => `<option value="${item.value}">${item.label}</option>`)
+    .join("");
+  selectEl.value = options.some((item) => item.value === current) ? current : "operador";
 }
 
 function syncProfilePanel() {
@@ -727,7 +758,7 @@ function openConversationMenu(conversationId, x, y) {
   const isMine = canCurrentUserSendInConversation(conv);
   const canTransfer =
     Boolean(state.currentUser) &&
-    (state.currentUser.role === "administrador" || isMine || status === "pending" || status === "finalized");
+    (isAdmin() || isMine || status === "pending" || status === "finalized");
   transferConversationBtnEl.style.display = canTransfer ? "" : "none";
   conversationAIAgentToggleEl.checked = Boolean(conv?.ai_agent_enabled);
   conversationMenuEl.style.left = `${x}px`;
@@ -1335,7 +1366,9 @@ function renderSettingsHeader() {
     settingsProfileUsernameEl.textContent = "-";
     settingsProfileRoleEl.textContent = "-";
     settingsProfileSectorEl.textContent = "-";
+    settingsProfileCompanyEl.textContent = "-";
     settingsAdminActionsEl.hidden = true;
+    settingsTabCompaniesEl.hidden = true;
     return;
   }
   settingsHeaderEl.textContent = `Logado como ${user.name} (${user.role})`;
@@ -1343,9 +1376,16 @@ function renderSettingsHeader() {
   settingsProfileUsernameEl.textContent = user.username || "-";
   settingsProfileRoleEl.textContent = user.role || "-";
   settingsProfileSectorEl.textContent = user.sector_name || "-";
-  settingsAdminActionsEl.hidden = user.role !== "administrador";
-  settingsAddNumberBtnEl.hidden = user.role !== "administrador";
-  settingsRemoveNumberBtnEl.hidden = user.role !== "administrador";
+  settingsProfileCompanyEl.textContent = user.company_name || "-";
+  settingsAdminActionsEl.hidden = !isAdmin();
+  settingsAddNumberBtnEl.hidden = !isAdmin();
+  settingsRemoveNumberBtnEl.hidden = !isAdmin();
+  settingsTabCompaniesEl.hidden = !isCEO();
+  if (!isCEO() && state.settingsTab === "companies") {
+    state.settingsTab = "perfil";
+  }
+  renderRoleOptions(newUserRoleEl, newUserRoleEl.value || "operador");
+  renderRoleOptions(editUserRoleEl, editUserRoleEl.value || "operador");
 }
 
 function renderWhatsAppAccountOptions() {
@@ -1388,19 +1428,23 @@ function renderWhatsAppAccountOptions() {
 }
 
 function setSettingsTab(tab) {
-  state.settingsTab = tab;
+  const requestedTab = String(tab || "perfil");
+  const safeTab = requestedTab === "companies" && !isCEO() ? "perfil" : requestedTab;
+  state.settingsTab = safeTab;
 
-  settingsTabPerfilEl.classList.toggle("active", tab === "perfil");
-  settingsTabCreateEl.classList.toggle("active", tab === "create");
-  settingsTabListEl.classList.toggle("active", tab === "list");
-  settingsTabSectorsEl.classList.toggle("active", tab === "sectors");
-  settingsTabAccountsEl.classList.toggle("active", tab === "accounts");
+  settingsTabPerfilEl.classList.toggle("active", safeTab === "perfil");
+  settingsTabCreateEl.classList.toggle("active", safeTab === "create");
+  settingsTabListEl.classList.toggle("active", safeTab === "list");
+  settingsTabSectorsEl.classList.toggle("active", safeTab === "sectors");
+  settingsTabCompaniesEl.classList.toggle("active", safeTab === "companies");
+  settingsTabAccountsEl.classList.toggle("active", safeTab === "accounts");
 
-  settingsPanelPerfilEl.classList.toggle("active", tab === "perfil");
-  settingsPanelCreateEl.classList.toggle("active", tab === "create");
-  settingsPanelListEl.classList.toggle("active", tab === "list");
-  settingsPanelSectorsEl.classList.toggle("active", tab === "sectors");
-  settingsPanelAccountsEl.classList.toggle("active", tab === "accounts");
+  settingsPanelPerfilEl.classList.toggle("active", safeTab === "perfil");
+  settingsPanelCreateEl.classList.toggle("active", safeTab === "create");
+  settingsPanelListEl.classList.toggle("active", safeTab === "list");
+  settingsPanelSectorsEl.classList.toggle("active", safeTab === "sectors");
+  settingsPanelCompaniesEl.classList.toggle("active", safeTab === "companies");
+  settingsPanelAccountsEl.classList.toggle("active", safeTab === "accounts");
   renderMobileChrome();
 }
 
@@ -1430,7 +1474,7 @@ function renderUsersList(users) {
     const row = document.createElement("div");
     row.className = "settings-user-item";
     row.dataset.userId = user.id;
-    const showActions = state.currentUser?.role === "administrador";
+    const showActions = isAdmin() && (isCEO() || user.role !== "ceo");
     row.innerHTML = `
       <div class="settings-user-main">
         <strong>${user.name}</strong><br />
@@ -1472,6 +1516,29 @@ function renderSectorsList(items) {
   }
 }
 
+function renderCompaniesList(items) {
+  settingsCompaniesListEl.innerHTML = "";
+  if (!items || !items.length) {
+    settingsCompaniesListEl.innerHTML = '<div class="empty-state">Nenhuma empresa cadastrada.</div>';
+    return;
+  }
+
+  for (const company of items) {
+    const row = document.createElement("div");
+    row.className = "settings-user-item";
+    row.innerHTML = `
+      <div class="settings-user-main">
+        <strong>${company.name}</strong><br />
+        <small>${company.cnpj || "CNPJ não informado"}</small>
+      </div>
+      <div class="settings-user-right">
+        <span class="settings-user-role">empresa</span>
+      </div>
+    `;
+    settingsCompaniesListEl.appendChild(row);
+  }
+}
+
 function renderSectorOptions() {
   const previous = String(newUserSectorEl.value || "");
   newUserSectorEl.innerHTML = "";
@@ -1501,7 +1568,7 @@ function renderSectorOptions() {
 }
 
 async function loadSectorsForSettings() {
-  if (!state.currentUser || state.currentUser.role !== "administrador") {
+  if (!state.currentUser || !isAdmin()) {
     state.sectors = [];
     renderSectorOptions();
     renderSectorsList([]);
@@ -1515,17 +1582,21 @@ async function loadSectorsForSettings() {
 }
 
 async function loadUsersForSettings() {
-  if (!state.currentUser || state.currentUser.role !== "administrador") {
+  if (!state.currentUser || !isAdmin()) {
     state.settingsUsers = [];
+    state.companies = [];
     settingsAdminSectionEl.hidden = true;
     settingsTabCreateEl.disabled = true;
     settingsTabListEl.disabled = true;
     settingsTabSectorsEl.disabled = true;
+    settingsTabCompaniesEl.disabled = true;
+    settingsTabCompaniesEl.hidden = true;
     settingsTabAccountsEl.disabled = false;
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador pode ver usuários.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuários.</div>';
+    renderCompaniesList([]);
     return;
   }
 
@@ -1533,11 +1604,30 @@ async function loadUsersForSettings() {
   settingsTabCreateEl.disabled = false;
   settingsTabListEl.disabled = false;
   settingsTabSectorsEl.disabled = false;
+  settingsTabCompaniesEl.disabled = !isCEO();
+  settingsTabCompaniesEl.hidden = !isCEO();
   settingsTabAccountsEl.disabled = false;
+  if (!isCEO() && state.settingsTab === "companies") {
+    setSettingsTab("perfil");
+  }
+  renderRoleOptions(newUserRoleEl, newUserRoleEl.value || "operador");
   await loadSectorsForSettings();
   const result = await api("/auth/users");
   state.settingsUsers = result.items || [];
   renderUsersList(state.settingsUsers);
+  await loadCompaniesForSettings();
+}
+
+async function loadCompaniesForSettings() {
+  if (!state.currentUser || !isCEO()) {
+    state.companies = [];
+    renderCompaniesList([]);
+    return;
+  }
+
+  const result = await api("/auth/companies");
+  state.companies = Array.isArray(result?.items) ? result.items : [];
+  renderCompaniesList(state.companies);
 }
 
 async function loadAgents() {
@@ -1566,15 +1656,6 @@ async function loadWhatsAppAccounts() {
     const result = await api("/whatsapp/accounts");
     state.whatsappAccounts = Array.isArray(result?.items) ? result.items : [];
     state.selectedWhatsAppAccountId = String(result?.selected_account_id || "").trim();
-
-    if (!state.selectedWhatsAppAccountId) {
-      const connected = state.whatsappAccounts.find((item) => item.connected);
-      if (connected?.id) {
-        state.selectedWhatsAppAccountId = connected.id;
-      } else if (state.whatsappAccounts[0]?.id) {
-        state.selectedWhatsAppAccountId = state.whatsappAccounts[0].id;
-      }
-    }
 
     renderWhatsAppAccountOptions();
     renderSettingsHeader();
@@ -1810,7 +1891,7 @@ function openEditUserModal(user) {
   editingUserId = user.id;
   editUserNameEl.value = user.name || "";
   editUserUsernameEl.value = user.username || "";
-  editUserRoleEl.value = user.role || "operador";
+  renderRoleOptions(editUserRoleEl, user.role || "operador");
   editUserPasswordEl.value = "";
   populateEditUserSectorOptions(user.sector_id || "");
   editUserOverlayEl.classList.add("open");
@@ -1828,12 +1909,20 @@ function closeEditUserModal() {
 async function handleEditUser(userId) {
   const user = state.settingsUsers.find((item) => item.id === userId);
   if (!user) return;
+  if (user.role === "ceo" && !isCEO()) {
+    await showAlert("Somente um CEO pode editar outro CEO.");
+    return;
+  }
   openEditUserModal(user);
 }
 
 async function handleDeleteUser(userId) {
   const user = state.settingsUsers.find((item) => item.id === userId);
   if (!user) return;
+  if (user.role === "ceo" && !isCEO()) {
+    await showAlert("Somente um CEO pode excluir outro CEO.");
+    return;
+  }
 
   const confirmed = await showConfirm(
     `Excluir o usuário ${user.name}?`,
@@ -2218,9 +2307,16 @@ function renderBulkJobs() {
 
 async function loadBulkJobs() {
   if (!state.isAuthenticated) return;
-  const result = await api("/bulk-dispatch/jobs?limit=20");
   const activeAccountJid = getActiveAccountJid();
-  state.bulkJobs = (result.items || []).filter((job) => !activeAccountJid || job.account_wa_jid === activeAccountJid);
+  if (!activeAccountJid) {
+    state.bulkJobs = [];
+    state.selectedBulkJobId = null;
+    renderBulkJobs();
+    renderBulkJobDetails(null);
+    return;
+  }
+  const result = await api("/bulk-dispatch/jobs?limit=20");
+  state.bulkJobs = (result.items || []).filter((job) => job.account_wa_jid === activeAccountJid);
   if (
     state.bulkJobs.length > 0 &&
     (!state.selectedBulkJobId || !state.bulkJobs.some((job) => job.id === state.selectedBulkJobId))
@@ -2251,6 +2347,7 @@ function resetAppAfterLogout() {
   state.selectedWhatsAppAccountId = "";
   state.search = "";
   state.agents = [];
+  state.companies = [];
   state.products = [];
   state.productOrders = [];
   state.productsTab = "store-info";
@@ -2881,7 +2978,7 @@ function renderHeader() {
   const isMine = canCurrentUserSendInConversation(state.selectedConversation);
   const canTransfer = Boolean(
     state.currentUser &&
-      (state.currentUser.role === "administrador" || isMine) &&
+      (isAdmin() || isMine) &&
       status === "in_progress",
   );
 
@@ -3934,9 +4031,9 @@ async function refreshHealth() {
     waStatusEl.textContent = online ? "Online" : "Offline";
     waStatusEl.classList.toggle("online", online);
 
-    state.connectedAccountJid = online ? jid : "";
-    state.connectedAccountPhone = online ? phone : "";
-    state.connectedAccountName = online ? name : "";
+    state.connectedAccountJid = online && String(state.selectedWhatsAppAccountId || "").trim() ? jid : "";
+    state.connectedAccountPhone = online && String(state.selectedWhatsAppAccountId || "").trim() ? phone : "";
+    state.connectedAccountName = online && String(state.selectedWhatsAppAccountId || "").trim() ? name : "";
 
     await refreshConnectedAccountAvatar();
     connectedProfileEl.title = online
@@ -4045,7 +4142,7 @@ async function handleCreateUserSubmit(event) {
       body: JSON.stringify({ name, username, password, role, sector_id: sectorId }),
     });
     createUserFormEl.reset();
-    newUserRoleEl.value = "operador";
+    renderRoleOptions(newUserRoleEl, "operador");
     renderSectorOptions();
     await loadUsersForSettings();
     await showAlert("Usuário cadastrado com sucesso.");
@@ -4072,6 +4169,38 @@ async function handleCreateSectorSubmit(event) {
     await showAlert("Setor cadastrado com sucesso.");
   } catch (error) {
     await showAlert(error.message || "Falha ao cadastrar setor.");
+  }
+}
+
+async function handleCreateCompanySubmit(event) {
+  event.preventDefault();
+  const companyName = String(companyCreateNameEl.value || "").trim();
+  const companyCnpj = String(companyCreateCnpjEl.value || "").trim();
+  const adminName = String(companyAdminNameEl.value || "").trim();
+  const adminUsername = String(companyAdminUsernameEl.value || "").trim().toLowerCase();
+  const adminPassword = String(companyAdminPasswordEl.value || "").trim();
+
+  if (!companyName || !adminName || !adminUsername || !adminPassword) {
+    await showAlert("Preencha empresa, administrador, login e senha.");
+    return;
+  }
+
+  try {
+    await api("/auth/companies", {
+      method: "POST",
+      body: JSON.stringify({
+        company_name: companyName,
+        company_cnpj: companyCnpj,
+        admin_name: adminName,
+        admin_username: adminUsername,
+        admin_password: adminPassword,
+      }),
+    });
+    createCompanyFormEl.reset();
+    await loadCompaniesForSettings();
+    await showAlert("Empresa cadastrada com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao cadastrar empresa.");
   }
 }
 
@@ -4148,6 +4277,7 @@ settingsTabPerfilEl.addEventListener("click", () => setSettingsTab("perfil"));
 settingsTabCreateEl.addEventListener("click", () => setSettingsTab("create"));
 settingsTabListEl.addEventListener("click", () => setSettingsTab("list"));
 settingsTabSectorsEl.addEventListener("click", () => setSettingsTab("sectors"));
+settingsTabCompaniesEl.addEventListener("click", () => setSettingsTab("companies"));
 settingsTabAccountsEl.addEventListener("click", () => setSettingsTab("accounts"));
 settingsUsersListEl.addEventListener("click", async (event) => {
   const target = event.target.closest("button[data-action]");
@@ -4172,7 +4302,7 @@ settingsLogoutBtnEl.addEventListener("click", async () => {
   await performLogout();
 });
 settingsFinalizePendingBtnEl.addEventListener("click", async () => {
-  if (state.currentUser?.role !== "administrador") return;
+  if (!isAdmin()) return;
   const confirmed = await showConfirm(
     "Mover todas as conversas pendentes para finalizadas?",
     "Finalizar pendentes",
@@ -4196,6 +4326,7 @@ settingsFinalizePendingBtnEl.addEventListener("click", async () => {
 });
 createUserFormEl.addEventListener("submit", handleCreateUserSubmit);
 createSectorFormEl.addEventListener("submit", handleCreateSectorSubmit);
+createCompanyFormEl?.addEventListener("submit", handleCreateCompanySubmit);
 bulkAddMessageBtnEl.addEventListener("click", () => {
   normalizeBulkMessagesDraft();
   bulkMessagesDraft.push("");
@@ -4842,7 +4973,7 @@ editUserFormEl.addEventListener("submit", async (event) => {
     await showAlert("Preencha nome, usuário, cargo e setor.");
     return;
   }
-  if (!["administrador", "operador"].includes(role)) {
+  if (!["ceo", "administrador", "operador"].includes(role)) {
     await showAlert("Cargo invalido.");
     return;
   }

@@ -8,13 +8,79 @@ export interface UpsertWhatsAppAccountInput {
   waJid: string;
   displayName?: string | null;
   sessionPath?: string | null;
+  companyId?: string | null;
 }
 
 export interface WhatsAppAccountRow {
   id: string;
+  company_id?: string | null;
   wa_jid: string;
   phone: string;
   display_name: string | null;
+}
+
+type ExistingAccountCompanyRow = WhatsAppAccountRow & {
+  company_name?: string | null;
+  detached?: boolean | null;
+};
+
+function buildAccountAssignedToOtherCompanyError(companyName?: string | null) {
+  const error: any = new Error("WHATSAPP_ACCOUNT_ASSIGNED_TO_OTHER_COMPANY");
+  error.code = "WHATSAPP_ACCOUNT_ASSIGNED_TO_OTHER_COMPANY";
+  error.companyName = String(companyName || "").trim() || null;
+  return error;
+}
+
+async function releaseDetachedAccountIdentityForReuse(
+  waJid: string,
+  executor: Pick<typeof pool, "query">,
+): Promise<void> {
+  const existingResult = await executor.query<{ id: string; wa_jid: string; phone: string }>(
+    `
+    SELECT id, wa_jid, phone
+    FROM whatsapp_accounts
+    WHERE wa_jid = $1
+      AND COALESCE(metadata->>'detached', 'false') = 'true'
+    LIMIT 1
+    `,
+    [waJid],
+  );
+
+  const existing = existingResult.rows[0];
+  if (!existing) return;
+
+  const detachedToken = randomUUID();
+  const detachedWaJid =
+    existing.wa_jid.startsWith("pending:") || existing.wa_jid.startsWith("detached:")
+      ? existing.wa_jid
+      : `detached:${detachedToken}:${existing.wa_jid}`;
+  const detachedPhone =
+    existing.wa_jid.startsWith("pending:") || existing.wa_jid.startsWith("detached:")
+      ? existing.phone
+      : `detached_${detachedToken.replace(/-/g, "")}`.slice(0, 30);
+
+  await executor.query(
+    `
+    UPDATE whatsapp_accounts
+    SET
+      wa_jid = $2,
+      phone = $3,
+      updated_at = NOW(),
+      metadata = jsonb_set(
+        jsonb_set(
+          COALESCE(metadata, '{}'::jsonb),
+          '{detached_original_wa_jid}',
+          to_jsonb($4::text),
+          true
+        ),
+        '{detached_original_phone}',
+        to_jsonb($5::text),
+        true
+      )
+    WHERE id = $1
+    `,
+    [existing.id, detachedWaJid, detachedPhone, existing.wa_jid, existing.phone],
+  );
 }
 
 export interface WhatsAppHistorySyncState {
@@ -24,6 +90,7 @@ export interface WhatsAppHistorySyncState {
 
 export interface WhatsAppAccountListItem {
   id: string;
+  company_id?: string | null;
   wa_jid: string;
   phone: string;
   display_name: string | null;
@@ -46,6 +113,28 @@ export interface UserSelectedWhatsAppAccountRow extends UserWhatsAppContext {
 }
 
 let ensureUserWhatsAppContextPromise: Promise<void> | null = null;
+let ensureWhatsAppAccountsCompanyPromise: Promise<void> | null = null;
+
+async function ensureWhatsAppAccountsCompanySchema(): Promise<void> {
+  if (!ensureWhatsAppAccountsCompanyPromise) {
+    ensureWhatsAppAccountsCompanyPromise = (async () => {
+      await pool.query(`ALTER TABLE whatsapp_accounts ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_accounts_company_id ON whatsapp_accounts(company_id)`);
+      await pool.query(`
+        UPDATE whatsapp_accounts wa
+        SET company_id = c.id
+        FROM app_companies c
+        WHERE wa.company_id IS NULL
+          AND lower(c.name) = lower('Empresa Principal')
+      `);
+    })().catch((error) => {
+      ensureWhatsAppAccountsCompanyPromise = null;
+      throw error;
+    });
+  }
+
+  await ensureWhatsAppAccountsCompanyPromise;
+}
 
 async function ensureUserWhatsAppContextSchema(): Promise<void> {
   if (!ensureUserWhatsAppContextPromise) {
@@ -69,18 +158,22 @@ async function ensureUserWhatsAppContextSchema(): Promise<void> {
 }
 
 export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): Promise<WhatsAppAccountRow> {
+  await ensureWhatsAppAccountsCompanySchema();
   const normalizedJid = normalizeChatJid(input.waJid);
   const phone = jidToPhone(normalizedJid);
   const sessionPath = input.sessionPath || null;
+  const companyId = String(input.companyId || "").trim() || null;
+
+  await releaseDetachedAccountIdentityForReuse(normalizedJid, pool);
 
   if (sessionPath) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      const pendingRow = await client.query<{ id: string; display_name: string | null }>(
+      const pendingRow = await client.query<{ id: string; display_name: string | null; company_id: string | null }>(
         `
-        SELECT id, display_name
+        SELECT id, display_name, company_id
         FROM whatsapp_accounts
         WHERE session_path = $1
           AND wa_jid LIKE 'pending:%'
@@ -91,11 +184,14 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
 
       if (pendingRow.rows.length > 0) {
         const pending = pendingRow.rows[0];
-        const existingRealRow = await client.query<WhatsAppAccountRow>(
+        const targetCompanyId = companyId || pending.company_id || null;
+        const existingRealRow = await client.query<ExistingAccountCompanyRow>(
           `
-          SELECT id, wa_jid, phone, display_name
-          FROM whatsapp_accounts
-          WHERE wa_jid = $1
+          SELECT wa.id, wa.company_id, wa.wa_jid, wa.phone, wa.display_name, c.name AS company_name,
+                 (COALESCE(wa.metadata->>'detached', 'false') = 'true') AS detached
+          FROM whatsapp_accounts wa
+          LEFT JOIN app_companies c ON c.id = wa.company_id
+          WHERE wa.wa_jid = $1
           LIMIT 1
           `,
           [normalizedJid],
@@ -103,6 +199,9 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
 
         if (existingRealRow.rows.length > 0) {
           const existing = existingRealRow.rows[0];
+          if (targetCompanyId && existing.company_id && existing.company_id !== targetCompanyId) {
+            throw buildAccountAssignedToOtherCompanyError(existing.company_name || null);
+          }
 
           await client.query(
             `
@@ -111,12 +210,13 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
               phone = $2,
               display_name = COALESCE(display_name, $3, display_name),
               session_path = $4,
+              company_id = COALESCE(company_id, $5),
               last_seen_at = NOW(),
               updated_at = NOW(),
               metadata = (COALESCE(metadata, '{}'::jsonb) - 'pending') - 'detached'
             WHERE id = $1
             `,
-            [existing.id, phone, input.displayName || pending.display_name || null, sessionPath],
+            [existing.id, phone, input.displayName || pending.display_name || null, sessionPath, targetCompanyId || existing.company_id || null],
           );
 
           await client.query(
@@ -135,6 +235,7 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
 
           return {
             id: existing.id,
+            company_id: targetCompanyId || existing.company_id || null,
             wa_jid: normalizedJid,
             phone,
             display_name: existing.display_name || input.displayName || pending.display_name || null,
@@ -149,13 +250,14 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
             phone = $3,
             display_name = COALESCE($4, display_name),
             session_path = $5,
+            company_id = COALESCE(company_id, $6),
             last_seen_at = NOW(),
             updated_at = NOW(),
             metadata = (COALESCE(metadata, '{}'::jsonb) - 'pending') - 'detached'
           WHERE id = $1
-          RETURNING id, wa_jid, phone, display_name
+          RETURNING id, company_id, wa_jid, phone, display_name
           `,
-          [pending.id, normalizedJid, phone, input.displayName || null, sessionPath],
+          [pending.id, normalizedJid, phone, input.displayName || null, sessionPath, companyId || pending.company_id || null],
         );
 
         await client.query("COMMIT");
@@ -173,20 +275,41 @@ export async function upsertWhatsAppAccount(input: UpsertWhatsAppAccountInput): 
     }
   }
 
+  if (companyId) {
+    const existingRow = await pool.query<ExistingAccountCompanyRow>(
+      `
+      SELECT wa.id, wa.company_id, wa.wa_jid, wa.phone, wa.display_name, c.name AS company_name,
+             (COALESCE(wa.metadata->>'detached', 'false') = 'true') AS detached
+      FROM whatsapp_accounts wa
+      LEFT JOIN app_companies c ON c.id = wa.company_id
+      WHERE wa.wa_jid = $1
+      LIMIT 1
+      `,
+      [normalizedJid],
+    );
+    if (existingRow.rows.length > 0) {
+      const existing = existingRow.rows[0];
+      if (existing.company_id && existing.company_id !== companyId) {
+        throw buildAccountAssignedToOtherCompanyError(existing.company_name || null);
+      }
+    }
+  }
+
   const result = await pool.query<WhatsAppAccountRow>(
     `
-    INSERT INTO whatsapp_accounts (wa_jid, phone, display_name, session_path, last_seen_at)
-    VALUES ($1, $2, $3, $4, NOW())
+    INSERT INTO whatsapp_accounts (company_id, wa_jid, phone, display_name, session_path, last_seen_at)
+    VALUES ($1, $2, $3, $4, $5, NOW())
     ON CONFLICT (wa_jid) DO UPDATE SET
+      company_id = COALESCE(whatsapp_accounts.company_id, EXCLUDED.company_id),
       phone = EXCLUDED.phone,
       display_name = COALESCE(EXCLUDED.display_name, whatsapp_accounts.display_name),
       session_path = COALESCE(EXCLUDED.session_path, whatsapp_accounts.session_path),
       last_seen_at = NOW(),
       updated_at = NOW(),
       metadata = (COALESCE(whatsapp_accounts.metadata, '{}'::jsonb) - 'detached') - 'pending'
-    RETURNING id, wa_jid, phone, display_name
+    RETURNING id, company_id, wa_jid, phone, display_name
     `,
-    [normalizedJid, phone, input.displayName || null, sessionPath],
+    [companyId, normalizedJid, phone, input.displayName || null, sessionPath],
   );
 
   if (result.rows.length === 0) {
@@ -241,11 +364,13 @@ export async function setWhatsAppHistorySyncBaseline(waJid: string, baselineAt: 
   );
 }
 
-export async function listWhatsAppAccounts(): Promise<WhatsAppAccountListItem[]> {
+export async function listWhatsAppAccounts(companyId?: string | null): Promise<WhatsAppAccountListItem[]> {
+  await ensureWhatsAppAccountsCompanySchema();
   const result = await pool.query<WhatsAppAccountListItem>(
     `
     SELECT
       id,
+      company_id,
       wa_jid,
       phone,
       display_name,
@@ -255,15 +380,18 @@ export async function listWhatsAppAccounts(): Promise<WhatsAppAccountListItem[]>
       updated_at::text
     FROM whatsapp_accounts
     WHERE COALESCE(metadata->>'detached', 'false') <> 'true'
+      AND ($1::uuid IS NULL OR company_id = $1)
     ORDER BY COALESCE(last_seen_at, updated_at, created_at) DESC, created_at DESC
     `,
+    [companyId || null],
   );
 
   return result.rows;
 }
 
 
-export async function getWhatsAppAccountById(accountId: string): Promise<WhatsAppAccountListItem | null> {
+export async function getWhatsAppAccountById(accountId: string, companyId?: string | null): Promise<WhatsAppAccountListItem | null> {
+  await ensureWhatsAppAccountsCompanySchema();
   const normalizedId = String(accountId || "").trim();
   if (!normalizedId) return null;
 
@@ -271,6 +399,7 @@ export async function getWhatsAppAccountById(accountId: string): Promise<WhatsAp
     `
     SELECT
       id,
+      company_id,
       wa_jid,
       phone,
       display_name,
@@ -280,15 +409,17 @@ export async function getWhatsAppAccountById(accountId: string): Promise<WhatsAp
       updated_at::text
     FROM whatsapp_accounts
     WHERE id = $1
+      AND ($2::uuid IS NULL OR company_id = $2)
     LIMIT 1
     `,
-    [normalizedId],
+    [normalizedId, companyId || null],
   );
 
   return result.rows[0] || null;
 }
 
 export async function getWhatsAppAccountByJid(waJid: string): Promise<WhatsAppAccountListItem | null> {
+  await ensureWhatsAppAccountsCompanySchema();
   const normalizedJid = normalizeChatJid(waJid);
   if (!normalizedJid) return null;
 
@@ -296,6 +427,7 @@ export async function getWhatsAppAccountByJid(waJid: string): Promise<WhatsAppAc
     `
     SELECT
       id,
+      company_id,
       wa_jid,
       phone,
       display_name,
@@ -329,11 +461,15 @@ export async function getUserSelectedWhatsAppAccount(userId: string): Promise<Us
   return result.rows[0] || null;
 }
 
-export async function setUserSelectedWhatsAppAccount(userId: string, accountId: string | null): Promise<UserWhatsAppContext> {
+export async function setUserSelectedWhatsAppAccount(userId: string, accountId: string | null, companyId?: string | null): Promise<UserWhatsAppContext> {
   await ensureUserWhatsAppContextSchema();
+  await ensureWhatsAppAccountsCompanySchema();
 
   if (accountId) {
-    const account = await pool.query(`SELECT id FROM whatsapp_accounts WHERE id = $1 LIMIT 1`, [accountId]);
+    const account = await pool.query(
+      `SELECT id FROM whatsapp_accounts WHERE id = $1 AND ($2::uuid IS NULL OR company_id = $2) LIMIT 1`,
+      [accountId, companyId || null],
+    );
     if (!account.rows.length) {
       throw new Error("WHATSAPP_ACCOUNT_NOT_FOUND");
     }
@@ -354,7 +490,7 @@ export async function setUserSelectedWhatsAppAccount(userId: string, accountId: 
   return result.rows[0];
 }
 
-export async function getUserSelectedWhatsAppAccountWithDetails(userId: string): Promise<UserSelectedWhatsAppAccountRow | null> {
+export async function getUserSelectedWhatsAppAccountWithDetails(userId: string, companyId?: string | null): Promise<UserSelectedWhatsAppAccountRow | null> {
   await ensureUserWhatsAppContextSchema();
 
   const result = await pool.query<UserSelectedWhatsAppAccountRow>(
@@ -369,9 +505,10 @@ export async function getUserSelectedWhatsAppAccountWithDetails(userId: string):
     FROM app_user_whatsapp_contexts ctx
     LEFT JOIN whatsapp_accounts wa ON wa.id = ctx.selected_account_id
     WHERE ctx.user_id = $1
+      AND ($2::uuid IS NULL OR wa.company_id = $2 OR ctx.selected_account_id IS NULL)
     LIMIT 1
     `,
-    [userId],
+    [userId, companyId || null],
   );
 
   return result.rows[0] || null;
@@ -392,7 +529,7 @@ export function buildWhatsAppAccountSessionPath(accountId: string): string {
 }
 
 export async function ensureWhatsAppAccountSessionPath(accountId: string): Promise<string> {
-  const account = await getWhatsAppAccountById(accountId);
+  const account = await getWhatsAppAccountById(accountId, null);
   if (!account) {
     throw new Error("WHATSAPP_ACCOUNT_NOT_FOUND");
   }
@@ -416,7 +553,8 @@ export async function ensureWhatsAppAccountSessionPath(accountId: string): Promi
   return sessionPath;
 }
 
-export async function createPendingWhatsAppAccount(displayName = "Novo numero"): Promise<WhatsAppAccountListItem> {
+export async function createPendingWhatsAppAccount(displayName = "Novo numero", companyId?: string | null): Promise<WhatsAppAccountListItem> {
+  await ensureWhatsAppAccountsCompanySchema();
   const placeholderId = randomUUID();
   const sessionPath = buildWhatsAppAccountSessionPath(placeholderId);
   const placeholderJid = `pending:${placeholderId}`;
@@ -424,10 +562,11 @@ export async function createPendingWhatsAppAccount(displayName = "Novo numero"):
 
   const result = await pool.query<WhatsAppAccountListItem>(
     `
-    INSERT INTO whatsapp_accounts (wa_jid, phone, display_name, session_path, metadata)
-    VALUES ($1, $2, $3, $4, jsonb_build_object('pending', true))
+    INSERT INTO whatsapp_accounts (company_id, wa_jid, phone, display_name, session_path, metadata)
+    VALUES ($1, $2, $3, $4, $5, jsonb_build_object('pending', true))
     RETURNING
       id,
+      company_id,
       wa_jid,
       phone,
       display_name,
@@ -436,27 +575,83 @@ export async function createPendingWhatsAppAccount(displayName = "Novo numero"):
       created_at::text,
       updated_at::text
     `,
-    [placeholderJid, placeholderPhone, displayName, sessionPath],
+    [companyId || null, placeholderJid, placeholderPhone, displayName, sessionPath],
   );
 
   return result.rows[0];
 }
 
-export async function deleteWhatsAppAccount(accountId: string): Promise<WhatsAppAccountListItem | null> {
+export async function deleteWhatsAppAccount(accountId: string, companyId?: string | null): Promise<WhatsAppAccountListItem | null> {
+  await ensureWhatsAppAccountsCompanySchema();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    const currentAccountResult = await client.query<WhatsAppAccountListItem>(
+      `
+      SELECT
+        id,
+        company_id,
+        wa_jid,
+        phone,
+        display_name,
+        session_path,
+        last_seen_at::text,
+        created_at::text,
+        updated_at::text
+      FROM whatsapp_accounts
+      WHERE id = $1
+        AND ($2::uuid IS NULL OR company_id = $2)
+      LIMIT 1
+      `,
+      [accountId, companyId || null],
+    );
+
+    const currentAccount = currentAccountResult.rows[0] || null;
+    if (!currentAccount) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const detachedToken = randomUUID();
+    const detachedWaJid =
+      currentAccount.wa_jid.startsWith("pending:") || currentAccount.wa_jid.startsWith("detached:")
+        ? currentAccount.wa_jid
+        : `detached:${detachedToken}:${currentAccount.wa_jid}`;
+    const detachedPhone =
+      currentAccount.wa_jid.startsWith("pending:") || currentAccount.wa_jid.startsWith("detached:")
+        ? currentAccount.phone
+        : `detached_${detachedToken.replace(/-/g, "")}`.slice(0, 30);
 
     const result = await client.query<WhatsAppAccountListItem>(
       `
       UPDATE whatsapp_accounts
       SET
+        wa_jid = $3,
+        phone = $4,
         session_path = NULL,
         updated_at = NOW(),
-        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{detached}', 'true'::jsonb, true)
+        metadata = jsonb_set(
+          jsonb_set(
+            jsonb_set(
+              COALESCE(metadata, '{}'::jsonb),
+              '{detached}',
+              'true'::jsonb,
+              true
+            ),
+            '{detached_original_wa_jid}',
+            to_jsonb($5::text),
+            true
+          ),
+          '{detached_original_phone}',
+          to_jsonb($6::text),
+          true
+        )
       WHERE id = $1
+        AND ($2::uuid IS NULL OR company_id = $2)
       RETURNING
         id,
+        company_id,
         wa_jid,
         phone,
         display_name,
@@ -465,7 +660,7 @@ export async function deleteWhatsAppAccount(accountId: string): Promise<WhatsApp
         created_at::text,
         updated_at::text
       `,
-      [accountId],
+      [accountId, companyId || null, detachedWaJid, detachedPhone, currentAccount.wa_jid, currentAccount.phone],
     );
 
     if (result.rows.length > 0) {

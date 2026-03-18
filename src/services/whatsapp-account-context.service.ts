@@ -3,6 +3,7 @@ import { getCurrentWhatsAppAccount } from "./whatsapp.service";
 
 export interface ActiveWhatsAppContextInput {
   userId?: string | null;
+  companyId?: string | null;
 }
 
 export interface ActiveWhatsAppContext {
@@ -33,7 +34,8 @@ export class WhatsAppAccountContextError extends Error {
 
 export async function resolveActiveWhatsAppContext(input: ActiveWhatsAppContextInput): Promise<ActiveWhatsAppContext> {
   const userId = String(input.userId || "").trim();
-  const selectedRow = userId ? await getUserSelectedWhatsAppAccountWithDetails(userId) : null;
+  const companyId = String(input.companyId || "").trim() || null;
+  const selectedRow = userId ? await getUserSelectedWhatsAppAccountWithDetails(userId, companyId) : null;
   const connected = getCurrentWhatsAppAccount(selectedRow?.wa_jid || null);
 
   const connectedContext = connected.waJid
@@ -78,20 +80,14 @@ export async function resolveActiveWhatsAppContext(input: ActiveWhatsAppContextI
   }
 
   return {
-    connected: connectedContext,
+    connected: null,
     selected: null,
-    effective: connectedContext
-      ? {
-          accountId: null,
-          waJid: connectedContext.waJid,
-          displayName: connectedContext.displayName,
-        }
-      : null,
+    effective: null,
   };
 }
 
-export async function requireActiveWhatsAppAccount(userId?: string | null) {
-  const context = await resolveActiveWhatsAppContext({ userId });
+export async function requireActiveWhatsAppAccount(userId?: string | null, companyId?: string | null) {
+  const context = await resolveActiveWhatsAppContext({ userId, companyId });
   if (!context.effective?.waJid) {
     throw new WhatsAppAccountContextError("WHATSAPP_NOT_CONNECTED", "Nenhuma conta WhatsApp esta conectada no momento.");
   }

@@ -2,6 +2,7 @@
 import { env } from "../config/env";
 import { getAiAccountSettings } from "../repositories/ai.repository";
 import { listProductsForAgentContext, listProductsForAgentDetailedContext } from "../repositories/products.repository";
+import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 
 let openaiClient: OpenAI | null = null;
 
@@ -19,8 +20,8 @@ function getOpenAIClient(): OpenAI {
   return openaiClient;
 }
 
-export async function getOpenAIStatus() {
-  const products = await listProductsForAgentContext().catch(() => []);
+export async function getOpenAIStatus(companyId?: string | null) {
+  const products = await listProductsForAgentContext(companyId || null).catch(() => []);
   return {
     configured: Boolean(env.openaiApiKey),
     model: env.openaiModel,
@@ -73,8 +74,8 @@ function buildProductDiscountLabel(item: {
   return " | desconto ativo: nÃ£o";
 }
 
-export async function getAgentProductContextText(): Promise<string> {
-  const products = await listProductsForAgentContext();
+export async function getAgentProductContextText(companyId?: string | null): Promise<string> {
+  const products = await listProductsForAgentContext(companyId || null);
   if (!products.length) {
     return "Nenhum produto cadastrado.";
   }
@@ -184,12 +185,14 @@ export async function generateAiSalesReply(input: {
 }) {
   const client = getOpenAIClient();
   const storedSettings = input.accountId ? await getAiAccountSettings(input.accountId).catch(() => null) : null;
+  const account = input.accountId ? await getWhatsAppAccountById(input.accountId, null).catch(() => null) : null;
+  const companyId = account?.company_id || null;
   const companyName = String(input.companyName || storedSettings?.company_name || "").trim() || "Empresa";
   const agentName = String(input.agentName || storedSettings?.agent_name || "").trim() || "Agente de vendas";
   const moodInstruction = getMoodInstruction(storedSettings?.mood || "informal");
   const storeContext = buildStoreContextText(storedSettings || {});
-  const detailedProducts = await listProductsForAgentDetailedContext();
-  const productCatalog = await getAgentProductContextText();
+  const detailedProducts = await listProductsForAgentDetailedContext(companyId);
+  const productCatalog = await getAgentProductContextText(companyId);
   const productCatalogWithImages =
     detailedProducts.length > 0
       ? detailedProducts

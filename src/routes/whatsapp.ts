@@ -28,7 +28,10 @@ type AuthRequest = Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
+    company_name?: string | null;
+    company_cnpj?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
   };
@@ -36,7 +39,27 @@ type AuthRequest = Request & {
 
 router.get("/status", async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(200).json({
+      whatsapp: {
+        connected: false,
+        started: false,
+        sessionPath: null,
+        userId: null,
+        userPhone: null,
+        userName: null,
+        historySyncActive: false,
+        historySyncProgress: 0,
+        historySyncImportedCount: 0,
+        historySyncMessage: "",
+        qrAvailable: false,
+        qrUpdatedAt: null,
+      },
+    });
+  }
   const status = getWhatsAppConnectionStatus(selected?.wa_jid || null, selected?.session_path || null);
   const connected = getCurrentWhatsAppAccount(selected?.wa_jid || null, selected?.session_path || null);
 
@@ -59,8 +82,10 @@ router.get("/status", async (req, res) => {
 
 router.get("/accounts", async (req, res) => {
   const authReq = req as AuthRequest;
-  const accounts = await listWhatsAppAccounts();
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const accounts = await listWhatsAppAccounts(authReq.authUser?.company_id || null);
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
   const connectedAccounts = new Set(listConnectedWhatsAppAccounts().map((item) => item.waJid));
 
   return res.status(200).json({
@@ -70,7 +95,10 @@ router.get("/accounts", async (req, res) => {
       selected: Boolean(selected?.selected_account_id) && selected?.selected_account_id === item.id,
     })),
     selected_account_id: selected?.selected_account_id || null,
-    connected_account_jid: getCurrentWhatsAppAccount(selected?.wa_jid || null, selected?.session_path || null).waJid || null,
+    connected_account_jid:
+      selected?.wa_jid && connectedAccounts.has(selected.wa_jid)
+        ? selected.wa_jid
+        : null,
   });
 });
 
@@ -95,7 +123,11 @@ router.post("/selected-account", async (req, res) => {
   const accountId = String(req.body?.account_id || "").trim() || null;
 
   try {
-    const selected = await setUserSelectedWhatsAppAccount(authReq.authUser.id, accountId);
+    const selected = await setUserSelectedWhatsAppAccount(
+      authReq.authUser.id,
+      accountId,
+      authReq.authUser.company_id || null,
+    );
     return res.status(200).json({
       status: "ok",
       selected_account_id: selected.selected_account_id || null,
@@ -110,7 +142,15 @@ router.post("/selected-account", async (req, res) => {
 
 router.get("/qr", async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(200).json({
+      qr: null,
+      updatedAt: null,
+    });
+  }
   const sessionPath = selected?.session_path || null;
   const connected = getCurrentWhatsAppAccount(selected?.wa_jid || null, sessionPath);
 
@@ -126,7 +166,14 @@ router.get("/qr", async (req, res) => {
 
 router.get("/profile-avatar", async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(200).json({
+      avatar_url: null,
+    });
+  }
   const connected = getCurrentWhatsAppAccount(selected?.wa_jid || null, selected?.session_path || null);
 
   if (selected?.wa_jid && connected.waJid && selected.wa_jid !== connected.waJid) {
@@ -143,10 +190,10 @@ router.get("/profile-avatar", async (req, res) => {
 router.post("/accounts/provision", requireAdmin, async (req, res) => {
   const authReq = req as AuthRequest;
   const displayName = String(req.body?.display_name || "").trim() || "Novo número";
-  const account = await createPendingWhatsAppAccount(displayName);
+  const account = await createPendingWhatsAppAccount(displayName, authReq.authUser?.company_id || null);
 
   if (authReq.authUser?.id) {
-    await setUserSelectedWhatsAppAccount(authReq.authUser.id, account.id);
+    await setUserSelectedWhatsAppAccount(authReq.authUser.id, account.id, authReq.authUser.company_id || null);
   }
 
   return res.status(201).json({
@@ -156,12 +203,13 @@ router.post("/accounts/provision", requireAdmin, async (req, res) => {
 });
 
 router.delete("/accounts/:accountId", requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
   const accountId = String(req.params.accountId || "").trim();
   if (!accountId) {
     return res.status(400).json({ error: "Conta WhatsApp invalida." });
   }
 
-  const account = await getWhatsAppAccountById(accountId);
+  const account = await getWhatsAppAccountById(accountId, authReq.authUser?.company_id || null);
   if (!account) {
     return res.status(404).json({ error: "Conta WhatsApp não encontrada." });
   }
@@ -170,7 +218,7 @@ router.delete("/accounts/:accountId", requireAdmin, async (req, res) => {
     await disconnectWhatsAppSession(account.session_path);
   }
 
-  const deleted = await deleteWhatsAppAccount(accountId);
+  const deleted = await deleteWhatsAppAccount(accountId, authReq.authUser?.company_id || null);
   if (!deleted) {
     return res.status(404).json({ error: "Conta WhatsApp não encontrada." });
   }
@@ -187,7 +235,12 @@ router.delete("/accounts/:accountId", requireAdmin, async (req, res) => {
 
 router.post("/connect", async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(409).json({ error: "Selecione um numero da sua empresa antes de conectar." });
+  }
   const sessionPath = selected?.selected_account_id ? await ensureWhatsAppAccountSessionPath(selected.selected_account_id) : undefined;
   await requestWhatsAppConnect(sessionPath);
   return res.status(200).json({
@@ -198,7 +251,12 @@ router.post("/connect", async (req, res) => {
 
 router.post("/disconnect", requireAdmin, async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(409).json({ error: "Selecione um numero da sua empresa antes de desconectar." });
+  }
   const connected = getCurrentWhatsAppAccount(selected?.wa_jid || null, selected?.session_path || null);
   if (selected?.wa_jid && connected.waJid && selected.wa_jid !== connected.waJid) {
     return res.status(409).json({ error: "A conta selecionada não está conectada nesta sessão ativa." });
@@ -212,7 +270,12 @@ router.post("/disconnect", requireAdmin, async (req, res) => {
 
 router.post("/sync-history", requireAdmin, async (req, res) => {
   const authReq = req as AuthRequest;
-  const selected = authReq.authUser?.id ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id) : null;
+  const selected = authReq.authUser?.id
+    ? await getUserSelectedWhatsAppAccountWithDetails(authReq.authUser.id, authReq.authUser?.company_id || null)
+    : null;
+  if (!selected?.selected_account_id) {
+    return res.status(409).json({ error: "Selecione um numero da sua empresa antes de sincronizar." });
+  }
   const sessionPath = selected?.selected_account_id ? await ensureWhatsAppAccountSessionPath(selected.selected_account_id) : undefined;
   await requestWhatsAppHistorySync(sessionPath);
   return res.status(200).json({

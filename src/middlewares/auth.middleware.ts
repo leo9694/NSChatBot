@@ -8,7 +8,12 @@ type AuthRequest = Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
+    company_name?: string | null;
+    company_cnpj?: string | null;
+    sector_id?: string | null;
+    sector_name?: string | null;
   };
   authSessionId?: string;
 };
@@ -111,7 +116,18 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!authReq.authUser) {
     return res.status(401).json({ error: "Sessao invalida." });
   }
-  if (authReq.authUser.role !== "administrador") {
+  if (!["ceo", "administrador"].includes(authReq.authUser.role)) {
+    return res.status(403).json({ error: "Permissao negada." });
+  }
+  return next();
+}
+
+export function requireCEO(req: Request, res: Response, next: NextFunction) {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+  if (authReq.authUser.role !== "ceo") {
     return res.status(403).json({ error: "Permissao negada." });
   }
   return next();

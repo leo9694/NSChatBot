@@ -567,6 +567,9 @@
                 <button id="settingsTabSectors" type="button" class="settings-nav-item">
                   <i class="bi bi-diagram-3-fill"></i> Setores
                 </button>
+                <button id="settingsTabCompanies" type="button" class="settings-nav-item" hidden>
+                  <i class="bi bi-buildings-fill"></i> Empresas
+                </button>
                 <button id="settingsTabAccounts" type="button" class="settings-nav-item">
                   <i class="bi bi-phone-fill"></i> Gerência de perfis
                 </button>
@@ -595,6 +598,10 @@
                     <div class="settings-profile-item">
                       <span class="profile-label">Setor</span>
                       <strong id="settingsProfileSector">-</strong>
+                    </div>
+                    <div class="settings-profile-item">
+                      <span class="profile-label">Empresa</span>
+                      <strong id="settingsProfileCompany">-</strong>
                     </div>
                   </div>
                   <div id="settingsAdminActions" class="settings-footer-actions" hidden>
@@ -625,6 +632,7 @@
                         <select id="newUserRole">
                           <option value="operador">operador</option>
                           <option value="administrador">administrador</option>
+                          <option value="ceo" hidden>ceo</option>
                         </select>
                       </label>
                       <label>
@@ -651,6 +659,44 @@
                     <button type="submit" class="btn-primary">Cadastrar setor</button>
                   </form>
                   <div id="settingsSectorsList" class="settings-users-list"></div>
+                </div>
+
+                <div id="settingsPanelCompanies" class="bulk-card settings-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Empresas</h3>
+                      <p>Somente o CEO pode cadastrar novas empresas e definir o administrador inicial.</p>
+                    </div>
+                  </div>
+                  <div class="settings-companies-layout">
+                    <form id="createCompanyForm" class="new-chat-form settings-company-form">
+                      <label>
+                        Nome da empresa
+                        <input id="companyCreateName" type="text" required />
+                      </label>
+                      <label>
+                        CNPJ
+                        <input id="companyCreateCnpj" type="text" />
+                      </label>
+                      <label>
+                        Nome do administrador
+                        <input id="companyAdminName" type="text" required />
+                      </label>
+                      <label>
+                        Login do administrador
+                        <input id="companyAdminUsername" type="text" required />
+                      </label>
+                      <label>
+                        Senha do administrador
+                        <input id="companyAdminPassword" type="password" minlength="6" required />
+                      </label>
+                      <button type="submit" class="btn-primary">Cadastrar empresa</button>
+                    </form>
+                    <div class="settings-users-wrap settings-companies-wrap">
+                      <strong>Empresas cadastradas</strong>
+                      <div id="settingsCompaniesList" class="settings-users-list"></div>
+                    </div>
+                  </div>
                 </div>
 
                 <div id="settingsPanelAccounts" class="bulk-card settings-panel">
@@ -764,6 +810,7 @@
           <select id="editUserRole" required>
             <option value="operador">operador</option>
             <option value="administrador">administrador</option>
+            <option value="ceo" hidden>ceo</option>
           </select>
         </label>
         <label>

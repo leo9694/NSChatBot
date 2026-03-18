@@ -1,6 +1,7 @@
 ﻿import { Router } from "express";
 import { getOpenAIStatus, testOpenAIConnection } from "../services/openai.service";
 import { cancelAiOrder, confirmAiOrder, deleteAiOrder, getAiAccountSettings, getAiOrderById, listAiOrders, upsertAiAccountSettings } from "../repositories/ai.repository";
+import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { sendWhatsAppText } from "../services/whatsapp.service";
 
@@ -10,7 +11,8 @@ type AuthRequest = Express.Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
   };
 };
 
@@ -36,9 +38,10 @@ function formatCustomerOrderMessage(input: {
   return parts.join("\n\n");
 }
 
-router.get("/status", (_req, res) => {
+router.get("/status", (req, res) => {
+  const authReq = req as AuthRequest;
   void (async () => {
-    return res.status(200).json(await getOpenAIStatus());
+    return res.status(200).json(await getOpenAIStatus(authReq.authUser?.company_id || null));
   })().catch((error) => {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Falha ao obter status do agente.",
@@ -63,12 +66,17 @@ router.post("/test", async (_req, res) => {
 });
 
 router.get("/settings", async (req, res) => {
+  const authReq = req as AuthRequest;
   const accountId = String(req.query.account_id || "").trim();
   if (!accountId) {
     return res.status(400).json({ error: "Informe account_id." });
   }
 
   try {
+    const account = await getWhatsAppAccountById(accountId, authReq.authUser?.company_id || null);
+    if (!account) {
+      return res.status(404).json({ error: "Conta nao encontrada para esta empresa." });
+    }
     const settings = await getAiAccountSettings(accountId);
     return res.status(200).json({
       account_id: accountId,
@@ -120,6 +128,10 @@ router.put("/settings", async (req, res) => {
   }
 
   try {
+    const account = await getWhatsAppAccountById(accountId, authReq.authUser?.company_id || null);
+    if (!account) {
+      return res.status(404).json({ error: "Conta nao encontrada para esta empresa." });
+    }
     const settings = await upsertAiAccountSettings({
       accountId,
       agentName,
@@ -144,10 +156,17 @@ router.put("/settings", async (req, res) => {
 });
 
 router.get("/orders", async (req, res) => {
+  const authReq = req as AuthRequest;
   const accountId = String(req.query.account_id || "").trim() || null;
 
   try {
-    const items = await listAiOrders(accountId);
+    if (accountId) {
+      const account = await getWhatsAppAccountById(accountId, authReq.authUser?.company_id || null);
+      if (!account) {
+        return res.status(404).json({ error: "Conta nao encontrada para esta empresa." });
+      }
+    }
+    const items = await listAiOrders(accountId, authReq.authUser?.company_id || null);
     return res.status(200).json({ items });
   } catch (error) {
     return res.status(500).json({
@@ -175,6 +194,12 @@ router.post("/orders/:orderId/confirm", async (req, res) => {
     const order = await getAiOrderById(orderId);
     if (!order) {
       return res.status(404).json({ error: "Pedido nÃ£o encontrado." });
+    }
+    if (order.account_id) {
+      const account = await getWhatsAppAccountById(order.account_id, authReq.authUser?.company_id || null);
+      if (!account) {
+        return res.status(404).json({ error: "Pedido nao pertence a esta empresa." });
+      }
     }
     if (order.status === "cancelled") {
       return res.status(409).json({ error: "Este pedido ja foi cancelado." });
@@ -256,6 +281,12 @@ router.post("/orders/:orderId/cancel", async (req, res) => {
     if (!order) {
       return res.status(404).json({ error: "Pedido nÃ£o encontrado." });
     }
+    if (order.account_id) {
+      const account = await getWhatsAppAccountById(order.account_id, authReq.authUser?.company_id || null);
+      if (!account) {
+        return res.status(404).json({ error: "Pedido nao pertence a esta empresa." });
+      }
+    }
     if (order.status === "cancelled") {
       return res.status(409).json({ error: "Este pedido ja foi cancelado." });
     }
@@ -324,6 +355,12 @@ router.delete("/orders/:orderId", async (req, res) => {
     const exists = await getAiOrderById(orderId);
     if (!exists) {
       return res.status(404).json({ error: "Pedido nÃ£o encontrado." });
+    }
+    if (exists.account_id) {
+      const account = await getWhatsAppAccountById(exists.account_id, authReq.authUser?.company_id || null);
+      if (!account) {
+        return res.status(404).json({ error: "Pedido nao pertence a esta empresa." });
+      }
     }
     const deleted = await deleteAiOrder(orderId);
     if (!deleted) {

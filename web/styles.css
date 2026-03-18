@@ -1852,6 +1852,17 @@ body.auth-lock {
   margin-top: auto;
 }
 
+.settings-companies-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-companies-wrap {
+  min-height: 100%;
+}
+
 .settings-account-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2822,6 +2833,10 @@ body.auth-lock {
   }
 
   .agent-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-companies-layout {
     grid-template-columns: 1fr;
   }
 

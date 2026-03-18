@@ -24,7 +24,8 @@ type AuthRequest = Request & {
     id: string;
     name: string;
     username: string;
-    role: "administrador" | "operador";
+    role: "ceo" | "administrador" | "operador";
+    company_id?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
   };
@@ -76,7 +77,23 @@ function buildSignedTextMessage(message: string, attendantName: string): string 
   return `*${cleanName}*:\n${cleanMessage}`;
 }
 
+async function conversationBelongsToCompany(conversationId: string, companyId?: string | null) {
+  const result = await pool.query<{ id: string }>(
+    `
+    SELECT c.id
+    FROM conversations c
+    JOIN whatsapp_accounts wa ON wa.id = c.account_id
+    WHERE c.id = $1
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
+    LIMIT 1
+    `,
+    [conversationId, companyId || null],
+  );
+  return result.rows.length > 0;
+}
+
 router.get("/", async (req, res) => {
+  const authReq = req as AuthRequest;
   const search = (req.query.search as string | undefined)?.trim() || "";
   const accountJid = (req.query.account_jid as string | undefined)?.trim() || "";
   const serviceStatus = (req.query.service_status as string | undefined)?.trim() || "";
@@ -138,6 +155,7 @@ router.get("/", async (req, res) => {
     WHERE ($1::text = '' OR c.phone ILIKE $2 OR COALESCE(c.display_name, '') ILIKE $2)
       AND ($5::text = '' OR wa.wa_jid = $5)
       AND ($6::text = '' OR c.service_status = $6)
+      AND ($8::uuid IS NULL OR wa.company_id = $8)
       AND (
         (
           $7::boolean = true
@@ -175,7 +193,16 @@ router.get("/", async (req, res) => {
     LIMIT $3 OFFSET $4
   `;
 
-  const result = await pool.query(query, [search, `%${search}%`, limit, offset, accountJid, serviceStatus, bulkOnly]);
+  const result = await pool.query(query, [
+    search,
+    `%${search}%`,
+    limit,
+    offset,
+    accountJid,
+    serviceStatus,
+    bulkOnly,
+    authReq.authUser?.company_id || null,
+  ]);
   return res.status(200).json({
     items: result.rows,
     pagination: { limit, offset, hasSearch },
@@ -183,6 +210,7 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/summary", async (req, res) => {
+  const authReq = req as AuthRequest;
   const accountJid = (req.query.account_jid as string | undefined)?.trim() || "";
   const query = `
     WITH base AS (
@@ -207,6 +235,7 @@ router.get("/summary", async (req, res) => {
           AND m.message_type <> 'protocolMessage'
       ) msg_stats ON true
       WHERE ($1::text = '' OR wa.wa_jid = $1)
+        AND ($2::uuid IS NULL OR wa.company_id = $2)
         AND (
           COALESCE(msg_stats.total_messages, 0) > 0
           OR c.client_id IS NOT NULL
@@ -238,7 +267,7 @@ router.get("/summary", async (req, res) => {
     in_progress_count: number;
     finalized_count: number;
     bulk_count: number;
-  }>(query, [accountJid]);
+  }>(query, [accountJid, authReq.authUser?.company_id || null]);
 
   const row = result.rows[0] || { pending_count: 0, in_progress_count: 0, finalized_count: 0, bulk_count: 0 };
   return res.status(200).json({
@@ -270,8 +299,9 @@ router.post("/finalize-pending-all", async (req, res) => {
     WHERE wa.id = c.account_id
       AND c.service_status = 'pending'
       AND ($1::text = '' OR wa.wa_jid = $1)
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
     `,
-    [accountJid],
+    [accountJid, authReq.authUser?.company_id || null],
   );
 
   return res.status(200).json({
@@ -281,7 +311,11 @@ router.post("/finalize-pending-all", async (req, res) => {
 });
 
 router.get("/:conversationId/messages", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
   const limit = Math.min(parsePositiveInt(req.query.limit, 50), 200);
   const before = req.query.before as string | undefined;
 
@@ -330,7 +364,11 @@ router.get("/:conversationId/messages", async (req, res) => {
 });
 
 router.patch("/:conversationId/read", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
   await resetConversationUnread(conversationId);
 
   return res.status(200).json({
@@ -341,7 +379,11 @@ router.patch("/:conversationId/read", async (req, res) => {
 });
 
 router.patch("/:conversationId/ai-agent", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
   const enabled = Boolean(req.body?.enabled);
   const ok = await updateConversationAiEnabled(conversationId, enabled);
   if (!ok) {
@@ -368,6 +410,9 @@ router.patch("/:conversationId/claim", async (req, res) => {
   if (!userId) {
     return res.status(401).json({ error: "Sessao invalida." });
   }
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
 
   const ok = await claimConversation(conversationId, userId);
   if (!ok) {
@@ -383,6 +428,9 @@ router.patch("/:conversationId/finalize", async (req, res) => {
   const userId = String(authReq.authUser?.id || "").trim();
   if (!userId) {
     return res.status(401).json({ error: "Sessao invalida." });
+  }
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
   }
 
   const access = await getConversationAccess(conversationId);
@@ -414,6 +462,9 @@ router.patch("/:conversationId/transfer", async (req, res) => {
   if (!targetUserId) {
     return res.status(400).json({ error: "Informe o atendente de destino." });
   }
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
 
   const access = await getConversationAccess(conversationId);
   if (!access) {
@@ -435,9 +486,10 @@ router.patch("/:conversationId/transfer", async (req, res) => {
     FROM app_users
     WHERE id = $1
       AND is_active = true
+      AND ($2::uuid IS NULL OR company_id = $2)
     LIMIT 1
     `,
-    [targetUserId],
+    [targetUserId, authReq.authUser?.company_id || null],
   );
   if (!targetResult.rows.length) {
     return res.status(400).json({ error: "Atendente de destino invalido." });
@@ -452,7 +504,11 @@ router.patch("/:conversationId/transfer", async (req, res) => {
 });
 
 router.delete("/:conversationId", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
   const deleteContact = String(req.query.delete_contact || "true") === "true";
 
   try {
@@ -512,7 +568,11 @@ router.delete("/:conversationId", async (req, res) => {
 });
 
 router.patch("/:conversationId/contact", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
+  if (!(await conversationBelongsToCompany(conversationId, authReq.authUser?.company_id || null))) {
+    return res.status(404).json({ error: "Conversa nao encontrada." });
+  }
   const name = String(req.body?.name || "").trim();
 
   if (!name) {
@@ -580,10 +640,21 @@ router.patch("/:conversationId/contact", async (req, res) => {
 });
 
 router.get("/:conversationId/avatar", async (req, res) => {
+  const authReq = req as AuthRequest;
   const { conversationId } = req.params;
   const result = await pool.query(
-    `SELECT id, wa_jid, COALESCE(metadata->>'avatar_url', '') AS avatar_url FROM conversations WHERE id = $1`,
-    [conversationId],
+    `
+    SELECT
+      c.id,
+      c.wa_jid,
+      COALESCE(c.metadata->>'avatar_url', '') AS avatar_url,
+      wa.wa_jid AS account_wa_jid
+    FROM conversations c
+    JOIN whatsapp_accounts wa ON wa.id = c.account_id
+    WHERE c.id = $1
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
+    `,
+    [conversationId, authReq.authUser?.company_id || null],
   );
 
   if (result.rows.length === 0) {
@@ -626,7 +697,7 @@ router.post("/start", async (req, res) => {
   }
 
   try {
-    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id);
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
     const currentAccount = accountContext.effective!;
     const targetJid = phoneToJid(phone);
     const avatarUrl = (await getProfilePictureUrl(targetJid, currentAccount.waJid)) || "";
@@ -635,6 +706,7 @@ router.post("/start", async (req, res) => {
     const account = await upsertWhatsAppAccount({
       waJid: currentAccount.waJid,
       displayName: currentAccount.displayName,
+      companyId: authReq.authUser?.company_id || null,
     });
 
     const clientResult = await pool.query(

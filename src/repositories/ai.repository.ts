@@ -575,7 +575,7 @@ export async function createAiOrder(input: {
   return result.rows[0];
 }
 
-export async function listAiOrders(accountId?: string | null): Promise<AiOrderRow[]> {
+export async function listAiOrders(accountId?: string | null, companyId?: string | null): Promise<AiOrderRow[]> {
   await ensureAiSchema();
   const result = await pool.query<AiOrderRow>(
     `
@@ -608,9 +608,10 @@ export async function listAiOrders(accountId?: string | null): Promise<AiOrderRo
     LEFT JOIN conversations c ON c.id = o.conversation_id
     LEFT JOIN whatsapp_accounts wa ON wa.id = o.account_id
     WHERE ($1::uuid IS NULL OR o.account_id = $1)
+      AND ($2::uuid IS NULL OR wa.company_id = $2)
     ORDER BY o.created_at DESC
     `,
-    [accountId || null],
+    [accountId || null, companyId || null],
   );
 
   return result.rows.map((row) => ({
