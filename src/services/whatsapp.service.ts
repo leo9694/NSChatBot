@@ -24,9 +24,10 @@ import {
 } from "../utils/whatsapp";
 import { getWhatsAppHistorySyncState, listWhatsAppAccounts, setWhatsAppHistorySyncBaseline, upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { saveInboundMessage, saveOutboundMessage, updateOutboundMessageStatus } from "../repositories/messages.repository";
-import { handleInboundAiAutomation, registerCustomerTypingActivity, scheduleInboundAiAutomation } from "./ai-agent.service";
+import { handleInboundAiAutomation, registerCustomerMessageActivity, registerCustomerTypingActivity, registerCustomerTypingStopped, scheduleInboundAiAutomation } from "./ai-agent.service";
 import { saveMediaBuffer } from "./media.service";
 import { pool } from "../db/pool";
+import { publishConversationTyping } from "./realtime.service";
 
 export interface SendWhatsAppTextInput {
   to: string;
@@ -454,7 +455,7 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
     });
 
     if (inboundResult.conversationId) {
-      scheduleInboundAiAutomation(inboundResult.conversationId, { reason: "inbound_message" });
+      registerCustomerMessageActivity(inboundResult.conversationId);
     }
 
     logUpsert({
@@ -943,12 +944,15 @@ export async function startWhatsAppSession(
       }
 
       const presences = event?.presences && typeof event.presences === "object" ? Object.values(event.presences) : [];
-      const hasTypingSignal = presences.some((presence: any) => {
-        const state = String(presence?.lastKnownPresence || presence?.presence || "").toLowerCase();
-        return state === "composing" || state === "recording" || state === "available";
-      });
+      const states = presences
+        .map((presence: any) => String(presence?.lastKnownPresence || presence?.presence || "").toLowerCase())
+        .filter(Boolean);
+      const hasTypingSignal = states.some((state) => state === "composing" || state === "recording");
+      const hasTypingStoppedSignal = states.some(
+        (state) => state === "paused" || state === "available" || state === "unavailable",
+      );
 
-      if (!hasTypingSignal || !session.selfJid) {
+      if ((!hasTypingSignal && !hasTypingStoppedSignal) || !session.selfJid) {
         return;
       }
 
@@ -957,7 +961,26 @@ export async function startWhatsAppSession(
         return;
       }
 
-      registerCustomerTypingActivity(conversationId);
+      if (hasTypingSignal) {
+        registerCustomerTypingActivity(conversationId);
+        publishConversationTyping({
+          accountJid: session.selfJid,
+          conversationId,
+          active: true,
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (hasTypingStoppedSignal) {
+        registerCustomerTypingStopped(conversationId);
+        publishConversationTyping({
+          accountJid: session.selfJid,
+          conversationId,
+          active: false,
+          createdAt: new Date().toISOString(),
+        });
+      }
     } catch {
       // Ignore presence parsing failures; fallback debounce by message still works.
     }
@@ -1333,6 +1356,65 @@ export async function sendWhatsAppText({ to, message, accountJid }: SendWhatsApp
   }
 
   return response;
+}
+
+export async function setWhatsAppTypingPresence(input: {
+  to: string;
+  accountJid?: string | null;
+  active: boolean;
+}): Promise<() => Promise<void>> {
+  const session = resolveSessionForAccount(input.accountJid, input.accountJid ? null : activeSessionPath);
+  if (!session.sock || !session.connected) {
+    return async () => undefined;
+  }
+
+  const jid = phoneToJid(input.to);
+  let stopped = false;
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+
+  const sendPresence = async (state: "composing" | "paused"): Promise<void> => {
+    if (!session.sock || !session.connected) return;
+    await session.sock.sendPresenceUpdate(state, jid);
+  };
+
+  if (input.active) {
+    await sendPresence("composing").catch(() => undefined);
+    heartbeatTimer = setInterval(() => {
+      if (stopped || !session.sock || !session.connected) return;
+      void sendPresence("composing").catch(() => undefined);
+    }, 4_000);
+  } else {
+    await sendPresence("paused").catch(() => undefined);
+  }
+
+  return async () => {
+    if (stopped) return;
+    stopped = true;
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    await sendPresence("paused").catch(() => undefined);
+  };
+}
+
+export async function subscribeWhatsAppPresence(input: {
+  chatJid: string;
+  accountJid?: string | null;
+}): Promise<boolean> {
+  const session = resolveSessionForAccount(input.accountJid, input.accountJid ? null : activeSessionPath);
+  if (!session.sock || !session.connected) {
+    return false;
+  }
+
+  const jid = normalizeChatJid(String(input.chatJid || ""));
+  if (!jid || !isDirectChatJid(jid)) {
+    return false;
+  }
+
+  await session.sock.presenceSubscribe(jid).catch(() => undefined);
+  await session.sock.sendPresenceUpdate("available").catch(() => undefined);
+  return true;
 }
 
 export async function sendWhatsAppAudio(input: SendWhatsAppAudioInput): Promise<WAMessage> {

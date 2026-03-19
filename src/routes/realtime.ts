@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "../db/pool";
-import { onMessageSaved, onMessageStatus, waitForRealtimeEvent } from "../services/realtime.service";
+import { onConversationTyping, onMessageSaved, onMessageStatus, waitForRealtimeEvent } from "../services/realtime.service";
 
 const router = Router();
 
@@ -91,6 +91,12 @@ router.get("/stream", (req, res) => {
     }
     send("message_status", event);
   });
+  const unsubscribeTyping = onConversationTyping((event) => {
+    if (accountJid && event.accountJid !== accountJid) {
+      return;
+    }
+    send("conversation_typing", event);
+  });
 
   const heartbeat = setInterval(() => {
     send("ping", { ts: new Date().toISOString() });
@@ -100,6 +106,7 @@ router.get("/stream", (req, res) => {
     clearInterval(heartbeat);
     unsubscribe();
     unsubscribeStatus();
+    unsubscribeTyping();
     res.end();
   });
 });

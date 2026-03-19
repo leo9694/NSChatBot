@@ -9,9 +9,16 @@ export interface MessageSavedEvent {
   message?: Record<string, unknown>;
 }
 
+export interface ConversationTypingEvent {
+  accountJid: string;
+  conversationId: string;
+  active: boolean;
+  createdAt: string;
+}
+
 export interface RealtimeEventEnvelope {
-  type: "message_saved" | "message_status";
-  payload: MessageSavedEvent;
+  type: "message_saved" | "message_status" | "conversation_typing";
+  payload: MessageSavedEvent | ConversationTypingEvent;
   seq: number;
 }
 
@@ -23,6 +30,7 @@ const REALTIME_BACKLOG_LIMIT = 500;
 
 const MESSAGE_SAVED_EVENT = "message_saved";
 const MESSAGE_STATUS_EVENT = "message_status";
+const CONVERSATION_TYPING_EVENT = "conversation_typing";
 
 export function publishMessageSaved(event: MessageSavedEvent): void {
   const envelope: RealtimeEventEnvelope = {
@@ -64,6 +72,26 @@ export function onMessageStatus(listener: (event: MessageSavedEvent) => void): (
   };
 }
 
+export function publishConversationTyping(event: ConversationTypingEvent): void {
+  const envelope: RealtimeEventEnvelope = {
+    type: "conversation_typing",
+    payload: event,
+    seq: nextRealtimeSeq++,
+  };
+  realtimeBacklog.push(envelope);
+  if (realtimeBacklog.length > REALTIME_BACKLOG_LIMIT) {
+    realtimeBacklog.splice(0, realtimeBacklog.length - REALTIME_BACKLOG_LIMIT);
+  }
+  realtimeEmitter.emit(CONVERSATION_TYPING_EVENT, event);
+}
+
+export function onConversationTyping(listener: (event: ConversationTypingEvent) => void): () => void {
+  realtimeEmitter.on(CONVERSATION_TYPING_EVENT, listener);
+  return () => {
+    realtimeEmitter.off(CONVERSATION_TYPING_EVENT, listener);
+  };
+}
+
 export function waitForRealtimeEvent(accountJid: string, sinceSeq = 0, timeoutMs = 25_000): Promise<RealtimeEventEnvelope | null> {
   return new Promise((resolve) => {
     let settled = false;
@@ -80,6 +108,7 @@ export function waitForRealtimeEvent(accountJid: string, sinceSeq = 0, timeoutMs
       clearTimeout(timer);
       offSaved();
       offStatus();
+      offTyping();
       resolve(value);
     };
 
@@ -100,6 +129,17 @@ export function waitForRealtimeEvent(accountJid: string, sinceSeq = 0, timeoutMs
       }
       done({
         type: "message_status",
+        payload: event,
+        seq: nextRealtimeSeq - 1,
+      });
+    });
+
+    const offTyping = onConversationTyping((event) => {
+      if (accountJid && event.accountJid !== accountJid) {
+        return;
+      }
+      done({
+        type: "conversation_typing",
         payload: event,
         seq: nextRealtimeSeq - 1,
       });

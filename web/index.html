@@ -162,6 +162,15 @@
 
           <section id="messagesArea" class="messages-area"></section>
 
+          <div id="chatTypingDock" class="chat-typing-dock" hidden>
+            <div class="chat-typing-bubble" aria-live="polite" aria-atomic="true">
+              <span class="chat-typing-text">digitando...</span>
+              <span class="chat-typing-dots" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </span>
+            </div>
+          </div>
+
           <footer class="composer">
             <form id="sendForm" class="composer-form">
               <div id="textComposer" class="text-composer">
@@ -762,11 +771,18 @@
 
     <div id="conversationMenu" class="conversation-menu">
       <button id="deleteConversationBtn" type="button">Excluir conversa</button>
-      <label class="conversation-menu-check">
-        <input id="conversationAIAgentToggle" type="checkbox" />
-        <span>Resposta por agente de venda</span>
+      <label class="conversation-menu-switch">
+        <span class="conversation-menu-switch-text">
+          <strong>Atendimento pelo agente</strong>
+          <small>Quando ligado, a IA assume este chat automaticamente.</small>
+        </span>
+        <span class="switch-control">
+          <input id="conversationAIAgentToggle" type="checkbox" />
+          <span class="switch-slider" aria-hidden="true"></span>
+        </span>
       </label>
       <button id="editConversationBtn" type="button">Editar contato</button>
+      <button id="finalizeConversationMenuBtn" type="button">Concluir atendimento</button>
       <button id="transferConversationBtn" type="button">Transferir atendimento</button>
     </div>
 

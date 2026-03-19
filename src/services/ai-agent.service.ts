@@ -11,19 +11,29 @@ import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { listProductsForAgentDetailedContext } from "../repositories/products.repository";
 import { generateAiSalesReply } from "./openai.service";
 import { loadMediaBufferFromUrl } from "./media.service";
-import { sendWhatsAppMedia, sendWhatsAppText } from "./whatsapp.service";
+import { sendWhatsAppMedia, sendWhatsAppText, setWhatsAppTypingPresence } from "./whatsapp.service";
 
 const processingConversations = new Set<string>();
 const queuedConversations = new Set<string>();
 const recentAiReplies = new Map<string, { body: string; at: number }>();
 const customerTurnTimers = new Map<string, NodeJS.Timeout>();
 const customerTurnDeadlines = new Map<string, number>();
+const customerTypingActive = new Map<string, boolean>();
+const customerTypingLastActivityAt = new Map<string, number>();
+const customerTypingLastStoppedAt = new Map<string, number>();
+const customerLastActivityAt = new Map<string, number>();
 const GENERIC_PRODUCT_NAME_PARTS = new Set(["semente", "sementes", "produto", "produtos", "servico", "servicos"]);
-const CUSTOMER_TURN_WAIT_MS = 20_000;
+const CUSTOMER_TURN_WAIT_MS = 5_000;
+const CUSTOMER_TYPING_STALE_MS = 12_000;
 
 interface HandleInboundAiAutomationOptions {
   forceLatestCustomerMessage?: boolean;
 }
+
+let inboundAiAutomationRunner: (
+  conversationId: string,
+  options?: HandleInboundAiAutomationOptions,
+) => Promise<{ ok: boolean; replied: boolean; reason?: string }> = handleInboundAiAutomation;
 
 function clearCustomerTurnTimer(conversationId: string): void {
   const existing = customerTurnTimers.get(conversationId);
@@ -43,16 +53,93 @@ export function scheduleInboundAiAutomation(
   customerTurnDeadlines.set(conversationId, Date.now() + delayMs);
 
   const timer = setTimeout(() => {
+    const now = Date.now();
+    const typingActive = customerTypingActive.get(conversationId) === true;
+    const lastTypingActivityAt = customerTypingLastActivityAt.get(conversationId) || 0;
+    const lastTypingStoppedAt = customerTypingLastStoppedAt.get(conversationId) || 0;
+    const lastCustomerActivityAt = customerLastActivityAt.get(conversationId) || 0;
+
+    if (typingActive) {
+      if (lastTypingActivityAt > 0 && now - lastTypingActivityAt > CUSTOMER_TYPING_STALE_MS) {
+        customerTypingActive.set(conversationId, false);
+        customerTypingLastStoppedAt.set(conversationId, now);
+        customerLastActivityAt.set(conversationId, now);
+      } else {
+        scheduleInboundAiAutomation(conversationId, {
+          delayMs: 1_000,
+          reason: "customer_still_typing",
+        });
+        return;
+      }
+    }
+
+    const turnAnchorAt = Math.max(lastCustomerActivityAt, lastTypingStoppedAt, lastTypingActivityAt);
+    if (turnAnchorAt > 0) {
+      const remainingWait = CUSTOMER_TURN_WAIT_MS - (now - turnAnchorAt);
+      if (remainingWait > 0) {
+        scheduleInboundAiAutomation(conversationId, {
+          delayMs: remainingWait,
+          reason: "waiting_for_customer_turn_end",
+        });
+        return;
+      }
+    }
+
     customerTurnTimers.delete(conversationId);
     customerTurnDeadlines.delete(conversationId);
-    void handleInboundAiAutomation(conversationId, { forceLatestCustomerMessage: true }).catch(() => undefined);
+    void inboundAiAutomationRunner(conversationId, { forceLatestCustomerMessage: true }).catch(() => undefined);
   }, delayMs);
 
   customerTurnTimers.set(conversationId, timer);
 }
 
+export function registerCustomerMessageActivity(conversationId: string): void {
+  const now = Date.now();
+  customerLastActivityAt.set(conversationId, now);
+  scheduleInboundAiAutomation(conversationId, { delayMs: CUSTOMER_TURN_WAIT_MS, reason: "customer_message" });
+}
+
 export function registerCustomerTypingActivity(conversationId: string): void {
+  const now = Date.now();
+  customerTypingActive.set(conversationId, true);
+  customerTypingLastActivityAt.set(conversationId, now);
+  customerLastActivityAt.set(conversationId, now);
   scheduleInboundAiAutomation(conversationId, { delayMs: CUSTOMER_TURN_WAIT_MS, reason: "customer_typing" });
+}
+
+export function registerCustomerTypingStopped(conversationId: string): void {
+  const now = Date.now();
+  customerTypingActive.set(conversationId, false);
+  customerTypingLastStoppedAt.set(conversationId, now);
+  customerLastActivityAt.set(conversationId, now);
+  scheduleInboundAiAutomation(conversationId, { delayMs: CUSTOMER_TURN_WAIT_MS, reason: "customer_typing_stopped" });
+}
+
+export function __setInboundAiAutomationRunnerForTests(
+  runner: (
+    conversationId: string,
+    options?: HandleInboundAiAutomationOptions,
+  ) => Promise<{ ok: boolean; replied: boolean; reason?: string }>,
+): void {
+  inboundAiAutomationRunner = runner;
+}
+
+export function __resetInboundAiAutomationRunnerForTests(): void {
+  inboundAiAutomationRunner = handleInboundAiAutomation;
+}
+
+export function __resetCustomerTurnStateForTests(): void {
+  for (const timer of customerTurnTimers.values()) {
+    clearTimeout(timer);
+  }
+  customerTurnTimers.clear();
+  customerTurnDeadlines.clear();
+  customerTypingActive.clear();
+  customerTypingLastActivityAt.clear();
+  customerTypingLastStoppedAt.clear();
+  customerLastActivityAt.clear();
+  processingConversations.clear();
+  queuedConversations.clear();
 }
 
 function normalizeName(value: string): string {
@@ -145,7 +232,7 @@ function hasDirectOrderConfirmation(body: string, quotedBody?: string | null, aw
     return false;
   }
 
-  return /^(sim|isso|isso mesmo|pode ser|ok|okay|beleza|certo|fechado|confirmo|pode)$/i.test(String(body || "").trim());
+  return /^(sim|isso|isso mesmo|pode ser|ok|okay|beleza|blz|certo|fechado|confirmo|confirmado|pode|ta|show|joia|aham|uhum)$/.test(text);
 }
 
 function buildOrderConfirmationPrompt(params: {
@@ -209,10 +296,39 @@ function isQuotedSelectionIntent(body: string, quotedBody?: string | null): bool
   );
 }
 
-function buildAiTurnBody(body: string, quotedBody?: string | null): string {
+function isShortContextReply(body: string): boolean {
+  const text = normalizeText(body);
+  if (!text) return false;
+  return (
+    /^(sim|isso|isso mesmo|pode ser|pode|ok|okay|beleza|blz|certo|fechado|confirmo|confirmado|ta|show|joia|aham|uhum|nao|quero|tenho interesse)$/.test(text) ||
+    /^(e esse|e essa|esse|essa|sobre isso|mais desse|mais dessa)$/i.test(text)
+  );
+}
+
+function findLastCompanyMessageBeforeTurn(messages: any[], turnMessages: any[]): any | null {
+  const firstTurnMessageId = turnMessages[0]?.id || null;
+  const searchPool = firstTurnMessageId
+    ? messages.slice(0, Math.max(0, messages.findIndex((item) => item?.id === firstTurnMessageId)))
+    : messages;
+
+  for (let index = searchPool.length - 1; index >= 0; index -= 1) {
+    const item = searchPool[index];
+    if (item?.from_me) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function buildAiTurnBody(body: string, quotedBody?: string | null, previousCompanyBody?: string | null): string {
   const cleanBody = String(body || "").trim();
   const cleanQuoted = String(quotedBody || "").trim();
+  const cleanPreviousCompany = String(previousCompanyBody || "").trim();
   if (!cleanQuoted) {
+    if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
+      return `${cleanBody}\n[Última mensagem da empresa: ${cleanPreviousCompany}]`;
+    }
     return cleanBody;
   }
 
@@ -222,6 +338,10 @@ function buildAiTurnBody(body: string, quotedBody?: string | null): string {
 
   if (isShortQuotedFollowup(cleanBody)) {
     return `${cleanBody}\n[Referência citada: ${cleanQuoted}]`;
+  }
+
+  if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
+    return `${cleanBody}\n[Referência citada: ${cleanQuoted}]\n[Última mensagem da empresa: ${cleanPreviousCompany}]`;
   }
 
   return cleanBody;
@@ -1156,6 +1276,7 @@ export async function handleInboundAiAutomation(
   }
 
   processingConversations.add(id);
+  let stopTypingIndicator: (() => void) | null = null;
   try {
     await wait(options.forceLatestCustomerMessage ? 180 : 550);
 
@@ -1176,9 +1297,14 @@ export async function handleInboundAiAutomation(
       return { ok: false, replied: false, reason: "missing_account_or_phone" };
     }
 
+    stopTypingIndicator = await setWhatsAppTypingPresence({
+      to: context.phone,
+      accountJid: context.account_wa_jid,
+      active: true,
+    }).catch(() => null);
+
     const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
     const mood = getAgentMood(accountSettings?.mood);
-    const configuredAgentName = String(accountSettings?.agent_name || "").trim();
 
     const messages = await listConversationMessagesForAi(id, 80);
     if (!messages.length) {
@@ -1209,7 +1335,8 @@ export async function handleInboundAiAutomation(
     }
     const quotedBody = customerTurn.combinedQuotedBody || (typeof lastMessage.metadata?.quoted_body === "string" ? lastMessage.metadata.quoted_body : null);
     const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
-    const latestCustomerBody = String(lastMessage.body || "");
+    const previousCompanyMessage = findLastCompanyMessageBeforeTurn(effectiveMessages, customerTurn.turnMessages);
+    const previousCompanyBody = String(previousCompanyMessage?.body || "").trim() || null;
     const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
     const customerDirectConfirmation = hasDirectOrderConfirmation(
       lastCustomerTurnBody,
@@ -1217,239 +1344,9 @@ export async function handleInboundAiAutomation(
       awaitingOrderConfirmation,
     );
 
-    if (
-      isClosingMessage(latestCustomerBody) ||
-      isShortAcknowledgeMessage(latestCustomerBody) ||
-      isStandaloneAgentMention(latestCustomerBody, configuredAgentName)
-    ) {
-      const closingReply = buildClosingReply(mood);
-      if (shouldSuppressDuplicateReply(id, closingReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: closingReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: closingReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_closing_message: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "closing_detected" };
-    }
-
-    const deterministicCatalogReply = buildDeterministicCatalogReply({
-      body: lastCustomerTurnBody,
-      quotedBody,
-      catalog,
-    });
-    if (deterministicCatalogReply) {
-      if (shouldSuppressDuplicateReply(id, deterministicCatalogReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: deterministicCatalogReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: deterministicCatalogReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_direct_catalog_reply: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "direct_catalog_reply" };
-    }
-
-    const deterministicStoreReply = buildDeterministicStoreReply({
-      body: lastCustomerTurnBody,
-      quotedBody,
-      settings: accountSettings,
-    });
-    if (deterministicStoreReply) {
-      if (shouldSuppressDuplicateReply(id, deterministicStoreReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: deterministicStoreReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: deterministicStoreReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_store_info_reply: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "deterministic_store_reply" };
-    }
-
-    if (
-      isClosingMessage(lastCustomerTurnBody) ||
-      isShortAcknowledgeMessage(lastCustomerTurnBody) ||
-      isStandaloneAgentMention(lastCustomerTurnBody, configuredAgentName)
-    ) {
-      const closingReply = buildClosingReply(mood);
-      if (shouldSuppressDuplicateReply(id, closingReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: closingReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: closingReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_closing_message: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "closing_detected" };
-    }
-
     const discountQuestion = isDiscountQuestion(lastCustomerTurnBody);
     const allowedDiscountProducts = discountQuestion ? getDiscountAwareProducts(catalog, lastCustomerTurnBody) : [];
     const discountAllowed = allowedDiscountProducts.length > 0;
-
-    const unrealisticSalesRequest = detectUnrealisticSalesRequest({
-      body: lastCustomerTurnBody,
-      catalog,
-    });
-    if (unrealisticSalesRequest) {
-      const unrealisticReply = buildUnrealisticSalesReply(mood, unrealisticSalesRequest);
-      if (shouldSuppressDuplicateReply(id, unrealisticReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: unrealisticReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: unrealisticReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_unrealistic_request: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "unrealistic_sales_request" };
-    }
-
-    if (discountQuestion && !discountAllowed) {
-      const noDiscountReply = buildNoDiscountPermissionReply(mood);
-      if (shouldSuppressDuplicateReply(id, noDiscountReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: noDiscountReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: noDiscountReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_discount_denied: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "discount_not_allowed" };
-    }
-
-    if (!customerDirectConfirmation && !isSalesScopeMessage(lastCustomerTurnBody, catalog, quotedBody)) {
-      const offTopicReply = buildOffTopicReply(mood);
-      if (shouldSuppressDuplicateReply(id, offTopicReply)) {
-        return { ok: true, replied: false, reason: "duplicate_reply_suppressed" };
-      }
-      const waResponse = await sendWhatsAppText({
-        to: context.phone,
-        message: offTopicReply,
-        accountJid: context.account_wa_jid,
-      });
-
-      await saveOutboundMessage({
-        accountJid: context.account_wa_jid,
-        accountDisplayName: null,
-        phone: context.phone,
-        body: offTopicReply,
-        messageType: "text",
-        externalMessageId: waResponse?.key?.id || null,
-        status: "sent",
-        payload: waResponse,
-        metadata: {
-          ai_generated: true,
-          ai_agent: true,
-          ai_off_topic: true,
-        },
-      });
-
-      return { ok: true, replied: true, reason: "off_topic_detected" };
-    }
 
     const aiResult = await generateAiSalesReply({
       accountId: context.account_id || null,
@@ -1465,7 +1362,7 @@ export async function handleInboundAiAutomation(
         from_me: Boolean(item.from_me),
         body:
           item === lastMessage
-            ? buildAiTurnBody(lastCustomerTurnBody, quotedBody)
+            ? buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody)
             : String(item.body || ""),
         sent_at: item.sent_at || item.created_at || null,
         message_type: item.message_type || null,
@@ -1501,7 +1398,7 @@ export async function handleInboundAiAutomation(
     if (requiresDeliveryAddress) {
       mergedOrder.deliveryAddress = enrichDeliveryAddressWithCustomerText(
         String(mergedOrder.deliveryAddress || ""),
-        buildAiTurnBody(lastCustomerTurnBody, quotedBody),
+        buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
       );
     }
     const hasOrderDataReadyForConfirmation =
@@ -1557,15 +1454,8 @@ export async function handleInboundAiAutomation(
             updatedPendingOrder,
           })
         : "";
-    const quotedContextFallback = buildQuotedContextFallbackReply({
-      body: lastCustomerTurnBody,
-      quotedBody,
-      catalog,
-    });
-    let replyText = String(aiResult.reply || "").trim() || quotedContextFallback || fallbackReply;
-    if (discountQuestion && !discountAllowed) {
-      replyText = buildNoDiscountPermissionReply(mood);
-    } else if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
+    let replyText = String(aiResult.reply || "").trim() || fallbackReply || buildUnknownSalesReply(mood);
+    if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);
     }
 
@@ -1577,34 +1467,6 @@ export async function handleInboundAiAutomation(
       Boolean(parsedDeliveryAddress.neighborhood) &&
       Boolean(parsedDeliveryAddress.number) &&
       !parsedDeliveryAddress.reference;
-
-    if (deliveryHasOnlyMissingReference) {
-      replyText = buildMissingReferenceReply(mergedOrder.deliveryAddress, buildAiTurnBody(lastCustomerTurnBody, quotedBody));
-    }
-
-    const shouldAskForFinalConfirmation =
-      hasOrderDataReadyForConfirmation &&
-      !customerDirectConfirmation &&
-      !deliveryHasOnlyMissingReference;
-
-    if (shouldAskForFinalConfirmation) {
-      replyText = buildOrderConfirmationPrompt({
-        items: mergedOrder.items,
-        summary: mergedOrder.summary,
-        totalEstimate: mergedOrder.totalEstimate,
-        fulfillmentType: mergedOrder.fulfillmentType,
-        paymentMethod: mergedOrder.paymentMethod,
-      });
-    }
-
-    if (
-      normalizedFulfillment.includes("entrega") &&
-      !hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || "")) &&
-      replyText &&
-      !hasDeliveryAddressForm(replyText)
-    ) {
-      replyText = `${replyText}\n\n${buildDeliveryAddressForm()}`.trim();
-    }
 
     const shouldAttemptImage = aiResult.media.shouldSendImages;
     let matchedProducts: Array<{
@@ -1729,10 +1591,16 @@ export async function handleInboundAiAutomation(
       reason: error instanceof Error ? error.message : "ai_automation_failed",
     };
   } finally {
+    if (stopTypingIndicator) {
+      await Promise.resolve(stopTypingIndicator()).catch(() => undefined);
+    }
     processingConversations.delete(id);
     if (queuedConversations.has(id)) {
       queuedConversations.delete(id);
-      void handleInboundAiAutomation(id, { forceLatestCustomerMessage: true }).catch(() => undefined);
+      scheduleInboundAiAutomation(id, {
+        delayMs: CUSTOMER_TURN_WAIT_MS,
+        reason: "queued_customer_followup",
+      });
     }
   }
 }

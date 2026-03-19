@@ -96,6 +96,16 @@ async function ensureMessagesSchema(): Promise<void> {
         ON messages(account_id, external_message_id)
         WHERE external_message_id IS NOT NULL
       `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_messages_conversation_sent_created_desc
+        ON messages (conversation_id, COALESCE(sent_at, created_at) DESC, created_at DESC)
+        WHERE message_type <> 'protocolMessage'
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_messages_conversation_from_me_sent_created
+        ON messages (conversation_id, from_me, COALESCE(sent_at, created_at) DESC, created_at DESC)
+        WHERE message_type <> 'protocolMessage'
+      `);
       await pool.query(`DROP INDEX IF EXISTS uq_messages_external_message_id`);
     })().catch((error) => {
       ensureMessagesSchemaPromise = null;

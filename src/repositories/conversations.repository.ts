@@ -48,6 +48,9 @@ export async function ensureConversationWorkflowSchema(): Promise<void> {
       await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_conversations_service_status ON conversations(service_status);
         CREATE INDEX IF NOT EXISTS idx_conversations_assigned_user_id ON conversations(assigned_user_id);
+        CREATE INDEX IF NOT EXISTS idx_conversations_account_updated_at ON conversations(account_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_conversations_account_service_updated_at ON conversations(account_id, service_status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_conversations_account_unread ON conversations(account_id, unread_count DESC, updated_at DESC);
       `);
     })().catch((error) => {
       ensureConversationWorkflowSchemaPromise = null;
@@ -297,6 +300,25 @@ export async function updateConversationAiEnabled(conversationId: string, enable
     UPDATE conversations
     SET
       metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{ai_agent_enabled}', to_jsonb($2::boolean), true),
+      service_status = CASE
+        WHEN $2 = true THEN 'in_progress'
+        WHEN $2 = false AND assigned_user_id IS NULL AND service_status = 'in_progress' THEN 'pending'
+        ELSE service_status
+      END,
+      assigned_user_id = CASE
+        WHEN $2 = true THEN NULL
+        ELSE assigned_user_id
+      END,
+      assigned_at = CASE
+        WHEN $2 = true THEN NOW()
+        WHEN $2 = false AND assigned_user_id IS NULL AND service_status = 'in_progress' THEN NULL
+        ELSE assigned_at
+      END,
+      finalized_at = CASE
+        WHEN $2 = true THEN NULL
+        WHEN $2 = false AND assigned_user_id IS NULL AND service_status = 'in_progress' THEN NULL
+        ELSE finalized_at
+      END,
       updated_at = NOW()
     WHERE id = $1
     `,

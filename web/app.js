@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   conversations: [],
   currentMessages: [],
   selectedConversationId: null,
@@ -42,8 +42,17 @@ const state = {
   editingProductId: "",
   agentSettings: null,
   mobileChatPane: "list",
+  conversationCache: {},
+  currentMessagesHasOlder: false,
+  currentMessagesOldestCursor: "",
+  currentMessagesConversationId: "",
+  loadingOlderMessages: false,
+  typingConversations: {},
 };
 const SESSION_TOKEN_KEY = "nschat_session_token";
+const CONVERSATION_CACHE_TTL_MS = 12_000;
+const INITIAL_MESSAGES_PAGE_SIZE = 50;
+const OLDER_MESSAGES_PAGE_SIZE = 60;
 
 const layoutEl = document.querySelector(".layout");
 const chatMainEl = document.querySelector(".chat-main");
@@ -61,6 +70,7 @@ const chatSidebarEl = document.getElementById("chatSidebar");
 const conversationListEl = document.getElementById("conversationList");
 const messagesAreaEl = document.getElementById("messagesArea");
 const chatHeaderEl = document.getElementById("chatHeader");
+const chatTypingDockEl = document.getElementById("chatTypingDock");
 const searchInputEl = document.getElementById("searchInput");
 const allChatsBtnEl = document.getElementById("allChatsBtn");
 const sendFormEl = document.getElementById("sendForm");
@@ -139,6 +149,7 @@ const editUserCancelEl = document.getElementById("editUserCancel");
 const conversationMenuEl = document.getElementById("conversationMenu");
 const deleteConversationBtnEl = document.getElementById("deleteConversationBtn");
 const editConversationBtnEl = document.getElementById("editConversationBtn");
+const finalizeConversationMenuBtnEl = document.getElementById("finalizeConversationMenuBtn");
 const transferConversationBtnEl = document.getElementById("transferConversationBtn");
 const conversationAIAgentToggleEl = document.getElementById("conversationAIAgentToggle");
 const transferOverlayEl = document.getElementById("transferOverlay");
@@ -313,6 +324,7 @@ let realtimeLastPollAt = 0;
 let realtimeCursor = 0;
 let realtimeWatchdogTimer = null;
 let realtimeCheckpointTimer = null;
+const conversationTypingTimers = new Map();
 let qrPollTimer = null;
 let lastQrText = "";
 let composerMode = "text";
@@ -332,8 +344,15 @@ const PLAYER_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
 const PLAYER_PAUSE_ICON = '<i class="bi bi-pause-fill"></i>';
 const PREVIEW_PLAY_ICON = '<i class="bi bi-play-fill"></i>';
 const PREVIEW_PAUSE_ICON = '<i class="bi bi-pause-fill"></i>';
+const SEARCH_DEBOUNCE_MS = 260;
+const SUMMARY_CACHE_TTL_MS = 3_500;
 const MIC_ICON_SVG =
   '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm-1 5.93V17.9a5 5 0 0 1-4-4.9H5a7 7 0 0 0 6 6.93ZM13 19.93A7 7 0 0 0 19 13h-2a5 5 0 0 1-4 4.9v2.03ZM11 22h2v-2h-2v2Z"/></svg>';
+let searchDebounceTimer = null;
+let conversationSummaryPromise = null;
+let conversationSummaryCacheKey = "";
+let conversationSummaryCacheAt = 0;
+const conversationNodeCache = new Map();
 
 function readSessionToken() {
   try {
@@ -461,20 +480,20 @@ function getProfileWhatsAppAccount() {
 }
 
 function formatWhatsAppAccountTitle(account) {
-  if (!account) return "Nenhum número selecionado";
+  if (!account) return "Nenhum nÃºmero selecionado";
   if (isPendingWhatsAppAccount(account)) {
-    return String(account.display_name || "").trim() || "Novo número";
+    return String(account.display_name || "").trim() || "Novo nÃºmero";
   }
   const name = String(account.display_name || "").trim();
   const phone = formatPhone(account.phone || "");
   if (name && phone) return `${name} - ${phone}`;
-  return name || phone || "Novo número";
+  return name || phone || "Novo nÃºmero";
 }
 
 function formatWhatsAppAccountMeta(account) {
   if (!account) return "";
   if (isPendingWhatsAppAccount(account)) {
-    return "Número ainda não vinculado. Clique em Conectar para ler o QR code.";
+    return "NÃºmero ainda nÃ£o vinculado. Clique em Conectar para ler o QR code.";
   }
   return String(account.wa_jid || "").trim();
 }
@@ -629,7 +648,7 @@ function syncProfilePanel() {
 
   profileAvatarEl.textContent = profileLabel(selectedAccount?.display_name || state.connectedAccountName, selectedAccount?.phone || state.connectedAccountPhone);
   profileNameEl.textContent = name;
-  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexão" : isOnline ? "Conectado" : "Desconectado";
+  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexÃ£o" : isOnline ? "Conectado" : "Desconectado";
   profilePhoneEl.textContent = phone;
   profileJidEl.textContent = jid;
   disconnectBtnEl.hidden = !isOnline || !canManageSession;
@@ -665,7 +684,7 @@ function renderHistorySyncStatus(wa = {}) {
   syncHistoryBtnEl.textContent = active ? "Sincronizando..." : "Sincronizar";
   historySyncHintEl.textContent =
     message ||
-    "Para puxar histórico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
+    "Para puxar histÃ³rico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
   syncOverlayEl.hidden = !active;
   syncOverlayEl.style.display = active ? "flex" : "none";
   syncOverlayMessageEl.textContent =
@@ -693,7 +712,7 @@ function renderQrCode(text) {
   qrCodeBoxEl.innerHTML = "";
 
   if (!window.QRCode) {
-    qrHintEl.textContent = "Gerador de QR indisponível.";
+    qrHintEl.textContent = "Gerador de QR indisponÃ­vel.";
     return;
   }
 
@@ -760,6 +779,7 @@ function openConversationMenu(conversationId, x, y) {
     Boolean(state.currentUser) &&
     (isAdmin() || isMine || status === "pending" || status === "finalized");
   transferConversationBtnEl.style.display = canTransfer ? "" : "none";
+  finalizeConversationMenuBtnEl.style.display = isMine ? "" : "none";
   conversationAIAgentToggleEl.checked = Boolean(conv?.ai_agent_enabled);
   conversationMenuEl.style.left = `${x}px`;
   conversationMenuEl.style.top = `${y}px`;
@@ -798,7 +818,7 @@ function getMobileTopbarCopy() {
     return { title: "Monitorar envios", subtitle: "Acompanhar campanhas" };
   }
   if (state.currentView === "agent") {
-    return { title: "Agente IA", subtitle: "Configuração e status" };
+    return { title: "Agente IA", subtitle: "ConfiguraÃ§Ã£o e status" };
   }
   if (state.currentView === "products") {
     const subtitleMap = {
@@ -807,10 +827,10 @@ function getMobileTopbarCopy() {
       list: "Produtos",
       orders: "Pedidos",
     };
-    return { title: "Loja", subtitle: subtitleMap[state.productsTab] || "Catálogo" };
+    return { title: "Loja", subtitle: subtitleMap[state.productsTab] || "CatÃ¡logo" };
   }
   if (state.currentView === "settings") {
-    return { title: "Configurações", subtitle: "Ajustes do sistema" };
+    return { title: "ConfiguraÃ§Ãµes", subtitle: "Ajustes do sistema" };
   }
   if (state.mobileChatPane === "conversation" && state.selectedConversation) {
     return {
@@ -906,12 +926,12 @@ function switchView(view) {
 function renderAgentStatus(data = null) {
   const configured = Boolean(data?.configured);
   const model = String(data?.model || "-").trim() || "-";
-  agentConfiguredEl.textContent = configured ? "Configurado" : "Não configurado";
+  agentConfiguredEl.textContent = configured ? "Configurado" : "NÃ£o configurado";
   agentModelEl.textContent = model;
   if (data && typeof data.productsCount !== "undefined") {
-    agentTestResultEl.textContent = `Catálogo disponível para o agente: ${Number(data.productsCount || 0)} produto(s).`;
+    agentTestResultEl.textContent = `CatÃ¡logo disponÃ­vel para o agente: ${Number(data.productsCount || 0)} produto(s).`;
   }
-  agentStatusBadgeEl.textContent = configured ? "Pronto" : "Não configurado";
+  agentStatusBadgeEl.textContent = configured ? "Pronto" : "NÃ£o configurado";
   agentStatusBadgeEl.className = `service-status-tag ${configured ? "in_progress" : "finalized"}`;
 }
 
@@ -1032,7 +1052,7 @@ function parseStoreAddressParts(rawAddress) {
       const normalizedLabel = String(label || "").trim().toLowerCase();
       if (normalizedLabel === "cidade") parsed.city = value;
       if (normalizedLabel === "rua") parsed.street = value;
-      if (normalizedLabel === "número" || normalizedLabel === "numero") parsed.number = value;
+      if (normalizedLabel === "nÃºmero" || normalizedLabel === "numero") parsed.number = value;
       if (normalizedLabel === "bairro") parsed.neighborhood = value;
       if (normalizedLabel === "complemento") parsed.complement = value;
     });
@@ -1047,7 +1067,7 @@ function buildStoreAddressText() {
   const parts = [
     ["Cidade", String(storeAddressCityInputEl?.value || "").trim()],
     ["Rua", String(storeAddressStreetInputEl?.value || "").trim()],
-    ["Número", String(storeAddressNumberInputEl?.value || "").trim()],
+    ["NÃºmero", String(storeAddressNumberInputEl?.value || "").trim()],
     ["Bairro", String(storeAddressNeighborhoodInputEl?.value || "").trim()],
     ["Complemento", String(storeAddressComplementInputEl?.value || "").trim()],
   ].filter(([, value]) => value);
@@ -1089,13 +1109,13 @@ function fillProductForm(product) {
   productDescriptionEl.value = String(product?.description || "");
   productImageEl.value = "";
   updateProductTypeState();
-  productSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Salvar alterações';
+  productSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Salvar alteraÃ§Ãµes';
   productCancelEditBtnEl.hidden = false;
   if (productFormHeadingEl) {
     productFormHeadingEl.textContent = "Editar produto";
   }
   if (productFormDescriptionEl) {
-    productFormDescriptionEl.textContent = "Atualize as informações do item e mantenha o catálogo do agente sempre correto.";
+    productFormDescriptionEl.textContent = "Atualize as informaÃ§Ãµes do item e mantenha o catÃ¡logo do agente sempre correto.";
   }
   updateProductPreview(product);
   setProductsTab("create");
@@ -1123,10 +1143,10 @@ function updateProductPreview(product = null) {
   if (priceValue) {
     const priceNumber = Number(priceValue);
     productPreviewPriceEl.textContent = Number.isFinite(priceNumber)
-      ? `Preço: ${priceNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
-      : `Preço: ${priceValue}`;
+      ? `PreÃ§o: ${priceNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+      : `PreÃ§o: ${priceValue}`;
   } else {
-    productPreviewPriceEl.textContent = "Preço ainda não informado";
+    productPreviewPriceEl.textContent = "PreÃ§o ainda nÃ£o informado";
   }
 
   if (discountEnabled && discountValue) {
@@ -1142,10 +1162,10 @@ function updateProductPreview(product = null) {
 
   const stockLabel =
     type === "service"
-      ? descriptionValue || "Serviço sem controle de estoque."
+      ? descriptionValue || "ServiÃ§o sem controle de estoque."
       : stockValue
         ? `Estoque: ${stockValue}`
-        : "Estoque ainda não informado";
+        : "Estoque ainda nÃ£o informado";
   productPreviewStockEl.textContent = stockLabel;
 
   const imageUrl = file ? URL.createObjectURL(file) : String(currentProduct?.image_url || "").trim();
@@ -1234,10 +1254,10 @@ function renderProducts() {
       </div>
       <div class="product-item-main">
         <strong>${escapeHtml(product.name || "-")}</strong>
-        <span>Tipo: ${escapeHtml(product.type === "service" ? "Serviço" : "Produto")}</span>
-        <span>Preço: ${priceText}</span>
+        <span>Tipo: ${escapeHtml(product.type === "service" ? "ServiÃ§o" : "Produto")}</span>
+        <span>PreÃ§o: ${priceText}</span>
         ${product.discount_enabled && product.discount_price ? `<span>Desconto: ${Number(product.discount_price).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>` : ""}
-        <span>${product.type === "service" ? "Estoque: não se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
+        <span>${product.type === "service" ? "Estoque: nÃ£o se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
         ${product.description ? `<span>${escapeHtml(product.description)}</span>` : ""}
       </div>
       <div class="product-item-actions">
@@ -1270,7 +1290,7 @@ function renderOrders() {
         ? "Confirmado"
         : orderStatus === "cancelled"
           ? "Cancelado"
-          : "Pendente de confirmação";
+          : "Pendente de confirmaÃ§Ã£o";
     const itemsPreview = Array.isArray(order.items) && order.items.length
       ? order.items
           .map((entry) => {
@@ -1287,12 +1307,12 @@ function renderOrders() {
         <span>Resumo: ${escapeHtml(order.summary || "-")}</span>
         <span>Itens: ${escapeHtml(itemsPreview)}</span>
         <span>Total estimado: ${escapeHtml(totalText)}</span>
-        <span>Responsável: ${escapeHtml(order.responsible_name || "-")}</span>
+        <span>ResponsÃ¡vel: ${escapeHtml(order.responsible_name || "-")}</span>
         <span>${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
-        <span>${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
+        <span>${escapeHtml(order.delivery_address ? `EndereÃ§o/retirada: ${order.delivery_address}` : "EndereÃ§o/retirada: -")}</span>
         <span>${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
-        ${order.ready_time_minutes ? `<span>Tempo mínimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
-        ${order.confirmation_note ? `<span>Observação da confirmação: ${escapeHtml(order.confirmation_note)}</span>` : ""}
+        ${order.ready_time_minutes ? `<span>Tempo mÃ­nimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
+        ${order.confirmation_note ? `<span>ObservaÃ§Ã£o da confirmaÃ§Ã£o: ${escapeHtml(order.confirmation_note)}</span>` : ""}
         ${order.cancel_reason ? `<span>Motivo do cancelamento: ${escapeHtml(order.cancel_reason)}</span>` : ""}
       </div>
       <div class="product-item-actions">
@@ -1328,12 +1348,7 @@ async function loadProducts() {
 }
 
 async function loadAiOrders() {
-  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
-  const query = new URLSearchParams();
-  if (accountId) {
-    query.set("account_id", accountId);
-  }
-  const result = await api(`/ai/orders?${query.toString()}`);
+  const result = await api("/ai/orders");
   state.productOrders = Array.isArray(result?.items) ? result.items : [];
   renderOrders();
 }
@@ -1394,7 +1409,7 @@ function renderWhatsAppAccountOptions() {
   accountSwitchListEl.innerHTML = "";
 
   if (!items.length) {
-    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum número vinculado.</div>';
+    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum nÃºmero vinculado.</div>';
     return;
   }
 
@@ -1466,7 +1481,7 @@ function closeSettingsModal() {
 function renderUsersList(users) {
   settingsUsersListEl.innerHTML = "";
   if (!users || !users.length) {
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuário cadastrado.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuÃ¡rio cadastrado.</div>';
     return;
   }
 
@@ -1529,7 +1544,7 @@ function renderCompaniesList(items) {
     row.innerHTML = `
       <div class="settings-user-main">
         <strong>${company.name}</strong><br />
-        <small>${company.cnpj || "CNPJ não informado"}</small>
+        <small>${company.cnpj || "CNPJ nÃ£o informado"}</small>
       </div>
       <div class="settings-user-right">
         <span class="settings-user-role">empresa</span>
@@ -1595,7 +1610,7 @@ async function loadUsersForSettings() {
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuários.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuÃ¡rios.</div>';
     renderCompaniesList([]);
     return;
   }
@@ -1672,7 +1687,7 @@ async function loadWhatsAppAccounts() {
 function openAccountSwitchModal(mode = "select") {
   accountSwitchMode = mode;
   if (accountSwitchTitleEl) {
-    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover número" : "Selecionar número";
+    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover nÃºmero" : "Selecionar nÃºmero";
   }
   renderWhatsAppAccountOptions();
   accountSwitchOverlayEl.classList.add("open");
@@ -1773,7 +1788,7 @@ async function handleProvisionWhatsAppAccount() {
     const result = await api("/whatsapp/accounts/provision", {
       method: "POST",
       body: JSON.stringify({
-        display_name: "Novo número",
+        display_name: "Novo nÃºmero",
       }),
     });
     if (result?.item?.id) {
@@ -1782,12 +1797,12 @@ async function handleProvisionWhatsAppAccount() {
     openProfilePanel();
     await api("/whatsapp/connect", { method: "POST" });
     qrPanelEl.hidden = false;
-    qrHintEl.textContent = "Escaneie o QR code para vincular o novo número.";
+    qrHintEl.textContent = "Escaneie o QR code para vincular o novo nÃºmero.";
     clearQrCode();
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao adicionar número.");
+    await showAlert(error.message || "Falha ao adicionar nÃºmero.");
   }
 }
 
@@ -1795,13 +1810,13 @@ async function handleRemoveWhatsAppAccount(accountId) {
   if (!isAdmin()) return;
   const selected = state.whatsappAccounts.find((item) => item.id === accountId) || null;
   if (!selected?.id) {
-    await showAlert("Selecione um número para remover.");
+    await showAlert("Selecione um nÃºmero para remover.");
     return;
   }
 
   const confirmed = await showConfirm(
-    `Remover o número ${formatWhatsAppAccountTitle(selected)}?`,
-    "Remover número",
+    `Remover o nÃºmero ${formatWhatsAppAccountTitle(selected)}?`,
+    "Remover nÃºmero",
     "Remover",
     "Cancelar",
   );
@@ -1815,9 +1830,9 @@ async function handleRemoveWhatsAppAccount(accountId) {
     const fallbackAccount = state.whatsappAccounts[0] || null;
     await switchSelectedWhatsAppAccount(fallbackAccount?.id || "");
     closeAccountSwitchModal();
-    await showAlert("Número removido com sucesso.");
+    await showAlert("NÃºmero removido com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao remover número.");
+    await showAlert(error.message || "Falha ao remover nÃºmero.");
   }
 }
 
@@ -1827,7 +1842,7 @@ function populateTransferUsers(selectedUserId = "") {
   if (!agents.length) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "Nenhum atendente disponível";
+    opt.textContent = "Nenhum atendente disponÃ­vel";
     transferUserSelectEl.appendChild(opt);
     transferUserSelectEl.disabled = true;
     return;
@@ -1925,8 +1940,8 @@ async function handleDeleteUser(userId) {
   }
 
   const confirmed = await showConfirm(
-    `Excluir o usuário ${user.name}?`,
-    "Excluir usuário",
+    `Excluir o usuÃ¡rio ${user.name}?`,
+    "Excluir usuÃ¡rio",
     "Excluir",
     "Cancelar",
   );
@@ -1935,9 +1950,9 @@ async function handleDeleteUser(userId) {
   try {
     await api(`/auth/users/${user.id}`, { method: "DELETE" });
     await loadUsersForSettings();
-    await showAlert("Usuário excluído com sucesso.");
+    await showAlert("UsuÃ¡rio excluÃ­do com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao excluir o usuário.");
+    await showAlert(error.message || "Falha ao excluir o usuÃ¡rio.");
   }
 }
 
@@ -2062,7 +2077,7 @@ async function parseContactsFromRows(rows, onProgress) {
 
 async function parseContactsFromExcel(file, onProgress) {
   if (!window.XLSX) {
-    throw new Error("Leitor de Excel não carregado. Recarregue a página.");
+    throw new Error("Leitor de Excel nÃ£o carregado. Recarregue a pÃ¡gina.");
   }
 
   onProgress?.(10, "Lendo arquivo...", "Carregando arquivo Excel...");
@@ -2207,7 +2222,7 @@ async function stopBulkJob(job) {
 
 async function deleteBulkJob(job) {
   const confirmed = await showConfirm(
-    "Excluir este disparo do histórico?",
+    "Excluir este disparo do histÃ³rico?",
     "Excluir disparo",
     "Excluir",
     "Cancelar",
@@ -2781,9 +2796,86 @@ async function sendMediaFile(file) {
   }
 }
 
-function renderConversations() {
-  conversationListEl.innerHTML = "";
+function getConversationRenderSignature(conv) {
+  return JSON.stringify({
+    id: conv.id,
+    selected: conv.id === state.selectedConversationId,
+    displayName: conversationDisplayName(conv),
+    avatar: String(conv.avatar_url || ""),
+    preview: String(conv.last_message_preview || ""),
+    time: String(conv.last_message_at || conv.updated_at || ""),
+    unread: Number(conv.unread_count || 0),
+    bulk: Boolean(conv.bulk_initiated) && String(conv.service_status || "") !== "in_progress",
+    serviceStatus: String(conv.service_status || ""),
+    assignedUserId: String(conv.assigned_user_id || ""),
+    assignedUserName: String(conv.assigned_user_name || ""),
+    aiAgentEnabled: Boolean(conv.ai_agent_enabled),
+  });
+}
 
+function buildConversationNode(conv) {
+  const node = conversationItemTpl.content.firstElementChild.cloneNode(true);
+  node.dataset.id = conv.id;
+  node.addEventListener("click", () => selectConversation(conv.id));
+  node.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openConversationMenu(conv.id, event.clientX, event.clientY);
+  });
+  return node;
+}
+
+function patchConversationNode(node, conv) {
+  node.dataset.id = conv.id;
+  node.classList.toggle("active", conv.id === state.selectedConversationId);
+
+  const displayName = conversationDisplayName(conv);
+  applyAvatar(node.querySelector(".avatar"), conv);
+  const nameEl = node.querySelector(".name");
+  nameEl.textContent = displayName;
+
+  const showBulkAlert = Boolean(conv.bulk_initiated) && String(conv.service_status || "") !== "in_progress";
+  if (showBulkAlert) {
+    node.classList.add("bulk-chat");
+    const icon = document.createElement("span");
+    icon.className = "bulk-alert-icon";
+    icon.textContent = "!";
+    nameEl.prepend(icon);
+  } else {
+    node.classList.remove("bulk-chat");
+  }
+
+  node.querySelector(".time").textContent = fmtDateShort(conv.last_message_at || conv.updated_at);
+  const previewEl = node.querySelector(".preview");
+  previewEl.textContent = conv.last_message_preview || "Sem mensagens";
+
+  const oldAttendant = node.querySelector(".conversation-attendant");
+  if (oldAttendant) oldAttendant.remove();
+
+  const aiInCharge =
+    Boolean(conv.ai_agent_enabled) &&
+    String(conv.service_status || "") === "in_progress" &&
+    !String(conv.assigned_user_id || "").trim();
+  const attendantName = aiInCharge ? "Agente IA" : String(conv.assigned_user_name || "").trim();
+  if (String(conv.service_status || "") === "in_progress" && attendantName) {
+    const attendant = document.createElement("div");
+    attendant.className = "conversation-attendant";
+    attendant.innerHTML = aiInCharge
+      ? '<i class="bi bi-robot"></i><span>Em atendimento: Agente IA</span>'
+      : `<i class="bi bi-person-workspace"></i><span>${attendantName}</span>`;
+    node.querySelector(".conversation-body").appendChild(attendant);
+  }
+
+  const badge = node.querySelector(".badge");
+  if (Number(conv.unread_count) > 0) {
+    badge.textContent = String(conv.unread_count);
+    badge.classList.add("show");
+  } else {
+    badge.textContent = "";
+    badge.classList.remove("show");
+  }
+}
+
+function renderConversations() {
   const orderedConversations = [...state.conversations].sort((a, b) => {
     const aTime = new Date(a.last_message_at || a.updated_at || a.created_at || 0).getTime();
     const bTime = new Date(b.last_message_at || b.updated_at || b.created_at || 0).getTime();
@@ -2795,55 +2887,106 @@ function renderConversations() {
   });
 
   if (orderedConversations.length === 0) {
+    conversationNodeCache.clear();
     conversationListEl.innerHTML = '<div class="empty-state">Nenhuma conversa encontrada.</div>';
     return;
   }
 
+  const fragment = document.createDocumentFragment();
+  const visibleIds = new Set();
+
   for (const conv of orderedConversations) {
-    const node = conversationItemTpl.content.firstElementChild.cloneNode(true);
-    node.dataset.id = conv.id;
-
-    if (conv.id === state.selectedConversationId) {
-      node.classList.add("active");
+    visibleIds.add(conv.id);
+    const signature = getConversationRenderSignature(conv);
+    let cached = conversationNodeCache.get(conv.id);
+    if (!cached) {
+      cached = { node: buildConversationNode(conv), signature: "" };
+      conversationNodeCache.set(conv.id, cached);
     }
-
-    const displayName = conversationDisplayName(conv);
-    applyAvatar(node.querySelector(".avatar"), conv);
-    const nameEl = node.querySelector(".name");
-    nameEl.textContent = displayName;
-    const showBulkAlert =
-      Boolean(conv.bulk_initiated) && String(conv.service_status || "") !== "in_progress";
-    if (showBulkAlert) {
-      node.classList.add("bulk-chat");
-      const icon = document.createElement("span");
-      icon.className = "bulk-alert-icon";
-      icon.textContent = "!";
-      nameEl.prepend(icon);
+    if (cached.signature !== signature) {
+      patchConversationNode(cached.node, conv);
+      cached.signature = signature;
     }
-    node.querySelector(".time").textContent = fmtDateShort(conv.last_message_at || conv.updated_at);
-    const previewEl = node.querySelector(".preview");
-    previewEl.textContent = conv.last_message_preview || "Sem mensagens";
-
-    if (String(conv.service_status || "") === "in_progress" && String(conv.assigned_user_name || "").trim()) {
-      const attendant = document.createElement("div");
-      attendant.className = "conversation-attendant";
-      attendant.innerHTML = `<i class="bi bi-person-workspace"></i><span>${conv.assigned_user_name}</span>`;
-      node.querySelector(".conversation-body").appendChild(attendant);
-    }
-
-    const badge = node.querySelector(".badge");
-    if (Number(conv.unread_count) > 0) {
-      badge.textContent = String(conv.unread_count);
-      badge.classList.add("show");
-    }
-
-    node.addEventListener("click", () => selectConversation(conv.id));
-    node.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      openConversationMenu(conv.id, event.clientX, event.clientY);
-    });
-    conversationListEl.appendChild(node);
+    fragment.appendChild(cached.node);
   }
+
+  for (const id of Array.from(conversationNodeCache.keys())) {
+    if (!visibleIds.has(id)) {
+      conversationNodeCache.delete(id);
+    }
+  }
+
+  conversationListEl.replaceChildren(fragment);
+}
+
+function getConversationQueryState() {
+  return {
+    accountJid: getActiveAccountJid(),
+    search: String(state.search || "").trim(),
+    showAllChats: Boolean(state.showAllChats),
+    serviceTab: String(state.serviceTab || "pending"),
+  };
+}
+
+function getConversationCacheKey(queryState = getConversationQueryState()) {
+  return JSON.stringify(queryState);
+}
+
+function getCachedConversations(queryState = getConversationQueryState()) {
+  const key = getConversationCacheKey(queryState);
+  const entry = state.conversationCache[key];
+  if (!entry) return null;
+  if (Date.now() - Number(entry.at || 0) > CONVERSATION_CACHE_TTL_MS) {
+    delete state.conversationCache[key];
+    return null;
+  }
+  return Array.isArray(entry.items) ? entry.items.map((item) => ({ ...item })) : null;
+}
+
+function setCachedConversations(items, queryState = getConversationQueryState()) {
+  const key = getConversationCacheKey(queryState);
+  state.conversationCache[key] = {
+    at: Date.now(),
+    items: Array.isArray(items) ? items.map((item) => ({ ...item })) : [],
+  };
+}
+
+function invalidateConversationCache() {
+  state.conversationCache = {};
+}
+
+function invalidateConversationSummaryCache() {
+  conversationSummaryPromise = null;
+  conversationSummaryCacheKey = "";
+  conversationSummaryCacheAt = 0;
+}
+
+function renderMessagesLoading() {
+  messagesAreaEl.innerHTML = '<div class="empty-state">Carregando mensagens...</div>';
+}
+
+function getMessageCursor(message) {
+  return String(message?.sent_at || message?.created_at || "").trim();
+}
+
+function updateCurrentMessagesPagination(messages, limit, conversationId) {
+  const orderedMessages = getOrderedMessages(messages);
+  state.currentMessagesConversationId = String(conversationId || state.selectedConversationId || "").trim();
+  state.currentMessagesOldestCursor = orderedMessages.length ? getMessageCursor(orderedMessages[0]) : "";
+  state.currentMessagesHasOlder = orderedMessages.length >= Number(limit || INITIAL_MESSAGES_PAGE_SIZE);
+}
+
+function mergeMessages(existingItems, incomingItems) {
+  const mergedMap = new Map();
+  for (const item of Array.isArray(existingItems) ? existingItems : []) {
+    if (item?.id) mergedMap.set(item.id, item);
+  }
+  for (const item of Array.isArray(incomingItems) ? incomingItems : []) {
+    if (!item?.id) continue;
+    const previous = mergedMap.get(item.id) || {};
+    mergedMap.set(item.id, { ...previous, ...item });
+  }
+  return getOrderedMessages(Array.from(mergedMap.values()));
 }
 
 function renderServiceTabs() {
@@ -2865,7 +3008,8 @@ function renderServiceTabs() {
   tabBulkCountEl.hidden = bulk <= 0;
 }
 
-async function loadConversationSummary() {
+async function loadConversationSummary(options = {}) {
+  const force = Boolean(options.force);
   const activeAccountJid = getActiveAccountJid();
   if (!state.isAuthenticated || !activeAccountJid) {
     state.serviceCounts = { pending: 0, in_progress: 0, finalized: 0, bulk: 0 };
@@ -2873,15 +3017,38 @@ async function loadConversationSummary() {
     return;
   }
 
-  const query = new URLSearchParams();
-  query.set("account_jid", activeAccountJid);
-  const result = await api(`/conversations/summary?${query.toString()}`);
-  state.serviceCounts = {
-    pending: Number(result?.pending_count || 0),
-    in_progress: Number(result?.in_progress_count || 0),
-    finalized: Number(result?.finalized_count || 0),
-    bulk: Number(result?.bulk_count || 0),
-  };
+  const summaryKey = String(activeAccountJid || "").trim();
+  const withinCacheTtl =
+    !force &&
+    conversationSummaryCacheKey === summaryKey &&
+    Date.now() - conversationSummaryCacheAt < SUMMARY_CACHE_TTL_MS;
+  if (withinCacheTtl) {
+    renderServiceTabs();
+    return;
+  }
+  if (conversationSummaryPromise && !force && conversationSummaryCacheKey === summaryKey) {
+    await conversationSummaryPromise;
+    renderServiceTabs();
+    return;
+  }
+
+  conversationSummaryCacheKey = summaryKey;
+  conversationSummaryPromise = (async () => {
+    const query = new URLSearchParams();
+    query.set("account_jid", activeAccountJid);
+    const result = await api(`/conversations/summary?${query.toString()}`);
+    state.serviceCounts = {
+      pending: Number(result?.pending_count || 0),
+      in_progress: Number(result?.in_progress_count || 0),
+      finalized: Number(result?.finalized_count || 0),
+      bulk: Number(result?.bulk_count || 0),
+    };
+    conversationSummaryCacheAt = Date.now();
+  })().finally(() => {
+    conversationSummaryPromise = null;
+  });
+
+  await conversationSummaryPromise;
   renderServiceTabs();
 }
 
@@ -2920,7 +3087,10 @@ async function ensureConversationReadyForCompose() {
 
   const status = String(state.selectedConversation.service_status || "pending");
   if (status === "in_progress") {
-    const responsible = state.selectedConversation.assigned_user_name || "outro atendente";
+    const responsible =
+      state.selectedConversation.ai_agent_enabled && !state.selectedConversation.assigned_user_id
+        ? "Agente IA"
+        : state.selectedConversation.assigned_user_name || "outro atendente";
     await showAlert(`Esta conversa esta em atendimento por ${responsible}.`);
     return false;
   }
@@ -2936,6 +3106,7 @@ async function ensureConversationReadyForCompose() {
 function renderHeader() {
   if (!state.selectedConversation) {
     chatHeaderEl.innerHTML = '<div class="chat-contact">Selecione uma conversa</div>';
+    updateChatTypingIndicator();
     renderMobileChrome();
     updateComposerLock();
     return;
@@ -2965,6 +3136,14 @@ function renderHeader() {
 
   info.appendChild(contact);
   info.appendChild(phoneEl);
+
+  const isTyping = Boolean(state.typingConversations?.[String(state.selectedConversation.id || "").trim()]);
+  if (isTyping) {
+    const typingEl = document.createElement("div");
+    typingEl.className = "chat-contact-typing";
+    typingEl.textContent = "digitando...";
+    info.appendChild(typingEl);
+  }
   wrap.appendChild(avatar);
   wrap.appendChild(info);
   chatHeaderEl.appendChild(wrap);
@@ -2973,7 +3152,11 @@ function renderHeader() {
   actions.className = "chat-header-actions";
 
   const status = String(state.selectedConversation.service_status || "pending");
-  const assignedName = state.selectedConversation.assigned_user_name || "";
+  const aiInCharge =
+    Boolean(state.selectedConversation.ai_agent_enabled) &&
+    status === "in_progress" &&
+    !String(state.selectedConversation.assigned_user_id || "").trim();
+  const assignedName = aiInCharge ? "Agente IA" : state.selectedConversation.assigned_user_name || "";
   const isMobileHeader = isMobileViewport();
   const isMine = canCurrentUserSendInConversation(state.selectedConversation);
   const canTransfer = Boolean(
@@ -2983,7 +3166,7 @@ function renderHeader() {
   );
 
   const statusText =
-    status === "in_progress"
+      status === "in_progress"
       ? assignedName
         ? `Atendente: ${assignedName}`
         : "Em atendimento"
@@ -3047,8 +3230,18 @@ function renderHeader() {
   }
 
   chatHeaderEl.appendChild(actions);
+  updateChatTypingIndicator();
   renderMobileChrome();
   updateComposerLock();
+}
+
+function updateChatTypingIndicator() {
+  if (!chatTypingDockEl) return;
+
+  const selectedConversationId = String(state.selectedConversation?.id || state.selectedConversationId || "").trim();
+  const isTyping = Boolean(selectedConversationId && state.typingConversations?.[selectedConversationId]);
+
+  chatTypingDockEl.hidden = !isTyping;
 }
 
 function closeMediaModal() {
@@ -3162,6 +3355,24 @@ function createMessageRow(message, options = {}) {
       (audioUrl && isAudioPlaceholder) ||
       (fileUrl && isFilePlaceholder)
     );
+  const quotedBody = String(message?.metadata?.quoted_body || "").trim();
+
+  if (quotedBody) {
+    const quoted = document.createElement("div");
+    quoted.className = "msg-quoted";
+
+    const quotedTitle = document.createElement("div");
+    quotedTitle.className = "msg-quoted-title";
+    quotedTitle.textContent = message.from_me ? "Você respondeu" : "Mensagem marcada";
+
+    const quotedText = document.createElement("div");
+    quotedText.className = "msg-quoted-text";
+    quotedText.textContent = quotedBody.length > 180 ? `${quotedBody.slice(0, 177)}...` : quotedBody;
+
+    quoted.appendChild(quotedTitle);
+    quoted.appendChild(quotedText);
+    bubble.appendChild(quoted);
+  }
 
   if (imageUrl) {
     const img = document.createElement("img");
@@ -3343,7 +3554,7 @@ function queueMessageRefresh() {
   if (messageRefreshTimer) return;
   messageRefreshTimer = setTimeout(() => {
     messageRefreshTimer = null;
-    loadMessages().catch((error) => console.error(error));
+    loadMessages({ refreshLatest: true }).catch((error) => console.error(error));
   }, 80);
 }
 
@@ -3401,6 +3612,37 @@ function upsertRealtimeMessage(message) {
 function handleRealtimePayload(payload, eventType = "message_saved") {
   if (!payload) return;
 
+  if (eventType === "conversation_typing") {
+    const conversationId = String(payload.conversationId || "").trim();
+    if (!conversationId) return;
+    const active = Boolean(payload.active);
+    if (conversationTypingTimers.has(conversationId)) {
+      clearTimeout(conversationTypingTimers.get(conversationId));
+      conversationTypingTimers.delete(conversationId);
+    }
+    if (active) {
+      state.typingConversations[conversationId] = true;
+      conversationTypingTimers.set(
+        conversationId,
+        setTimeout(() => {
+          delete state.typingConversations[conversationId];
+          conversationTypingTimers.delete(conversationId);
+          if (state.selectedConversationId === conversationId) {
+            renderHeader();
+            updateChatTypingIndicator();
+          }
+        }, 6000),
+      );
+    } else {
+      delete state.typingConversations[conversationId];
+    }
+    if (state.selectedConversationId === conversationId) {
+      renderHeader();
+      updateChatTypingIndicator();
+    }
+    return;
+  }
+
   if (eventType === "checkpoint_changed") {
     state.realtimeCheckpointToken = String(payload.token || state.realtimeCheckpointToken || "");
     console.warn("[REALTIME] checkpoint_changed", payload);
@@ -3428,13 +3670,24 @@ function handleRealtimePayload(payload, eventType = "message_saved") {
 }
 
 function clearChatStateForDisconnected() {
+  invalidateConversationCache();
+  invalidateConversationSummaryCache();
   state.conversations = [];
   state.currentMessages = [];
+  state.currentMessagesHasOlder = false;
+  state.currentMessagesOldestCursor = "";
+  state.currentMessagesConversationId = "";
+  state.loadingOlderMessages = false;
   state.selectedConversationId = null;
   state.selectedConversation = null;
   state.loadingConversations = false;
   state.loadingMessages = false;
+  state.typingConversations = {};
   state.serviceCounts = { pending: 0, in_progress: 0, finalized: 0, bulk: 0 };
+  for (const timer of conversationTypingTimers.values()) {
+    clearTimeout(timer);
+  }
+  conversationTypingTimers.clear();
   realtimeCursor = 0;
   state.realtimeCheckpointToken = "";
   closeConversationMenu();
@@ -3442,6 +3695,7 @@ function clearChatStateForDisconnected() {
   renderConversations();
   renderServiceTabs();
   renderHeader();
+  updateChatTypingIndicator();
   messagesAreaEl.innerHTML = '<div class="empty-state">Conecte o WhatsApp para ver conversas.</div>';
   updateComposerAction();
   updateComposerLock();
@@ -3563,6 +3817,9 @@ async function connectRealtime() {
 
 async function loadConversations(options = {}) {
   const skipMessagesReload = Boolean(options.skipMessagesReload);
+  const preferCache = Boolean(options.preferCache);
+  const backgroundRefresh = Boolean(options.backgroundRefresh);
+  const deferMessagesReload = Boolean(options.deferMessagesReload);
   if (!state.isAuthenticated) return;
   const activeAccountJid = getActiveAccountJid();
   if (!activeAccountJid) {
@@ -3571,6 +3828,62 @@ async function loadConversations(options = {}) {
   }
 
   if (state.loadingConversations) return;
+
+  const queryState = getConversationQueryState();
+  const cachedItems = preferCache ? getCachedConversations(queryState) : null;
+  if (cachedItems) {
+    state.conversations = cachedItems;
+    const selectedExists = state.conversations.find((item) => item.id === state.selectedConversationId) || null;
+
+    if (selectedExists) {
+      state.selectedConversation = selectedExists;
+      if (!skipMessagesReload && deferMessagesReload) {
+        state.currentMessages = [];
+        state.currentMessagesHasOlder = false;
+        state.currentMessagesOldestCursor = "";
+        state.currentMessagesConversationId = String(state.selectedConversationId || "").trim();
+        renderMessagesLoading();
+        void loadMessages().catch((error) => console.error(error));
+      } else if (!skipMessagesReload) {
+        await loadMessages();
+      }
+    } else if (state.conversations.length > 0) {
+      state.selectedConversationId = state.conversations[0].id;
+      state.selectedConversation = state.conversations[0];
+      if (deferMessagesReload) {
+        state.currentMessages = [];
+        state.currentMessagesHasOlder = false;
+        state.currentMessagesOldestCursor = "";
+        state.currentMessagesConversationId = String(state.selectedConversationId || "").trim();
+        renderMessagesLoading();
+        void loadMessages().catch((error) => console.error(error));
+      } else {
+        await loadMessages();
+      }
+    } else {
+      state.selectedConversationId = null;
+      state.selectedConversation = null;
+      state.currentMessages = [];
+      renderMessages([]);
+    }
+
+    renderConversations();
+    renderHeader();
+    renderServiceTabs();
+
+    if (backgroundRefresh) {
+      setTimeout(() => {
+        loadConversations({
+          skipMessagesReload: true,
+          preferCache: false,
+          backgroundRefresh: false,
+          deferMessagesReload: false,
+        }).catch((error) => console.error(error));
+      }, 0);
+    }
+    return;
+  }
+
   state.loadingConversations = true;
 
   try {
@@ -3592,6 +3905,7 @@ async function loadConversations(options = {}) {
 
     const result = await api(`/conversations?${query.toString()}`);
     state.conversations = result.items || [];
+    setCachedConversations(state.conversations, queryState);
     await loadConversationSummary();
 
     const selectedExists = state.conversations.find((item) => item.id === state.selectedConversationId) || null;
@@ -3599,12 +3913,30 @@ async function loadConversations(options = {}) {
     if (selectedExists) {
       state.selectedConversation = selectedExists;
       if (!skipMessagesReload) {
-        await loadMessages();
+        if (deferMessagesReload) {
+          state.currentMessages = [];
+          state.currentMessagesHasOlder = false;
+          state.currentMessagesOldestCursor = "";
+          state.currentMessagesConversationId = String(state.selectedConversationId || "").trim();
+          renderMessagesLoading();
+          void loadMessages().catch((error) => console.error(error));
+        } else {
+          await loadMessages();
+        }
       }
     } else if (state.conversations.length > 0) {
       state.selectedConversationId = state.conversations[0].id;
       state.selectedConversation = state.conversations[0];
-      await loadMessages();
+      if (deferMessagesReload) {
+        state.currentMessages = [];
+        state.currentMessagesHasOlder = false;
+        state.currentMessagesOldestCursor = "";
+        state.currentMessagesConversationId = String(state.selectedConversationId || "").trim();
+        renderMessagesLoading();
+        void loadMessages().catch((error) => console.error(error));
+      } else {
+        await loadMessages();
+      }
     } else {
       state.selectedConversationId = null;
       state.selectedConversation = null;
@@ -3626,29 +3958,87 @@ async function loadConversations(options = {}) {
   }
 }
 
-async function loadMessages() {
+async function loadMessages(options = {}) {
+  if (typeof options === "string") {
+    options = { conversationId: options, refreshLatest: true };
+  }
   if (!state.isAuthenticated || !getActiveAccountJid() || !state.selectedConversationId) return;
-  if (state.loadingMessages) {
+
+  const appendOlder = Boolean(options.appendOlder);
+  const refreshLatest = Boolean(options.refreshLatest);
+  const targetConversationId = String(options.conversationId || state.selectedConversationId || "").trim();
+  if (!targetConversationId) return;
+
+  if (appendOlder) {
+    if (state.loadingOlderMessages || !state.currentMessagesHasOlder) {
+      return;
+    }
+  } else if (state.loadingMessages) {
     pendingMessagesRefresh = true;
     return;
   }
-  state.loadingMessages = true;
-  const targetConversationId = state.selectedConversationId;
+
+  if (appendOlder) {
+    state.loadingOlderMessages = true;
+  } else {
+    state.loadingMessages = true;
+  }
+
+  const previousScrollHeight = messagesAreaEl.scrollHeight;
+  const previousScrollTop = messagesAreaEl.scrollTop;
 
   try {
-    const result = await api(`/conversations/${targetConversationId}/messages?limit=200`);
+    const query = new URLSearchParams();
+    const limit = appendOlder ? OLDER_MESSAGES_PAGE_SIZE : INITIAL_MESSAGES_PAGE_SIZE;
+    query.set("limit", String(limit));
+    if (appendOlder && state.currentMessagesOldestCursor) {
+      query.set("before", state.currentMessagesOldestCursor);
+    }
+
+    const result = await api(`/conversations/${targetConversationId}/messages?${query.toString()}`);
     if (targetConversationId !== state.selectedConversationId) {
       return;
     }
-    state.currentMessages = result.items || [];
+
+    const incomingItems = Array.isArray(result.items) ? result.items : [];
+
+    if (appendOlder) {
+      const merged = mergeMessages(incomingItems, state.currentMessages);
+      state.currentMessages = merged;
+      state.currentMessagesConversationId = targetConversationId;
+      state.currentMessagesOldestCursor = merged.length ? getMessageCursor(merged[0]) : "";
+      state.currentMessagesHasOlder = incomingItems.length >= limit;
+      renderMessages(state.currentMessages);
+
+      requestAnimationFrame(() => {
+        const nextScrollTop = messagesAreaEl.scrollHeight - previousScrollHeight + previousScrollTop;
+        messagesAreaEl.scrollTop = Number.isFinite(nextScrollTop) ? nextScrollTop : previousScrollTop;
+      });
+      return;
+    }
+
+    if (refreshLatest && state.currentMessagesConversationId === targetConversationId && state.currentMessages.length) {
+      const merged = mergeMessages(state.currentMessages, incomingItems);
+      state.currentMessages = merged;
+      updateCurrentMessagesPagination(merged, limit, targetConversationId);
+    } else {
+      state.currentMessages = incomingItems;
+      updateCurrentMessagesPagination(incomingItems, limit, targetConversationId);
+    }
+
     renderMessages(state.currentMessages);
   } catch (error) {
     console.error(error);
   } finally {
+    if (appendOlder) {
+      state.loadingOlderMessages = false;
+      return;
+    }
+
     state.loadingMessages = false;
     if (pendingMessagesRefresh && targetConversationId === state.selectedConversationId) {
       pendingMessagesRefresh = false;
-      loadMessages().catch((error) => console.error(error));
+      loadMessages({ refreshLatest: true }).catch((error) => console.error(error));
     }
   }
 }
@@ -3674,10 +4064,7 @@ async function selectConversation(conversationId) {
     state.selectedConversation = state.conversations.find((item) => item.id === conversationId) || state.selectedConversation;
     renderConversations();
     renderHeader();
-    await loadMessages();
-    if (!canCurrentUserSendInConversation(state.selectedConversation)) {
-      await maybeClaimSelectedConversation();
-    }
+    await loadMessages({ refreshLatest: true });
     markSelectedConversationRead();
     refreshConversationAvatar(conversationId);
     return;
@@ -3691,13 +4078,10 @@ async function selectConversation(conversationId) {
   }
   renderConversations();
   renderHeader();
-  await loadMessages();
-  if (!canCurrentUserSendInConversation(state.selectedConversation)) {
-    await maybeClaimSelectedConversation();
-  }
+  await loadMessages({ refreshLatest: true });
   markSelectedConversationRead();
   refreshConversationAvatar(conversationId);
-  await loadConversations();
+  queueConversationRefresh();
 }
 
 async function maybeClaimSelectedConversation() {
@@ -3720,6 +4104,8 @@ async function maybeClaimSelectedConversation() {
 
   try {
     await api(`/conversations/${conv.id}/claim`, { method: "PATCH" });
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
     state.showAllChats = false;
     state.serviceTab = "in_progress";
     await loadConversations();
@@ -3778,7 +4164,9 @@ async function sendCurrentText() {
       }),
     });
 
-    await loadMessages();
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
+    await loadMessages({ refreshLatest: true });
     await loadConversations();
   } catch (error) {
     await showAlert(error.message || "Falha no envio.");
@@ -3808,7 +4196,9 @@ async function sendAudioBlob(blob, fileName = "gravacao.webm") {
         file_name: fileName,
       }),
     });
-    await loadMessages();
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
+    await loadMessages({ refreshLatest: true });
     await loadConversations();
   } catch (error) {
     await showAlert(error.message || "Falha ao enviar audio.");
@@ -3828,7 +4218,7 @@ async function startRecording() {
   }
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    await showAlert("Seu navegador não suporta gravação de áudio.");
+    await showAlert("Seu navegador nÃ£o suporta gravaÃ§Ã£o de Ã¡udio.");
     return;
   }
 
@@ -3887,7 +4277,7 @@ async function startRecording() {
     }, 1000);
     audioTimerEl.textContent = fmtDuration(recordingSeconds);
   } catch (error) {
-    await showAlert(error.message || "Não foi possível iniciar a gravação.");
+    await showAlert(error.message || "NÃ£o foi possÃ­vel iniciar a gravaÃ§Ã£o.");
     setComposerMode("text");
   }
 }
@@ -3921,6 +4311,8 @@ async function handleNewChatSubmit(evt) {
       }),
     });
 
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
     closeNewChatModal();
     state.showAllChats = false;
     state.serviceTab = "in_progress";
@@ -3941,7 +4333,7 @@ async function deleteContextConversation() {
   const contactName = conv ? conversationDisplayName(conv) : "este contato";
 
   const confirmed = await showConfirm(
-    `Confirma excluir a conversa de ${contactName}?\n\nIsso também remove o contato salvo no app (se ele não estiver em outra conversa).`,
+    `Confirma excluir a conversa de ${contactName}?\n\nIsso tambÃ©m remove o contato salvo no app (se ele nÃ£o estiver em outra conversa).`,
     "Excluir conversa",
     "Excluir",
     "Cancelar",
@@ -3953,6 +4345,8 @@ async function deleteContextConversation() {
 
   try {
     await api(`/conversations/${conversationId}?delete_contact=true`, { method: "DELETE" });
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
 
     if (state.selectedConversationId === conversationId) {
       state.selectedConversationId = null;
@@ -3992,6 +4386,7 @@ async function editContextConversation() {
       method: "PATCH",
       body: JSON.stringify({ name: nextName.trim() }),
     });
+    invalidateConversationCache();
     closeConversationMenu();
     await loadConversations();
     if (state.selectedConversationId === conversationId) {
@@ -3999,6 +4394,38 @@ async function editContextConversation() {
     }
   } catch (error) {
     await showAlert(error.message || "Falha ao editar contato.");
+    closeConversationMenu();
+  }
+}
+
+async function finalizeContextConversation() {
+  const conversationId = String(state.contextConversationId || "").trim();
+  if (!conversationId) return;
+  const conv = state.conversations.find((item) => item.id === conversationId) || null;
+  if (!canCurrentUserSendInConversation(conv)) {
+    closeConversationMenu();
+    return;
+  }
+
+  const confirmed = await showConfirm(
+    "Deseja concluir este atendimento agora?",
+    "Concluir atendimento",
+    "Concluir",
+    "Cancelar",
+  );
+  if (!confirmed) {
+    closeConversationMenu();
+    return;
+  }
+
+  try {
+    await api(`/conversations/${conversationId}/finalize`, { method: "PATCH" });
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
+    closeConversationMenu();
+    await loadConversations();
+  } catch (error) {
+    await showAlert(error.message || "Falha ao concluir atendimento.");
     closeConversationMenu();
   }
 }
@@ -4090,7 +4517,7 @@ async function handleLoginSubmit(event) {
   const username = String(loginUsernameEl.value || "").trim();
   const password = String(loginPasswordEl.value || "").trim();
   if (!username || !password) {
-    await showAlert("Informe usuário e senha.");
+    await showAlert("Informe usuÃ¡rio e senha.");
     return;
   }
 
@@ -4132,7 +4559,7 @@ async function handleCreateUserSubmit(event) {
   const sectorId = String(newUserSectorEl.value || "").trim();
 
   if (!name || !username || !password || !sectorId) {
-    await showAlert("Preencha nome, usuário, senha e setor.");
+    await showAlert("Preencha nome, usuÃ¡rio, senha e setor.");
     return;
   }
 
@@ -4145,9 +4572,9 @@ async function handleCreateUserSubmit(event) {
     renderRoleOptions(newUserRoleEl, "operador");
     renderSectorOptions();
     await loadUsersForSettings();
-    await showAlert("Usuário cadastrado com sucesso.");
+    await showAlert("UsuÃ¡rio cadastrado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao cadastrar o usuário.");
+    await showAlert(error.message || "Falha ao cadastrar o usuÃ¡rio.");
   }
 }
 
@@ -4204,40 +4631,55 @@ async function handleCreateCompanySubmit(event) {
   }
 }
 
+function refreshConversationTabsOptimized() {
+  renderServiceTabs();
+  return loadConversations({
+    skipMessagesReload: false,
+    preferCache: true,
+    backgroundRefresh: true,
+    deferMessagesReload: true,
+  });
+}
+
 loginFormEl.addEventListener("submit", handleLoginSubmit);
 
 searchInputEl.addEventListener("input", async () => {
-  state.search = searchInputEl.value.trim();
-  await loadConversations();
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+  }
+  searchDebounceTimer = setTimeout(() => {
+    state.search = searchInputEl.value.trim();
+    loadConversations().catch((error) => console.error(error));
+  }, SEARCH_DEBOUNCE_MS);
 });
 allChatsBtnEl.addEventListener("click", async () => {
+  if (state.showAllChats) return;
   state.showAllChats = true;
-  renderServiceTabs();
-  await loadConversations();
+  await refreshConversationTabsOptimized();
 });
 tabPendingBtnEl.addEventListener("click", async () => {
+  if (!state.showAllChats && state.serviceTab === "pending") return;
   state.showAllChats = false;
   state.serviceTab = "pending";
-  renderServiceTabs();
-  await loadConversations();
+  await refreshConversationTabsOptimized();
 });
 tabInProgressBtnEl.addEventListener("click", async () => {
+  if (!state.showAllChats && state.serviceTab === "in_progress") return;
   state.showAllChats = false;
   state.serviceTab = "in_progress";
-  renderServiceTabs();
-  await loadConversations();
+  await refreshConversationTabsOptimized();
 });
 tabFinalizedBtnEl.addEventListener("click", async () => {
+  if (!state.showAllChats && state.serviceTab === "finalized") return;
   state.showAllChats = false;
   state.serviceTab = "finalized";
-  renderServiceTabs();
-  await loadConversations();
+  await refreshConversationTabsOptimized();
 });
 tabBulkBtnEl.addEventListener("click", async () => {
+  if (!state.showAllChats && state.serviceTab === "bulk") return;
   state.showAllChats = false;
   state.serviceTab = "bulk";
-  renderServiceTabs();
-  await loadConversations();
+  await refreshConversationTabsOptimized();
 });
 messageInputEl.addEventListener("input", updateComposerAction);
 messageInputEl.addEventListener("focus", async () => {
@@ -4296,7 +4738,7 @@ settingsUsersListEl.addEventListener("click", async (event) => {
   }
 });
 settingsLogoutBtnEl.addEventListener("click", async () => {
-  const confirmed = await showConfirm("Deseja encerrar sua sessão neste navegador?", "Encerrar sessão", "Sair", "Cancelar");
+  const confirmed = await showConfirm("Deseja encerrar sua sessÃ£o neste navegador?", "Encerrar sessÃ£o", "Sair", "Cancelar");
   if (!confirmed) return;
   closeSettingsModal();
   await performLogout();
@@ -4318,6 +4760,7 @@ settingsFinalizePendingBtnEl.addEventListener("click", async () => {
         account_jid: getActiveAccountJid() || "",
       }),
     });
+    invalidateConversationSummaryCache();
     await loadConversations();
     await showAlert(`${Number(result.finalized_count || 0)} conversa(s) pendente(s) finalizada(s).`);
   } catch (error) {
@@ -4516,7 +4959,7 @@ settingsRemoveNumberBtnEl.addEventListener("click", () => {
 });
 agentTestBtnEl.addEventListener("click", async () => {
   agentTestBtnEl.disabled = true;
-  agentTestResultEl.textContent = "Testando conexão com a OpenAI...";
+  agentTestResultEl.textContent = "Testando conexÃ£o com a OpenAI...";
   try {
     const result = await api("/ai/test", {
       method: "POST",
@@ -4524,11 +4967,11 @@ agentTestBtnEl.addEventListener("click", async () => {
     });
     renderAgentStatus(result);
     agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
-    agentTestResultEl.textContent = `Conexão OK. Resposta: ${String(result.reply || "").trim() || "ok"}`;
+    agentTestResultEl.textContent = `ConexÃ£o OK. Resposta: ${String(result.reply || "").trim() || "ok"}`;
   } catch (error) {
     agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
-    agentTestResultEl.textContent = error.message || "Falha ao testar a conexão com a OpenAI.";
-    await showAlert(error.message || "Falha ao testar a conexão com a OpenAI.");
+    agentTestResultEl.textContent = error.message || "Falha ao testar a conexÃ£o com a OpenAI.";
+    await showAlert(error.message || "Falha ao testar a conexÃ£o com a OpenAI.");
   } finally {
     agentTestBtnEl.disabled = false;
   }
@@ -4537,7 +4980,7 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    await showAlert("Selecione um número para configurar o agente.");
+    await showAlert("Selecione um nÃºmero para configurar o agente.");
     return;
   }
 
@@ -4560,9 +5003,9 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
     });
     state.agentSettings = result.settings || null;
     renderAgentSettings();
-    await showAlert("Configurações do agente salvas com sucesso.");
+    await showAlert("ConfiguraÃ§Ãµes do agente salvas com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao salvar as configurações do agente.");
+    await showAlert(error.message || "Falha ao salvar as configuraÃ§Ãµes do agente.");
   } finally {
     agentSettingsSaveBtnEl.disabled = false;
   }
@@ -4571,7 +5014,7 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    await showAlert("Selecione um número para configurar a loja.");
+    await showAlert("Selecione um nÃºmero para configurar a loja.");
     return;
   }
 
@@ -4594,9 +5037,9 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
     });
     state.agentSettings = result.settings || null;
     renderAgentSettings();
-    await showAlert("Informações da loja salvas com sucesso.");
+    await showAlert("InformaÃ§Ãµes da loja salvas com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao salvar as informações da loja.");
+    await showAlert(error.message || "Falha ao salvar as informaÃ§Ãµes da loja.");
   } finally {
     storeInfoSaveBtnEl.disabled = false;
   }
@@ -4674,7 +5117,7 @@ ordersListEl.addEventListener("click", async (event) => {
     if (!confirmData) return;
     const readyTimeMinutes = Number(confirmData.readyTimeMinutes);
     if (!Number.isFinite(readyTimeMinutes) || readyTimeMinutes <= 0) {
-      await showAlert("Informe um tempo mínimo válido em minutos.");
+      await showAlert("Informe um tempo mÃ­nimo vÃ¡lido em minutos.");
       return;
     }
     const confirmationNote = String(confirmData.confirmationNote || "").trim();
@@ -4695,6 +5138,7 @@ ordersListEl.addEventListener("click", async (event) => {
           confirmation_note: confirmationNote || "",
         }),
       });
+      invalidateConversationSummaryCache();
       await loadAiOrders();
       await loadConversations().catch(() => undefined);
       if (state.selectedConversationId && String(order.conversation_id || "").trim() === String(state.selectedConversationId || "").trim()) {
@@ -4724,6 +5168,7 @@ ordersListEl.addEventListener("click", async (event) => {
         method: "POST",
         body: JSON.stringify({ reason }),
       });
+      invalidateConversationSummaryCache();
       await loadAiOrders();
       await loadConversations().catch(() => undefined);
       if (state.selectedConversationId && String(order.conversation_id || "").trim() === String(state.selectedConversationId || "").trim()) {
@@ -4752,6 +5197,7 @@ ordersListEl.addEventListener("click", async (event) => {
       await api(`/ai/orders/${encodeURIComponent(orderId)}`, {
         method: "DELETE",
       });
+      invalidateConversationSummaryCache();
       await loadAiOrders();
       await showAlert("Pedido excluido com sucesso.");
     } catch (error) {
@@ -4783,11 +5229,11 @@ productsFormEl.addEventListener("submit", async (event) => {
   }
   if (discountEnabled) {
     if (!discountPrice) {
-      await showAlert("Informe o preço com desconto.");
+      await showAlert("Informe o preÃ§o com desconto.");
       return;
     }
     if (Number(discountPrice) >= Number(price || 0)) {
-      await showAlert("O preço com desconto deve ser menor que o preço base.");
+      await showAlert("O preÃ§o com desconto deve ser menor que o preÃ§o base.");
       return;
     }
   }
@@ -4832,35 +5278,67 @@ conversationAIAgentToggleEl.addEventListener("change", async () => {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
     });
+    invalidateConversationCache();
+    invalidateConversationSummaryCache();
     const conv = state.conversations.find((item) => item.id === conversationId);
     if (conv) {
       conv.ai_agent_enabled = enabled;
+      if (enabled) {
+        conv.service_status = "in_progress";
+        conv.assigned_user_id = null;
+        conv.assigned_user_name = "Agente IA";
+      } else if (!String(conv.assigned_user_id || "").trim() && String(conv.service_status || "") === "in_progress") {
+        conv.service_status = "pending";
+        conv.assigned_user_name = "";
+      }
     }
     if (state.selectedConversationId === conversationId && state.selectedConversation) {
       state.selectedConversation.ai_agent_enabled = enabled;
+      if (enabled) {
+        state.selectedConversation.service_status = "in_progress";
+        state.selectedConversation.assigned_user_id = null;
+        state.selectedConversation.assigned_user_name = "Agente IA";
+      } else if (
+        !String(state.selectedConversation.assigned_user_id || "").trim() &&
+        String(state.selectedConversation.service_status || "") === "in_progress"
+      ) {
+        state.selectedConversation.service_status = "pending";
+        state.selectedConversation.assigned_user_name = "";
+      }
     }
+    if (enabled) {
+      state.showAllChats = false;
+      state.serviceTab = "in_progress";
+    }
+    renderConversations();
+    renderHeader();
+    renderServiceTabs();
+    await loadConversationSummary({ force: true }).catch(() => undefined);
     if (enabled && result?.automation && !result.automation.replied) {
       const reason = String(result.automation.reason || "").trim();
       const reasonMap = {
-        busy: "O agente já está processando esta conversa.",
-        conversation_not_found: "Conversa não encontrada para o agente.",
-        disabled: "O agente ainda está desabilitado neste chat.",
+        busy: "O agente jÃ¡ estÃ¡ processando esta conversa.",
+        conversation_not_found: "Conversa nÃ£o encontrada para o agente.",
+        disabled: "O agente ainda estÃ¡ desabilitado neste chat.",
         human_in_charge: "Existe um atendente humano em atendimento neste chat.",
-        missing_account_or_phone: "Falta conta WhatsApp ou telefone válido para o agente responder.",
-        no_messages: "Não há mensagens suficientes nesta conversa para o agente responder.",
-        last_message_from_company: "A última mensagem ainda é da empresa. O agente vai responder na próxima mensagem do cliente.",
-        model_chose_not_to_reply: "O agente analisou a conversa e decidiu não responder agora.",
+        missing_account_or_phone: "Falta conta WhatsApp ou telefone vÃ¡lido para o agente responder.",
+        no_messages: "NÃ£o hÃ¡ mensagens suficientes nesta conversa para o agente responder.",
+        last_message_from_company: "A Ãºltima mensagem ainda Ã© da empresa. O agente vai responder na prÃ³xima mensagem do cliente.",
+        model_chose_not_to_reply: "O agente analisou a conversa e decidiu nÃ£o responder agora.",
       };
       if (reason && reasonMap[reason]) {
         await showAlert(reasonMap[reason]);
       } else if (reason) {
-        await showAlert(`O agente não respondeu agora: ${reason}`);
+        await showAlert(`O agente nÃ£o respondeu agora: ${reason}`);
       }
     }
   } catch (error) {
     conversationAIAgentToggleEl.checked = !enabled;
     await showAlert(error.message || "Falha ao atualizar o agente de venda no chat.");
   }
+});
+finalizeConversationMenuBtnEl.addEventListener("click", () => {
+  finalizeContextConversation().catch((error) => console.error(error));
 });
 disconnectBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm("Desconectar este telefone do app?", "Desconectar", "Sair", "Cancelar");
@@ -4886,13 +5364,13 @@ connectBtnEl.addEventListener("click", async () => {
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao iniciar a conexão.");
+    await showAlert(error.message || "Falha ao iniciar a conexÃ£o.");
   }
 });
 syncHistoryBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm(
-    "O app vai remover a conexão atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe não houver sincronização pendente, nada será importado.",
-    "Sincronizar histórico",
+    "O app vai remover a conexÃ£o atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe nÃ£o houver sincronizaÃ§Ã£o pendente, nada serÃ¡ importado.",
+    "Sincronizar histÃ³rico",
     "Sincronizar",
     "Cancelar",
   );
@@ -4920,6 +5398,16 @@ editUserOverlayEl.addEventListener("click", closeEditUserModal);
 editUserCancelEl.addEventListener("click", closeEditUserModal);
 transferOverlayEl.addEventListener("click", closeTransferModal);
 transferCancelEl.addEventListener("click", closeTransferModal);
+messagesAreaEl.addEventListener("scroll", () => {
+  if (
+    messagesAreaEl.scrollTop <= 120 &&
+    state.selectedConversationId &&
+    !state.loadingOlderMessages &&
+    state.currentMessagesHasOlder
+  ) {
+    loadMessages({ appendOlder: true }).catch((error) => console.error(error));
+  }
+});
 accountSwitchOverlayEl.addEventListener("click", closeAccountSwitchModal);
 accountSwitchCloseEl.addEventListener("click", closeAccountSwitchModal);
 accountSwitchListEl.addEventListener("click", (event) => {
@@ -4947,6 +5435,7 @@ transferFormEl.addEventListener("submit", async (event) => {
       method: "PATCH",
       body: JSON.stringify({ target_user_id: targetUserId }),
     });
+    invalidateConversationSummaryCache();
     closeTransferModal();
     await loadConversations();
     if (state.selectedConversationId === conversationId) {
@@ -4970,7 +5459,7 @@ editUserFormEl.addEventListener("submit", async (event) => {
   const password = String(editUserPasswordEl.value || "").trim();
 
   if (!name || !username || !role || !sectorId) {
-    await showAlert("Preencha nome, usuário, cargo e setor.");
+    await showAlert("Preencha nome, usuÃ¡rio, cargo e setor.");
     return;
   }
   if (!["ceo", "administrador", "operador"].includes(role)) {
@@ -4995,9 +5484,9 @@ editUserFormEl.addEventListener("submit", async (event) => {
     });
     closeEditUserModal();
     await loadUsersForSettings();
-    await showAlert("Usuário atualizado com sucesso.");
+    await showAlert("UsuÃ¡rio atualizado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao editar o usuário.");
+    await showAlert(error.message || "Falha ao editar o usuÃ¡rio.");
   }
 });
 document.addEventListener("click", (event) => {
@@ -5114,3 +5603,6 @@ window.addEventListener("resize", () => {
   applyResponsiveLayoutState();
   renderHeader();
 });
+
+
+

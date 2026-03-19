@@ -291,10 +291,12 @@ export async function generateAiSalesReply(input: {
           "ExpressÃµes curtas como 'esse mesmo' ou 'mais desse' em resposta a uma mensagem citada tambÃ©m devem ser entendidas como seleÃ§Ã£o do item citado para o pedido. " +
           "Nesses casos, nÃ£o responda sÃ³ repetindo preÃ§o. Avance no fluxo de pedido usando o item citado como referÃªncia principal. " +
           "Se o cliente mandar duas ou mais mensagens seguidas muito prÃ³ximas, trate o bloco dessas mensagens como um Ãºnico turno de intenÃ§Ã£o. Mensagens curtas como 'por favor', 'isso', 'sim', 'esse', 'desses', 'quero esse' ou 'e tambÃ©m' devem ser interpretadas junto da mensagem imediatamente anterior do mesmo cliente. " +
+          "Se o cliente responder apenas com 'sim', 'isso', 'isso mesmo', 'ok', 'pode', 'quero', 'tenho interesse' ou equivalente, interprete essa resposta com base na Ãºltima mensagem da empresa e na mensagem citada antes de concluir que o contexto estÃ¡ incompleto. " +
           "Se o cliente pedir algo inviÃ¡vel ou nÃ£o suportado, como quantidade absurdamente acima do disponÃ­vel, frete grÃ¡tis nÃ£o configurado ou destino que vocÃª nÃ£o consegue validar, seja firme e natural: diga apenas o que nÃ£o Ã© possÃ­vel e convide o cliente a ajustar para uma opÃ§Ã£o viÃ¡vel. " +
           "Nesses casos, nÃ£o continue a conversa como se a condiÃ§Ã£o inviÃ¡vel fosse possÃ­vel e nÃ£o trate o pedido absurdo como prÃ³xima etapa normal. " +
           "Se o cliente fizer uma pergunta fora do contexto de vendas, produtos cadastrados, pedidos ou suporte comercial, nÃ£o responda ao conteÃºdo da pergunta. Diga apenas que nÃ£o tem acesso a informaÃ§Ãµes para responder isso e redirecione para vendas ou suporte comercial. " +
           "Se o cliente fizer uma dÃºvida de produto ou venda que nÃ£o esteja respondida no catÃ¡logo ou no contexto disponÃ­vel, diga que nÃ£o tem essa informaÃ§Ã£o no sistema e pergunte se ele prefere seguir com um agente humano. " +
+          "Toda resposta ao cliente deve passar pelo seu raciocÃ­nio principal com base no contexto da conversa. NÃ£o dependa de respostas automÃ¡ticas fixas fora deste raciocÃ­nio. " +
           "VocÃª pode responder dÃºvidas sobre a loja apenas com base nas informaÃ§Ãµes de loja presentes no contexto. " +
           "NÃ£o invente endereÃ§o, CNPJ, formas de pagamento, taxa ou preÃ§o de entrega. " +
           "Se alguma informaÃ§Ã£o da loja nÃ£o estiver disponÃ­vel no contexto, diga de forma simples que essa informaÃ§Ã£o nÃ£o estÃ¡ cadastrada no sistema no momento. " +
@@ -351,5 +353,6 @@ export async function generateAiSalesReply(input: {
     raw: parsed,
   };
 }
+
 
 

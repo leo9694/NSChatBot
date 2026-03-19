@@ -15,7 +15,7 @@ import {
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { requireActiveWhatsAppAccount, WhatsAppAccountContextError } from "../services/whatsapp-account-context.service";
 import { handleInboundAiAutomation } from "../services/ai-agent.service";
-import { getProfilePictureUrl, sendWhatsAppText } from "../services/whatsapp.service";
+import { getProfilePictureUrl, sendWhatsAppText, subscribeWhatsAppPresence } from "../services/whatsapp.service";
 import { normalizePhone, phoneToJid } from "../utils/whatsapp";
 
 const router = Router();
@@ -357,6 +357,30 @@ router.get("/:conversationId/messages", async (req, res) => {
   `;
 
   const result = await pool.query(query, values);
+
+  const presenceTarget = await pool
+    .query<{ chat_jid: string | null; account_jid: string | null }>(
+      `
+      SELECT
+        c.wa_jid AS chat_jid,
+        wa.wa_jid AS account_jid
+      FROM conversations c
+      JOIN whatsapp_accounts wa ON wa.id = c.account_id
+      WHERE c.id = $1
+      LIMIT 1
+      `,
+      [conversationId],
+    )
+    .then((response) => response.rows[0] || null)
+    .catch(() => null);
+
+  if (presenceTarget?.chat_jid && presenceTarget?.account_jid) {
+    void subscribeWhatsAppPresence({
+      chatJid: presenceTarget.chat_jid,
+      accountJid: presenceTarget.account_jid,
+    }).catch(() => undefined);
+  }
+
   return res.status(200).json({
     items: result.rows.reverse(),
     pagination: { limit, before: before || null },
