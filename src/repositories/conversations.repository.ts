@@ -328,6 +328,68 @@ export async function updateConversationAiEnabled(conversationId: string, enable
   return (result.rowCount || 0) > 0;
 }
 
+export async function setConversationAiRescheduleContext(input: {
+  conversationId: string;
+  scheduleId: string;
+  reason?: string | null;
+  suggestedDate?: string | null;
+  suggestedTime?: string | null;
+  initiatedBy?: "company" | "customer";
+}): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = jsonb_strip_nulls(
+        COALESCE(metadata, '{}'::jsonb)
+        || jsonb_build_object(
+          'ai_reschedule_active', true,
+          'ai_reschedule_target_schedule_id', $2::text,
+          'ai_reschedule_initiated_by', $3::text
+        )
+        || CASE WHEN $4::text IS NOT NULL THEN jsonb_build_object('ai_reschedule_reason', $4::text) ELSE '{}'::jsonb END
+        || CASE WHEN $5::text IS NOT NULL THEN jsonb_build_object('ai_reschedule_suggested_date', $5::text) ELSE '{}'::jsonb END
+        || CASE WHEN $6::text IS NOT NULL THEN jsonb_build_object('ai_reschedule_suggested_time', $6::text) ELSE '{}'::jsonb END
+      ),
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [
+      input.conversationId,
+      input.scheduleId,
+      input.initiatedBy || "company",
+      input.reason || null,
+      input.suggestedDate || null,
+      input.suggestedTime || null,
+    ],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function clearConversationAiRescheduleContext(conversationId: string): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = COALESCE(metadata, '{}'::jsonb)
+        - 'ai_reschedule_active'
+        - 'ai_reschedule_target_schedule_id'
+        - 'ai_reschedule_initiated_by'
+        - 'ai_reschedule_reason'
+        - 'ai_reschedule_suggested_date'
+        - 'ai_reschedule_suggested_time',
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [conversationId],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
 export async function clearConversationBulkInitiated(conversationId: string): Promise<void> {
   await ensureConversationWorkflowSchema();
   await pool.query(

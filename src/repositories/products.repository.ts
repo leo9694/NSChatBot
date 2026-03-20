@@ -9,6 +9,8 @@ export interface ProductRow {
   price: string;
   discount_enabled: boolean;
   discount_price: string | null;
+  schedule_enabled: boolean;
+  service_duration_minutes: number | null;
   stock: number;
   image_url: string | null;
   is_active: boolean;
@@ -31,6 +33,8 @@ export async function ensureProductsSchema(): Promise<void> {
           price NUMERIC(12, 2) NOT NULL DEFAULT 0,
           discount_enabled BOOLEAN NOT NULL DEFAULT false,
           discount_price NUMERIC(12, 2),
+          schedule_enabled BOOLEAN NOT NULL DEFAULT false,
+          service_duration_minutes INTEGER,
           stock INTEGER NOT NULL DEFAULT 0,
           image_url TEXT,
           is_active BOOLEAN NOT NULL DEFAULT true,
@@ -58,6 +62,14 @@ export async function ensureProductsSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE products
         ADD COLUMN IF NOT EXISTS discount_price NUMERIC(12, 2)
+      `);
+      await pool.query(`
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN NOT NULL DEFAULT false
+      `);
+      await pool.query(`
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS service_duration_minutes INTEGER
       `);
 
       await pool.query(`
@@ -90,6 +102,8 @@ export async function createProduct(input: {
   price: number;
   discountEnabled?: boolean;
   discountPrice?: number | null;
+  scheduleEnabled?: boolean;
+  serviceDurationMinutes?: number | null;
   stock: number;
   imageUrl?: string | null;
   createdBy?: string | null;
@@ -97,8 +111,21 @@ export async function createProduct(input: {
   await ensureProductsSchema();
   const result = await pool.query<ProductRow>(
     `
-    INSERT INTO products (company_id, name, type, description, price, discount_enabled, discount_price, stock, image_url, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    INSERT INTO products (
+      company_id,
+      name,
+      type,
+      description,
+      price,
+      discount_enabled,
+      discount_price,
+      schedule_enabled,
+      service_duration_minutes,
+      stock,
+      image_url,
+      created_by
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     RETURNING
       id,
       company_id,
@@ -108,6 +135,8 @@ export async function createProduct(input: {
       price::text,
       discount_enabled,
       discount_price::text,
+      schedule_enabled,
+      service_duration_minutes,
       stock,
       image_url,
       is_active,
@@ -122,6 +151,8 @@ export async function createProduct(input: {
       input.price,
       Boolean(input.discountEnabled),
       input.discountEnabled ? input.discountPrice ?? null : null,
+      input.type === "service" ? Boolean(input.scheduleEnabled) : false,
+      input.type === "service" ? (Number.isFinite(Number(input.serviceDurationMinutes)) ? Math.max(1, Math.round(Number(input.serviceDurationMinutes))) : null) : null,
       input.stock,
       input.imageUrl || null,
       input.createdBy || null,
@@ -140,6 +171,8 @@ export async function updateProduct(input: {
   price: number;
   discountEnabled?: boolean;
   discountPrice?: number | null;
+  scheduleEnabled?: boolean;
+  serviceDurationMinutes?: number | null;
   stock: number;
   imageUrl?: string | null;
 }): Promise<ProductRow | null> {
@@ -154,11 +187,13 @@ export async function updateProduct(input: {
       price = $5,
       discount_enabled = $6,
       discount_price = $7,
-      stock = $8,
-      image_url = COALESCE($9, image_url),
+      schedule_enabled = $8,
+      service_duration_minutes = $9,
+      stock = $10,
+      image_url = COALESCE($11, image_url),
       updated_at = NOW()
     WHERE id = $1
-      AND company_id = $10
+      AND company_id = $12
     RETURNING
       id,
       company_id,
@@ -168,6 +203,8 @@ export async function updateProduct(input: {
       price::text,
       discount_enabled,
       discount_price::text,
+      schedule_enabled,
+      service_duration_minutes,
       stock,
       image_url,
       is_active,
@@ -182,6 +219,8 @@ export async function updateProduct(input: {
       input.price,
       Boolean(input.discountEnabled),
       input.discountEnabled ? input.discountPrice ?? null : null,
+      input.type === "service" ? Boolean(input.scheduleEnabled) : false,
+      input.type === "service" ? (Number.isFinite(Number(input.serviceDurationMinutes)) ? Math.max(1, Math.round(Number(input.serviceDurationMinutes))) : null) : null,
       input.stock,
       input.imageUrl || null,
       input.companyId,
@@ -204,6 +243,8 @@ export async function listProducts(companyId?: string | null): Promise<ProductRo
       price::text,
       discount_enabled,
       discount_price::text,
+      schedule_enabled,
+      service_duration_minutes,
       stock,
       image_url,
       is_active,
@@ -227,13 +268,15 @@ export async function listProductsForAgentContext(companyId?: string | null): Pr
   price: string;
   discount_enabled: boolean;
   discount_price: string | null;
+  schedule_enabled: boolean;
+  service_duration_minutes: number | null;
   stock: number;
   image_url: string | null;
 }>> {
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT name, type, description, price::text, discount_enabled, discount_price::text, stock, image_url
+    SELECT name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
     FROM products
     WHERE is_active = true
       AND ($1::uuid IS NULL OR company_id = $1)
@@ -254,13 +297,15 @@ export async function listProductsForAgentDetailedContext(companyId?: string | n
   price: string;
   discount_enabled: boolean;
   discount_price: string | null;
+  schedule_enabled: boolean;
+  service_duration_minutes: number | null;
   stock: number;
   image_url: string | null;
 }>> {
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT id, company_id, name, type, description, price::text, discount_enabled, discount_price::text, stock, image_url
+    SELECT id, company_id, name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
     FROM products
     WHERE is_active = true
       AND ($1::uuid IS NULL OR company_id = $1)

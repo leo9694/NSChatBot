@@ -371,6 +371,12 @@
                 <button id="productsTabOrders" type="button" class="products-nav-item">
                   <i class="bi bi-receipt-cutoff"></i> Pedidos
                 </button>
+                <button id="productsTabSchedules" type="button" class="products-nav-item">
+                  <i class="bi bi-calendar3"></i> Agendamento
+                </button>
+                <button id="productsTabScheduleSettings" type="button" class="products-nav-item">
+                  <i class="bi bi-calendar-week"></i> Configuração de agendamento
+                </button>
               </aside>
 
               <div class="products-content">
@@ -495,6 +501,14 @@
                       Estoque
                       <input id="productStock" type="number" min="0" step="1" required />
                     </label>
+                    <label id="productScheduleToggleField" class="product-discount-toggle" hidden>
+                      <span>Habilitar agendamento</span>
+                      <input id="productScheduleEnabled" type="checkbox" />
+                    </label>
+                    <label id="productScheduleDurationField" hidden>
+                      Tempo médio do serviço (minutos)
+                      <input id="productServiceDuration" type="number" min="1" step="1" />
+                    </label>
                     <label class="product-description-field">
                       Descrição
                       <textarea id="productDescription" rows="4" placeholder="Descreva o produto ou serviço para o agente consultar."></textarea>
@@ -552,6 +566,98 @@
                   </div>
                   <div id="ordersList" class="products-list"></div>
                 </div>
+
+                <div id="productsPanelSchedules" class="bulk-card products-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Agendamento</h3>
+                      <p>Serviços agendados pelo agente ficam organizados por dia e podem ser confirmados internamente.</p>
+                    </div>
+                  </div>
+                  <div class="schedule-layout">
+                    <div class="schedule-calendar-card">
+                      <div class="schedule-calendar-head">
+                        <button id="schedulePrevMonthBtn" type="button" class="btn-secondary">
+                          <i class="bi bi-chevron-left"></i>
+                        </button>
+                        <strong id="scheduleCurrentMonthLabel">-</strong>
+                        <button id="scheduleNextMonthBtn" type="button" class="btn-secondary">
+                          <i class="bi bi-chevron-right"></i>
+                        </button>
+                      </div>
+                      <div class="schedule-weekdays">
+                        <span>Dom</span>
+                        <span>Seg</span>
+                        <span>Ter</span>
+                        <span>Qua</span>
+                        <span>Qui</span>
+                        <span>Sex</span>
+                        <span>Sáb</span>
+                      </div>
+                      <div id="scheduleCalendarGrid" class="schedule-calendar-grid"></div>
+                    </div>
+
+                    <div class="schedule-day-card">
+                      <div class="schedule-day-head">
+                        <strong id="scheduleSelectedDayLabel">Selecione um dia</strong>
+                        <span id="scheduleSelectedDayMeta">Nenhum dia selecionado</span>
+                      </div>
+                      <div id="schedulesList" class="products-list"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="productsPanelScheduleSettings" class="bulk-card products-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Configuração de agendamento</h3>
+                      <p>Defina dias de atendimento, escala, intervalo entre horários e lembrete automático.</p>
+                    </div>
+                  </div>
+
+                  <form id="scheduleSettingsForm" class="new-chat-form products-form schedule-settings-form">
+                    <div class="store-form-section">
+                      <div class="store-form-section-head">
+                        <strong>Escala de atendimento</strong>
+                        <span>Ative os dias de trabalho e defina os períodos de manhã, tarde e noite. O intervalo entre o fim da manhã e o início da tarde será usado como almoço.</span>
+                      </div>
+                      <div id="scheduleWorkingDaysList" class="schedule-working-days-list"></div>
+                    </div>
+
+                    <div class="store-form-grid">
+                      <label>
+                        Intervalo entre atendimentos (minutos)
+                        <input id="scheduleIntervalMinutesInput" type="number" min="0" step="1" placeholder="Ex.: 15" />
+                      </label>
+                    </div>
+
+                    <div class="store-form-section">
+                      <div class="store-form-section-head">
+                        <strong>Lembrete automático</strong>
+                        <span>O agente envia uma mensagem pouco antes do horário confirmado.</span>
+                      </div>
+                      <label class="product-discount-toggle">
+                        <span>Habilitar lembrete</span>
+                        <input id="scheduleReminderEnabledInput" type="checkbox" />
+                      </label>
+                      <div id="scheduleReminderMinutesField" hidden class="schedule-reminder-rules-section">
+                        <div class="schedule-reminder-rules-head">
+                          <span>Configure um ou mais lembretes</span>
+                          <button id="scheduleReminderAddBtn" type="button" class="btn-secondary">
+                            <i class="bi bi-plus-circle"></i> Adicionar lembrete
+                          </button>
+                        </div>
+                        <div id="scheduleReminderRulesList" class="schedule-reminder-rules-list"></div>
+                      </div>
+                    </div>
+
+                    <div class="products-form-actions">
+                      <button id="scheduleSettingsSaveBtn" type="submit" class="btn-primary">
+                        <i class="bi bi-check2-circle"></i> Salvar configuração de agendamento
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
             </div>
           </section>
@@ -564,24 +670,26 @@
           <section class="settings-body">
             <div class="settings-shell">
               <aside class="settings-nav">
-                <button id="settingsTabPerfil" type="button" class="settings-nav-item active">
-                  <i class="bi bi-person-circle"></i> Perfil
-                </button>
-                <button id="settingsTabCreate" type="button" class="settings-nav-item">
-                  <i class="bi bi-person-plus-fill"></i> Cadastrar usuário
-                </button>
-                <button id="settingsTabList" type="button" class="settings-nav-item">
-                  <i class="bi bi-people-fill"></i> Listar usuários
-                </button>
-                <button id="settingsTabSectors" type="button" class="settings-nav-item">
-                  <i class="bi bi-diagram-3-fill"></i> Setores
-                </button>
-                <button id="settingsTabCompanies" type="button" class="settings-nav-item" hidden>
-                  <i class="bi bi-buildings-fill"></i> Empresas
-                </button>
-                <button id="settingsTabAccounts" type="button" class="settings-nav-item">
-                  <i class="bi bi-phone-fill"></i> Gerência de perfis
-                </button>
+                <div class="settings-nav-main">
+                  <button id="settingsTabPerfil" type="button" class="settings-nav-item active">
+                    <i class="bi bi-person-circle"></i> Perfil
+                  </button>
+                  <button id="settingsTabCreate" type="button" class="settings-nav-item">
+                    <i class="bi bi-person-plus-fill"></i> Cadastrar usuário
+                  </button>
+                  <button id="settingsTabList" type="button" class="settings-nav-item">
+                    <i class="bi bi-people-fill"></i> Listar usuários
+                  </button>
+                  <button id="settingsTabSectors" type="button" class="settings-nav-item">
+                    <i class="bi bi-diagram-3-fill"></i> Setores
+                  </button>
+                  <button id="settingsTabCompanies" type="button" class="settings-nav-item" hidden>
+                    <i class="bi bi-buildings-fill"></i> Empresas
+                  </button>
+                  <button id="settingsTabAccounts" type="button" class="settings-nav-item">
+                    <i class="bi bi-phone-fill"></i> Gerência de perfis
+                  </button>
+                </div>
                 <button id="settingsLogoutBtn" type="button" class="settings-nav-item settings-nav-logout">
                   <i class="bi bi-box-arrow-right"></i> Encerrar sessão
                 </button>
@@ -949,4 +1057,3 @@
     <script src="/app/app.js"></script>
   </body>
 </html>
-

@@ -38,8 +38,12 @@
   realtimeCheckpointToken: "",
   products: [],
   productOrders: [],
+  productSchedules: [],
   productsTab: "store-info",
+  scheduleWorkingDays: [],
   editingProductId: "",
+  scheduleCalendarMonth: "",
+  selectedScheduleDate: "",
   agentSettings: null,
   mobileChatPane: "list",
   conversationCache: {},
@@ -48,6 +52,7 @@
   currentMessagesConversationId: "",
   loadingOlderMessages: false,
   typingConversations: {},
+  expandedScheduleIds: {},
 };
 const SESSION_TOKEN_KEY = "nschat_session_token";
 const CONVERSATION_CACHE_TTL_MS = 12_000;
@@ -273,6 +278,10 @@ const productDiscountPriceFieldEl = document.getElementById("productDiscountPric
 const productDiscountPriceEl = document.getElementById("productDiscountPrice");
 const productStockEl = document.getElementById("productStock");
 const productStockFieldEl = document.getElementById("productStockField");
+const productScheduleToggleFieldEl = document.getElementById("productScheduleToggleField");
+const productScheduleEnabledEl = document.getElementById("productScheduleEnabled");
+const productScheduleDurationFieldEl = document.getElementById("productScheduleDurationField");
+const productServiceDurationEl = document.getElementById("productServiceDuration");
 const productDescriptionEl = document.getElementById("productDescription");
 const productImageEl = document.getElementById("productImage");
 const productSubmitBtnEl = document.getElementById("productSubmitBtn");
@@ -305,10 +314,29 @@ const productsTabStoreInfoEl = document.getElementById("productsTabStoreInfo");
 const productsTabCreateEl = document.getElementById("productsTabCreate");
 const productsTabListEl = document.getElementById("productsTabList");
 const productsTabOrdersEl = document.getElementById("productsTabOrders");
+const productsTabSchedulesEl = document.getElementById("productsTabSchedules");
+const productsTabScheduleSettingsEl = document.getElementById("productsTabScheduleSettings");
 const productsPanelStoreInfoEl = document.getElementById("productsPanelStoreInfo");
 const productsPanelCreateEl = document.getElementById("productsPanelCreate");
 const productsPanelListEl = document.getElementById("productsPanelList");
 const productsPanelOrdersEl = document.getElementById("productsPanelOrders");
+const productsPanelSchedulesEl = document.getElementById("productsPanelSchedules");
+const productsPanelScheduleSettingsEl = document.getElementById("productsPanelScheduleSettings");
+const schedulePrevMonthBtnEl = document.getElementById("schedulePrevMonthBtn");
+const scheduleNextMonthBtnEl = document.getElementById("scheduleNextMonthBtn");
+const scheduleCurrentMonthLabelEl = document.getElementById("scheduleCurrentMonthLabel");
+const scheduleCalendarGridEl = document.getElementById("scheduleCalendarGrid");
+const scheduleSelectedDayLabelEl = document.getElementById("scheduleSelectedDayLabel");
+const scheduleSelectedDayMetaEl = document.getElementById("scheduleSelectedDayMeta");
+const schedulesListEl = document.getElementById("schedulesList");
+const scheduleSettingsFormEl = document.getElementById("scheduleSettingsForm");
+const scheduleWorkingDaysListEl = document.getElementById("scheduleWorkingDaysList");
+const scheduleIntervalMinutesInputEl = document.getElementById("scheduleIntervalMinutesInput");
+const scheduleReminderEnabledInputEl = document.getElementById("scheduleReminderEnabledInput");
+const scheduleReminderMinutesFieldEl = document.getElementById("scheduleReminderMinutesField");
+const scheduleReminderRulesListEl = document.getElementById("scheduleReminderRulesList");
+const scheduleReminderAddBtnEl = document.getElementById("scheduleReminderAddBtn");
+const scheduleSettingsSaveBtnEl = document.getElementById("scheduleSettingsSaveBtn");
 const ALLOWED_PRODUCT_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
 let mediaRecorder = null;
 let mediaChunks = [];
@@ -353,6 +381,11 @@ let conversationSummaryPromise = null;
 let conversationSummaryCacheKey = "";
 let conversationSummaryCacheAt = 0;
 const conversationNodeCache = new Map();
+const SCHEDULE_REMINDER_UNIT_OPTIONS = [
+  { value: "minutes", label: "Minutos" },
+  { value: "hours", label: "Horas" },
+  { value: "days", label: "Dias" },
+];
 
 function readSessionToken() {
   try {
@@ -409,6 +442,22 @@ function fmtDateShort(value) {
   return date.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+function formatCompactBrDate(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    return `${match[3]}/${match[2]}/${match[1].slice(-2)}`;
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
   });
 }
 
@@ -431,7 +480,29 @@ function fmtDateDivider(value) {
     return "Ontem";
   }
 
-  return date.toLocaleDateString("pt-BR");
+  return date.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+}
+
+function parseCompactBrDateToIso(value) {
+  const raw = String(value || "").trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    return raw;
+  }
+  const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/);
+  if (!brMatch) return raw;
+  const day = Number(brMatch[1]);
+  const month = Number(brMatch[2]);
+  let year = Number(brMatch[3]);
+  if (String(brMatch[3]).length === 2) {
+    year += 2000;
+  }
+  if (!day || !month || !year) return raw;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function escapeHtml(value) {
@@ -480,20 +551,20 @@ function getProfileWhatsAppAccount() {
 }
 
 function formatWhatsAppAccountTitle(account) {
-  if (!account) return "Nenhum nÃºmero selecionado";
+  if (!account) return "Nenhum número selecionado";
   if (isPendingWhatsAppAccount(account)) {
-    return String(account.display_name || "").trim() || "Novo nÃºmero";
+    return String(account.display_name || "").trim() || "Novo número";
   }
   const name = String(account.display_name || "").trim();
   const phone = formatPhone(account.phone || "");
   if (name && phone) return `${name} - ${phone}`;
-  return name || phone || "Novo nÃºmero";
+  return name || phone || "Novo número";
 }
 
 function formatWhatsAppAccountMeta(account) {
   if (!account) return "";
   if (isPendingWhatsAppAccount(account)) {
-    return "NÃºmero ainda nÃ£o vinculado. Clique em Conectar para ler o QR code.";
+    return "Número ainda não vinculado. Clique em Conectar para ler o QR code.";
   }
   return String(account.wa_jid || "").trim();
 }
@@ -648,7 +719,7 @@ function syncProfilePanel() {
 
   profileAvatarEl.textContent = profileLabel(selectedAccount?.display_name || state.connectedAccountName, selectedAccount?.phone || state.connectedAccountPhone);
   profileNameEl.textContent = name;
-  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexÃ£o" : isOnline ? "Conectado" : "Desconectado";
+  profileStatusEl.textContent = selectedAccount && isPendingWhatsAppAccount(selectedAccount) ? "Aguardando conexão" : isOnline ? "Conectado" : "Desconectado";
   profilePhoneEl.textContent = phone;
   profileJidEl.textContent = jid;
   disconnectBtnEl.hidden = !isOnline || !canManageSession;
@@ -684,7 +755,7 @@ function renderHistorySyncStatus(wa = {}) {
   syncHistoryBtnEl.textContent = active ? "Sincronizando..." : "Sincronizar";
   historySyncHintEl.textContent =
     message ||
-    "Para puxar histÃ³rico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
+    "Para puxar histórico antigo, desconecte este dispositivo no WhatsApp do celular e conecte novamente no app.";
   syncOverlayEl.hidden = !active;
   syncOverlayEl.style.display = active ? "flex" : "none";
   syncOverlayMessageEl.textContent =
@@ -712,7 +783,7 @@ function renderQrCode(text) {
   qrCodeBoxEl.innerHTML = "";
 
   if (!window.QRCode) {
-    qrHintEl.textContent = "Gerador de QR indisponÃ­vel.";
+    qrHintEl.textContent = "Gerador de QR indisponível.";
     return;
   }
 
@@ -818,7 +889,7 @@ function getMobileTopbarCopy() {
     return { title: "Monitorar envios", subtitle: "Acompanhar campanhas" };
   }
   if (state.currentView === "agent") {
-    return { title: "Agente IA", subtitle: "ConfiguraÃ§Ã£o e status" };
+    return { title: "Agente IA", subtitle: "Configuração e status" };
   }
   if (state.currentView === "products") {
     const subtitleMap = {
@@ -826,11 +897,13 @@ function getMobileTopbarCopy() {
       create: "Cadastro",
       list: "Produtos",
       orders: "Pedidos",
+      schedules: "Agendamento",
+      "schedule-settings": "Configuração",
     };
-    return { title: "Loja", subtitle: subtitleMap[state.productsTab] || "CatÃ¡logo" };
+    return { title: "Loja", subtitle: subtitleMap[state.productsTab] || "Catálogo" };
   }
   if (state.currentView === "settings") {
-    return { title: "ConfiguraÃ§Ãµes", subtitle: "Ajustes do sistema" };
+    return { title: "Configurações", subtitle: "Ajustes do sistema" };
   }
   if (state.mobileChatPane === "conversation" && state.selectedConversation) {
     return {
@@ -916,6 +989,7 @@ function switchView(view) {
     loadAgentStatus().catch((error) => console.error(error));
     loadProducts().catch((error) => console.error(error));
     loadAiOrders().catch((error) => console.error(error));
+    loadAiSchedules().catch((error) => console.error(error));
   } else if (view === "settings") {
     renderSettingsHeader();
     setSettingsTab(state.settingsTab || "perfil");
@@ -926,12 +1000,12 @@ function switchView(view) {
 function renderAgentStatus(data = null) {
   const configured = Boolean(data?.configured);
   const model = String(data?.model || "-").trim() || "-";
-  agentConfiguredEl.textContent = configured ? "Configurado" : "NÃ£o configurado";
+  agentConfiguredEl.textContent = configured ? "Configurado" : "Não configurado";
   agentModelEl.textContent = model;
   if (data && typeof data.productsCount !== "undefined") {
-    agentTestResultEl.textContent = `CatÃ¡logo disponÃ­vel para o agente: ${Number(data.productsCount || 0)} produto(s).`;
+    agentTestResultEl.textContent = `Catálogo disponível para o agente: ${Number(data.productsCount || 0)} produto(s).`;
   }
-  agentStatusBadgeEl.textContent = configured ? "Pronto" : "NÃ£o configurado";
+  agentStatusBadgeEl.textContent = configured ? "Pronto" : "Não configurado";
   agentStatusBadgeEl.className = `service-status-tag ${configured ? "in_progress" : "finalized"}`;
 }
 
@@ -951,6 +1025,25 @@ function renderAgentSettings() {
   if (storeDescriptionInputEl) storeDescriptionInputEl.value = String(settings.store_description || "");
   renderStorePaymentMethods(Array.isArray(settings.store_payment_methods) ? settings.store_payment_methods : []);
   renderStoreDeliveryFees(Array.isArray(settings.store_delivery_fees) ? settings.store_delivery_fees : []);
+  state.scheduleWorkingDays = normalizeScheduleWorkingDays(Array.isArray(settings.schedule_working_days) ? settings.schedule_working_days : []);
+  renderScheduleWorkingDays();
+  if (scheduleIntervalMinutesInputEl) {
+    scheduleIntervalMinutesInputEl.value = Number.isFinite(Number(settings.schedule_interval_minutes))
+      ? String(Math.max(0, Math.round(Number(settings.schedule_interval_minutes))))
+      : "";
+  }
+  const reminderRules = normalizeScheduleReminderRules(
+    Array.isArray(settings.schedule_reminder_rules)
+      ? settings.schedule_reminder_rules
+      : Boolean(settings.schedule_reminder_enabled) && Number.isFinite(Number(settings.schedule_reminder_minutes))
+        ? [{ value: Math.max(1, Math.round(Number(settings.schedule_reminder_minutes))), unit: "minutes" }]
+        : [],
+  );
+  if (scheduleReminderEnabledInputEl) {
+    scheduleReminderEnabledInputEl.checked = Boolean(settings.schedule_reminder_enabled) || reminderRules.length > 0;
+  }
+  renderScheduleReminderRules(reminderRules);
+  updateScheduleReminderState();
 }
 
 function setProductsTab(tab) {
@@ -959,11 +1052,383 @@ function setProductsTab(tab) {
   productsTabCreateEl.classList.toggle("active", tab === "create");
   productsTabListEl.classList.toggle("active", tab === "list");
   productsTabOrdersEl.classList.toggle("active", tab === "orders");
+  productsTabSchedulesEl.classList.toggle("active", tab === "schedules");
+  productsTabScheduleSettingsEl.classList.toggle("active", tab === "schedule-settings");
   productsPanelStoreInfoEl.classList.toggle("active", tab === "store-info");
   productsPanelCreateEl.classList.toggle("active", tab === "create");
   productsPanelListEl.classList.toggle("active", tab === "list");
   productsPanelOrdersEl.classList.toggle("active", tab === "orders");
+  productsPanelSchedulesEl.classList.toggle("active", tab === "schedules");
+  productsPanelScheduleSettingsEl.classList.toggle("active", tab === "schedule-settings");
   renderMobileChrome();
+}
+
+function getCurrentScheduleMonth() {
+  if (/^\d{4}-\d{2}$/.test(String(state.scheduleCalendarMonth || ""))) {
+    return state.scheduleCalendarMonth;
+  }
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getCurrentDateIso() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function shiftMonth(month, offset) {
+  const [year, monthNumber] = String(month || "").split("-").map((item) => Number(item));
+  const base = new Date(year, Math.max(0, monthNumber - 1 + offset), 1);
+  return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatScheduleDateLabel(dateIso) {
+  const [year, month, day] = String(dateIso || "").split("-").map((item) => Number(item));
+  if (!year || !month || !day) return String(dateIso || "-");
+  const date = new Date(year, month - 1, day);
+  const weekday = date.toLocaleDateString("pt-BR", {
+    weekday: "long",
+  });
+  const shortDate = date.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  });
+  return `${weekday}, ${shortDate}`;
+}
+
+function getDefaultScheduleWorkingDays() {
+  return [
+    {
+      day_of_week: 0,
+      label: "Domingo",
+      enabled: false,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: false,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: false,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 1,
+      label: "Segunda",
+      enabled: true,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: true,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 2,
+      label: "Terça",
+      enabled: true,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: true,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 3,
+      label: "Quarta",
+      enabled: true,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: true,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 4,
+      label: "Quinta",
+      enabled: true,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: true,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 5,
+      label: "Sexta",
+      enabled: true,
+      start_time: "08:00",
+      end_time: "18:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: true,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+    {
+      day_of_week: 6,
+      label: "Sábado",
+      enabled: false,
+      start_time: "08:00",
+      end_time: "12:00",
+      morning_enabled: true,
+      morning_start: "08:00",
+      morning_end: "12:00",
+      afternoon_enabled: false,
+      afternoon_start: "13:00",
+      afternoon_end: "18:00",
+      night_enabled: false,
+      night_start: "19:00",
+      night_end: "22:00",
+    },
+  ];
+}
+
+function normalizeScheduleWorkingDays(values) {
+  const byDay = new Map();
+  for (const item of getDefaultScheduleWorkingDays()) {
+    byDay.set(item.day_of_week, { ...item });
+  }
+  if (Array.isArray(values)) {
+    values.forEach((item) => {
+      const day = Number(item?.day_of_week);
+      if (!byDay.has(day)) return;
+      const current = byDay.get(day);
+      byDay.set(day, {
+        ...current,
+        enabled: Boolean(item?.enabled),
+        start_time: String(item?.start_time || current.start_time || "").trim() || current.start_time,
+        end_time: String(item?.end_time || current.end_time || "").trim() || current.end_time,
+        morning_enabled: item?.morning_enabled === undefined ? current.morning_enabled : Boolean(item?.morning_enabled),
+        morning_start: String(item?.morning_start || current.morning_start || "").trim() || current.morning_start,
+        morning_end: String(item?.morning_end || current.morning_end || "").trim() || current.morning_end,
+        afternoon_enabled: item?.afternoon_enabled === undefined ? current.afternoon_enabled : Boolean(item?.afternoon_enabled),
+        afternoon_start: String(item?.afternoon_start || current.afternoon_start || "").trim() || current.afternoon_start,
+        afternoon_end: String(item?.afternoon_end || current.afternoon_end || "").trim() || current.afternoon_end,
+        night_enabled: item?.night_enabled === undefined ? current.night_enabled : Boolean(item?.night_enabled),
+        night_start: String(item?.night_start || current.night_start || "").trim() || current.night_start,
+        night_end: String(item?.night_end || current.night_end || "").trim() || current.night_end,
+      });
+    });
+  }
+  return Array.from(byDay.values()).sort((a, b) => a.day_of_week - b.day_of_week);
+}
+
+function normalizeScheduleReminderRules(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const items = values
+    .map((item) => {
+      const rawUnit = String(item?.unit || "minutes").trim().toLowerCase();
+      const unit = ["minutes", "hours", "days"].includes(rawUnit) ? rawUnit : "minutes";
+      const value = Number(item?.value);
+      const normalizedValue = Number.isFinite(value) ? Math.max(1, Math.round(value)) : null;
+      if (!normalizedValue) return null;
+      return { value: normalizedValue, unit };
+    })
+    .filter(Boolean);
+
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = `${item.unit}:${item.value}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function createScheduleReminderRuleRow(rule = {}) {
+  const row = document.createElement("div");
+  row.className = "schedule-reminder-rule-row";
+  const normalized = normalizeScheduleReminderRules([rule])[0] || { value: 1, unit: "hours" };
+  row.innerHTML = `
+    <label>
+      <span>Tempo antes</span>
+      <input type="number" min="1" step="1" data-schedule-reminder-value value="${escapeHtml(String(normalized.value))}" />
+    </label>
+    <label>
+      <span>Unidade</span>
+      <select data-schedule-reminder-unit>
+        ${SCHEDULE_REMINDER_UNIT_OPTIONS.map((option) => `<option value="${option.value}"${option.value === normalized.unit ? " selected" : ""}>${option.label}</option>`).join("")}
+      </select>
+    </label>
+    <button type="button" class="btn-secondary schedule-reminder-remove-btn" data-action="remove-schedule-reminder">
+      <i class="bi bi-trash3"></i>
+    </button>
+  `;
+  return row;
+}
+
+function renderScheduleReminderRules(rules) {
+  if (!scheduleReminderRulesListEl) return;
+  const items = normalizeScheduleReminderRules(Array.isArray(rules) ? rules : []);
+  scheduleReminderRulesListEl.innerHTML = "";
+  if (!items.length) {
+    scheduleReminderRulesListEl.appendChild(createScheduleReminderRuleRow({ value: 1, unit: "hours" }));
+    return;
+  }
+  items.forEach((item) => scheduleReminderRulesListEl.appendChild(createScheduleReminderRuleRow(item)));
+}
+
+function readScheduleReminderRules() {
+  if (!scheduleReminderRulesListEl) return [];
+  const rows = Array.from(scheduleReminderRulesListEl.querySelectorAll(".schedule-reminder-rule-row"));
+  return normalizeScheduleReminderRules(
+    rows.map((row) => ({
+      value: String(row.querySelector('[data-schedule-reminder-value]')?.value || "").trim(),
+      unit: String(row.querySelector('[data-schedule-reminder-unit]')?.value || "minutes").trim(),
+    })),
+  );
+}
+
+function createScheduleWorkingDayRow(item) {
+  const row = document.createElement("div");
+  row.className = "schedule-working-day-row";
+  row.innerHTML = `
+    <div class="schedule-day-toggle-card">
+      <label class="schedule-day-toggle">
+        <input type="checkbox" data-schedule-day-enabled ${item.enabled ? "checked" : ""} />
+        <strong>${escapeHtml(item.label)}</strong>
+      </label>
+    </div>
+    <div class="schedule-day-periods">
+      <div class="schedule-day-period">
+        <label class="schedule-day-period-head">
+          <input type="checkbox" data-schedule-morning-enabled ${item.morning_enabled ? "checked" : ""} />
+          <span>Manhã</span>
+        </label>
+        <div class="schedule-day-period-times">
+          <label>
+            <span>Início</span>
+            <input type="time" data-schedule-morning-start value="${escapeHtml(item.morning_start || "08:00")}" />
+          </label>
+          <label>
+            <span>Fim</span>
+            <input type="time" data-schedule-morning-end value="${escapeHtml(item.morning_end || "12:00")}" />
+          </label>
+        </div>
+      </div>
+      <div class="schedule-day-period">
+        <label class="schedule-day-period-head">
+          <input type="checkbox" data-schedule-afternoon-enabled ${item.afternoon_enabled ? "checked" : ""} />
+          <span>Tarde</span>
+        </label>
+        <div class="schedule-day-period-times">
+          <label>
+            <span>Início</span>
+            <input type="time" data-schedule-afternoon-start value="${escapeHtml(item.afternoon_start || "13:00")}" />
+          </label>
+          <label>
+            <span>Fim</span>
+            <input type="time" data-schedule-afternoon-end value="${escapeHtml(item.afternoon_end || "18:00")}" />
+          </label>
+        </div>
+      </div>
+      <div class="schedule-day-period">
+        <label class="schedule-day-period-head">
+          <input type="checkbox" data-schedule-night-enabled ${item.night_enabled ? "checked" : ""} />
+          <span>Noite</span>
+        </label>
+        <div class="schedule-day-period-times">
+          <label>
+            <span>Início</span>
+            <input type="time" data-schedule-night-start value="${escapeHtml(item.night_start || "19:00")}" />
+          </label>
+          <label>
+            <span>Fim</span>
+            <input type="time" data-schedule-night-end value="${escapeHtml(item.night_end || "22:00")}" />
+          </label>
+        </div>
+      </div>
+    </div>
+  `;
+  row.dataset.dayOfWeek = String(item.day_of_week);
+  return row;
+}
+
+function renderScheduleWorkingDays() {
+  if (!scheduleWorkingDaysListEl) return;
+  const items = normalizeScheduleWorkingDays(state.scheduleWorkingDays);
+  state.scheduleWorkingDays = items;
+  scheduleWorkingDaysListEl.innerHTML = "";
+  items.forEach((item) => scheduleWorkingDaysListEl.appendChild(createScheduleWorkingDayRow(item)));
+}
+
+function readScheduleWorkingDays() {
+  if (!scheduleWorkingDaysListEl) return normalizeScheduleWorkingDays(state.scheduleWorkingDays);
+  return Array.from(scheduleWorkingDaysListEl.querySelectorAll(".schedule-working-day-row"))
+    .map((row) => {
+      const morningEnabled = Boolean(row.querySelector("[data-schedule-morning-enabled]")?.checked);
+      const morningStart = String(row.querySelector("[data-schedule-morning-start]")?.value || "").trim();
+      const morningEnd = String(row.querySelector("[data-schedule-morning-end]")?.value || "").trim();
+      const afternoonEnabled = Boolean(row.querySelector("[data-schedule-afternoon-enabled]")?.checked);
+      const afternoonStart = String(row.querySelector("[data-schedule-afternoon-start]")?.value || "").trim();
+      const afternoonEnd = String(row.querySelector("[data-schedule-afternoon-end]")?.value || "").trim();
+      const nightEnabled = Boolean(row.querySelector("[data-schedule-night-enabled]")?.checked);
+      const nightStart = String(row.querySelector("[data-schedule-night-start]")?.value || "").trim();
+      const nightEnd = String(row.querySelector("[data-schedule-night-end]")?.value || "").trim();
+      const starts = [morningEnabled ? morningStart : "", afternoonEnabled ? afternoonStart : "", nightEnabled ? nightStart : ""].filter(Boolean);
+      const ends = [morningEnabled ? morningEnd : "", afternoonEnabled ? afternoonEnd : "", nightEnabled ? nightEnd : ""].filter(Boolean);
+      return {
+        day_of_week: Number(row.dataset.dayOfWeek),
+        enabled: Boolean(row.querySelector("[data-schedule-day-enabled]")?.checked),
+        start_time: starts.length ? starts[0] : "",
+        end_time: ends.length ? ends[ends.length - 1] : "",
+        morning_enabled: morningEnabled,
+        morning_start: morningStart,
+        morning_end: morningEnd,
+        afternoon_enabled: afternoonEnabled,
+        afternoon_start: afternoonStart,
+        afternoon_end: afternoonEnd,
+        night_enabled: nightEnabled,
+        night_start: nightStart,
+        night_end: nightEnd,
+      };
+    })
+    .filter((item) => Number.isInteger(item.day_of_week));
+}
+
+function updateScheduleReminderState() {
+  const enabled = Boolean(scheduleReminderEnabledInputEl?.checked);
+  if (scheduleReminderMinutesFieldEl) {
+    scheduleReminderMinutesFieldEl.hidden = !enabled;
+  }
+  if (!enabled && scheduleReminderRulesListEl) {
+    scheduleReminderRulesListEl.innerHTML = "";
+  } else if (enabled && scheduleReminderRulesListEl && !scheduleReminderRulesListEl.children.length) {
+    renderScheduleReminderRules([{ value: 1, unit: "hours" }]);
+  }
 }
 
 function createStorePaymentMethodRow(value = "") {
@@ -1052,7 +1517,7 @@ function parseStoreAddressParts(rawAddress) {
       const normalizedLabel = String(label || "").trim().toLowerCase();
       if (normalizedLabel === "cidade") parsed.city = value;
       if (normalizedLabel === "rua") parsed.street = value;
-      if (normalizedLabel === "nÃºmero" || normalizedLabel === "numero") parsed.number = value;
+      if (normalizedLabel === "número" || normalizedLabel === "numero" || normalizedLabel === "n?mero") parsed.number = value;
       if (normalizedLabel === "bairro") parsed.neighborhood = value;
       if (normalizedLabel === "complemento") parsed.complement = value;
     });
@@ -1067,7 +1532,7 @@ function buildStoreAddressText() {
   const parts = [
     ["Cidade", String(storeAddressCityInputEl?.value || "").trim()],
     ["Rua", String(storeAddressStreetInputEl?.value || "").trim()],
-    ["NÃºmero", String(storeAddressNumberInputEl?.value || "").trim()],
+    ["Numero", String(storeAddressNumberInputEl?.value || "").trim()],
     ["Bairro", String(storeAddressNeighborhoodInputEl?.value || "").trim()],
     ["Complemento", String(storeAddressComplementInputEl?.value || "").trim()],
   ].filter(([, value]) => value);
@@ -1081,11 +1546,16 @@ function resetProductForm() {
   productsFormEl.reset();
   productTypeEl.value = "product";
   productDiscountEnabledEl.checked = false;
+  productScheduleEnabledEl.checked = false;
+  productServiceDurationEl.value = "";
   productDiscountPriceEl.value = "";
   productStockEl.required = true;
   productStockFieldEl.hidden = false;
+  productScheduleToggleFieldEl.hidden = true;
+  productScheduleDurationFieldEl.hidden = true;
   productDiscountPriceFieldEl.hidden = true;
   productDiscountPriceEl.required = false;
+  productServiceDurationEl.required = false;
   productSubmitBtnEl.innerHTML = '<i class="bi bi-check2-circle"></i> Cadastrar produto';
   productCancelEditBtnEl.hidden = true;
   if (productFormHeadingEl) {
@@ -1105,17 +1575,19 @@ function fillProductForm(product) {
   productPriceEl.value = String(product?.price || "");
   productDiscountEnabledEl.checked = Boolean(product?.discount_enabled);
   productDiscountPriceEl.value = product?.discount_price != null ? String(product.discount_price) : "";
+  productScheduleEnabledEl.checked = Boolean(product?.schedule_enabled);
+  productServiceDurationEl.value = product?.service_duration_minutes != null ? String(product.service_duration_minutes) : "";
   productStockEl.value = String(product?.stock || 0);
   productDescriptionEl.value = String(product?.description || "");
   productImageEl.value = "";
   updateProductTypeState();
-  productSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Salvar alteraÃ§Ãµes';
+  productSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Salvar altera??es';
   productCancelEditBtnEl.hidden = false;
   if (productFormHeadingEl) {
     productFormHeadingEl.textContent = "Editar produto";
   }
   if (productFormDescriptionEl) {
-    productFormDescriptionEl.textContent = "Atualize as informaÃ§Ãµes do item e mantenha o catÃ¡logo do agente sempre correto.";
+    productFormDescriptionEl.textContent = "Atualize as informações do item e mantenha o catálogo do agente sempre correto.";
   }
   updateProductPreview(product);
   setProductsTab("create");
@@ -1132,6 +1604,8 @@ function updateProductPreview(product = null) {
   const file = productImageEl?.files?.[0] || null;
   const type = typedType || String(currentProduct?.type || "product");
   const discountEnabled = Boolean(productDiscountEnabledEl?.checked || currentProduct?.discount_enabled);
+  const scheduleEnabled = Boolean(productScheduleEnabledEl?.checked || currentProduct?.schedule_enabled);
+  const durationValue = String(productServiceDurationEl?.value || currentProduct?.service_duration_minutes || "").trim();
 
   const name = typedName || String(currentProduct?.name || "").trim() || "Novo produto";
   const priceValue = typedPrice || String(currentProduct?.price || "").trim();
@@ -1143,10 +1617,10 @@ function updateProductPreview(product = null) {
   if (priceValue) {
     const priceNumber = Number(priceValue);
     productPreviewPriceEl.textContent = Number.isFinite(priceNumber)
-      ? `PreÃ§o: ${priceNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
-      : `PreÃ§o: ${priceValue}`;
+      ? `Preço: ${priceNumber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+      : `Preço: ${priceValue}`;
   } else {
-    productPreviewPriceEl.textContent = "PreÃ§o ainda nÃ£o informado";
+    productPreviewPriceEl.textContent = "Preço ainda não informado";
   }
 
   if (discountEnabled && discountValue) {
@@ -1162,10 +1636,12 @@ function updateProductPreview(product = null) {
 
   const stockLabel =
     type === "service"
-      ? descriptionValue || "ServiÃ§o sem controle de estoque."
+      ? scheduleEnabled && durationValue
+        ? `Agendamento habilitado | Duração média: ${durationValue} min`
+        : descriptionValue || "Serviço sem controle de estoque."
       : stockValue
         ? `Estoque: ${stockValue}`
-        : "Estoque ainda nÃ£o informado";
+        : "Estoque ainda não informado";
   productPreviewStockEl.textContent = stockLabel;
 
   const imageUrl = file ? URL.createObjectURL(file) : String(currentProduct?.image_url || "").trim();
@@ -1184,8 +1660,14 @@ function updateProductTypeState() {
   const isService = String(productTypeEl?.value || "product") === "service";
   productStockFieldEl.hidden = isService;
   productStockEl.required = !isService;
+  productScheduleToggleFieldEl.hidden = !isService;
+  productScheduleDurationFieldEl.hidden = !isService || !productScheduleEnabledEl.checked;
+  productServiceDurationEl.required = isService && productScheduleEnabledEl.checked;
   if (isService) {
     productStockEl.value = "0";
+  } else {
+    productScheduleEnabledEl.checked = false;
+    productServiceDurationEl.value = "";
   }
   updateProductPreview();
 }
@@ -1200,6 +1682,17 @@ function updateProductDiscountState() {
   updateProductPreview();
 }
 
+function updateProductScheduleState() {
+  const isService = String(productTypeEl?.value || "product") === "service";
+  const enabled = isService && Boolean(productScheduleEnabledEl?.checked);
+  productScheduleDurationFieldEl.hidden = !enabled;
+  productServiceDurationEl.required = enabled;
+  if (!enabled) {
+    productServiceDurationEl.value = "";
+  }
+  updateProductPreview();
+}
+
 function findProductById(productId) {
   const targetId = String(productId || "").trim();
   return state.products.find((item) => String(item.id || "").trim() === targetId) || null;
@@ -1208,6 +1701,20 @@ function findProductById(productId) {
 function findOrderById(orderId) {
   const targetId = String(orderId || "").trim();
   return state.productOrders.find((item) => String(item.id || "").trim() === targetId) || null;
+}
+
+async function openConversationFromEntity(conversationId) {
+  const targetId = String(conversationId || "").trim();
+  if (!targetId) return;
+  state.showAllChats = true;
+  switchView("chats");
+  await loadConversations({
+    skipMessagesReload: true,
+    preferCache: false,
+    backgroundRefresh: false,
+    deferMessagesReload: false,
+  }).catch(() => undefined);
+  await selectConversation(targetId).catch(() => undefined);
 }
 
 async function loadAgentStatus() {
@@ -1225,6 +1732,11 @@ async function loadAgentStatus() {
       store_address: "",
       store_payment_methods: [],
       store_delivery_fees: [],
+      schedule_working_days: [],
+      schedule_interval_minutes: null,
+      schedule_reminder_enabled: false,
+      schedule_reminder_minutes: null,
+      schedule_reminder_rules: [],
     };
     renderAgentSettings();
     return;
@@ -1248,16 +1760,23 @@ function renderProducts() {
     const priceText = Number.isFinite(price)
       ? price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
       : String(product.price || "R$ 0,00");
+    const scheduleText =
+      product.type === "service"
+        ? `Agendamento: ${product.schedule_enabled ? "habilitado" : "não habilitado"}${
+            product.schedule_enabled && product.service_duration_minutes ? ` | ${Number(product.service_duration_minutes)} min` : ""
+          }`
+        : "";
     row.innerHTML = `
       <div class="product-item-media">
         ${product.image_url ? `<img src="${product.image_url}" alt="${escapeHtml(product.name || "")}" />` : '<div class="product-item-placeholder"><i class="bi bi-box-seam"></i></div>'}
       </div>
       <div class="product-item-main">
         <strong>${escapeHtml(product.name || "-")}</strong>
-        <span>Tipo: ${escapeHtml(product.type === "service" ? "ServiÃ§o" : "Produto")}</span>
-        <span>PreÃ§o: ${priceText}</span>
+        <span>Tipo: ${escapeHtml(product.type === "service" ? "Serviço" : "Produto")}</span>
+        <span>Preço: ${priceText}</span>
         ${product.discount_enabled && product.discount_price ? `<span>Desconto: ${Number(product.discount_price).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>` : ""}
-        <span>${product.type === "service" ? "Estoque: nÃ£o se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
+        <span>${product.type === "service" ? "Estoque: não se aplica" : `Estoque: ${Number(product.stock || 0)}`}</span>
+        ${scheduleText ? `<span>${escapeHtml(scheduleText)}</span>` : ""}
         ${product.description ? `<span>${escapeHtml(product.description)}</span>` : ""}
       </div>
       <div class="product-item-actions">
@@ -1290,7 +1809,14 @@ function renderOrders() {
         ? "Confirmado"
         : orderStatus === "cancelled"
           ? "Cancelado"
-          : "Pendente de confirmaÃ§Ã£o";
+          : "Pendente";
+    const orderCardClass =
+      orderStatus === "confirmed"
+        ? "confirmed"
+        : orderStatus === "cancelled"
+          ? "cancelled"
+          : "pending";
+    item.classList.add("order-card-compact", orderCardClass);
     const itemsPreview = Array.isArray(order.items) && order.items.length
       ? order.items
           .map((entry) => {
@@ -1307,19 +1833,26 @@ function renderOrders() {
         <span>Resumo: ${escapeHtml(order.summary || "-")}</span>
         <span>Itens: ${escapeHtml(itemsPreview)}</span>
         <span>Total estimado: ${escapeHtml(totalText)}</span>
-        <span>ResponsÃ¡vel: ${escapeHtml(order.responsible_name || "-")}</span>
+        <span>Responsável: ${escapeHtml(order.responsible_name || "-")}</span>
         <span>${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
-        <span>${escapeHtml(order.delivery_address ? `EndereÃ§o/retirada: ${order.delivery_address}` : "EndereÃ§o/retirada: -")}</span>
+        <span>${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
         <span>${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
-        ${order.ready_time_minutes ? `<span>Tempo mÃ­nimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
-        ${order.confirmation_note ? `<span>ObservaÃ§Ã£o da confirmaÃ§Ã£o: ${escapeHtml(order.confirmation_note)}</span>` : ""}
+        ${order.ready_time_minutes ? `<span>Tempo mínimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
+        ${order.confirmation_note ? `<span>Observação da confirmação: ${escapeHtml(order.confirmation_note)}</span>` : ""}
         ${order.cancel_reason ? `<span>Motivo do cancelamento: ${escapeHtml(order.cancel_reason)}</span>` : ""}
       </div>
       <div class="product-item-actions">
         ${
+          order.conversation_id
+            ? `<button type="button" class="schedule-icon-btn goto" data-action="open-order-chat" data-order-id="${order.id}" title="Ir para a conversa" aria-label="Ir para a conversa">
+                <i class="bi bi-chat-dots"></i>
+              </button>`
+            : ""
+        }
+        ${
           orderStatus === "pending_confirmation"
-            ? `<button type="button" class="btn-primary" data-action="confirm-order" data-order-id="${order.id}">
-                <i class="bi bi-check2-circle"></i> Confirmar pedido
+            ? `<button type="button" class="schedule-icon-btn confirm" data-action="confirm-order" data-order-id="${order.id}" title="Confirmar pedido" aria-label="Confirmar pedido">
+                <i class="bi bi-check2-circle"></i>
               </button>`
             : orderStatus === "confirmed"
               ? `<span class="service-status-tag in_progress order-status-pill">Confirmado</span>`
@@ -1327,17 +1860,176 @@ function renderOrders() {
         }
         ${
           orderStatus !== "cancelled"
-            ? `<button type="button" class="btn-danger" data-action="cancel-order" data-order-id="${order.id}">
-                <i class="bi bi-x-circle"></i> Cancelar pedido
+            ? `<button type="button" class="schedule-icon-btn cancel" data-action="cancel-order" data-order-id="${order.id}" title="Cancelar pedido" aria-label="Cancelar pedido">
+                <i class="bi bi-x-circle"></i>
               </button>`
             : ""
         }
-        <button type="button" class="btn-secondary" data-action="delete-order" data-order-id="${order.id}">
-          <i class="bi bi-trash3"></i> Excluir pedido
+        <button type="button" class="schedule-icon-btn delete" data-action="delete-order" data-order-id="${order.id}" title="Excluir pedido" aria-label="Excluir pedido">
+          <i class="bi bi-trash3"></i>
         </button>
       </div>
     `;
     ordersListEl.appendChild(item);
+  }
+}
+
+function findScheduleById(scheduleId) {
+  const targetId = String(scheduleId || "").trim();
+  return state.productSchedules.find((item) => String(item.id || "").trim() === targetId) || null;
+}
+
+function formatScheduleAccountLabel(schedule) {
+  if (!schedule) return "";
+  const displayName = String(schedule.account_display_name || "").trim();
+  const phone = formatPhone(String(schedule.account_phone || "").trim());
+  const jid = String(schedule.account_wa_jid || "").trim();
+  if (displayName && phone) return `${displayName} - ${phone}`;
+  return displayName || phone || jid;
+}
+
+function renderSchedulesCalendar() {
+  if (!scheduleCalendarGridEl || !scheduleCurrentMonthLabelEl) return;
+  const month = getCurrentScheduleMonth();
+  state.scheduleCalendarMonth = month;
+  const [year, monthNumber] = month.split("-").map((item) => Number(item));
+  const firstDay = new Date(year, monthNumber - 1, 1);
+  const firstWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, monthNumber, 0).getDate();
+  const todayIso = getCurrentDateIso();
+  const countsByDay = state.productSchedules.reduce((acc, item) => {
+    const key = String(item.scheduled_date || "").trim();
+    if (!key || String(item.status || "").trim() === "cancelled") return acc;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  scheduleCurrentMonthLabelEl.textContent = firstDay.toLocaleDateString("pt-BR", {
+    month: "long",
+    year: "numeric",
+  });
+  scheduleCalendarGridEl.innerHTML = "";
+
+  for (let index = 0; index < firstWeekday; index += 1) {
+    const filler = document.createElement("div");
+    filler.className = "schedule-day-cell schedule-day-cell-empty";
+    scheduleCalendarGridEl.appendChild(filler);
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateIso = `${month}-${String(day).padStart(2, "0")}`;
+    const count = Number(countsByDay[dateIso] || 0);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "schedule-day-cell";
+    if (dateIso === state.selectedScheduleDate) button.classList.add("active");
+    if (dateIso === todayIso) button.classList.add("today");
+    button.innerHTML = `
+      <strong>${day}</strong>
+      <span>${count ? `${count} ag.` : ""}</span>
+    `;
+    button.addEventListener("click", () => {
+      state.selectedScheduleDate = dateIso;
+      renderSchedulesCalendar();
+      renderSchedulesList();
+    });
+    scheduleCalendarGridEl.appendChild(button);
+  }
+}
+
+function renderSchedulesList() {
+  if (!schedulesListEl || !scheduleSelectedDayLabelEl || !scheduleSelectedDayMetaEl) return;
+  const selectedDate = String(state.selectedScheduleDate || "").trim();
+  if (!selectedDate) {
+    scheduleSelectedDayLabelEl.textContent = "Selecione um dia";
+    scheduleSelectedDayMetaEl.textContent = "Nenhum dia selecionado";
+    schedulesListEl.innerHTML = '<div class="empty-state">Selecione um dia no calendário para ver os serviços.</div>';
+    return;
+  }
+
+  const items = state.productSchedules.filter((item) => String(item.scheduled_date || "").trim() === selectedDate);
+  const activeItems = items.filter((item) => String(item.status || "").trim() !== "cancelled");
+  scheduleSelectedDayLabelEl.textContent = formatScheduleDateLabel(selectedDate);
+  scheduleSelectedDayMetaEl.textContent = activeItems.length ? `${activeItems.length} agendamento(s)` : "Nenhum agendamento neste dia";
+  schedulesListEl.innerHTML = "";
+  if (!items.length) {
+    schedulesListEl.innerHTML = '<div class="empty-state">Nenhum serviço agendado para este dia.</div>';
+    return;
+  }
+
+  for (const schedule of items) {
+    const item = document.createElement("div");
+    const scheduleStatus = String(schedule.status || "").trim();
+    const statusLabel =
+      scheduleStatus === "confirmed"
+        ? "Confirmado"
+        : scheduleStatus === "cancelled"
+          ? "Cancelado"
+          : "Pendente";
+    const statusClass =
+      scheduleStatus === "confirmed"
+        ? "confirmed"
+        : scheduleStatus === "cancelled"
+          ? "cancelled"
+          : "pending";
+    item.className = `schedule-list-item ${statusClass}`;
+    const isExpanded = Boolean(state.expandedScheduleIds[String(schedule.id || "").trim()]);
+    const scheduleAccountLabel = formatScheduleAccountLabel(schedule);
+    item.classList.toggle("expanded", isExpanded);
+    item.innerHTML = `
+      <div class="schedule-list-main" data-action="toggle-schedule-details" data-schedule-id="${schedule.id}">
+        <div class="schedule-list-head">
+          <strong class="schedule-list-name">${escapeHtml(schedule.customer_name || schedule.conversation_name || schedule.customer_phone || "Agendamento sem cliente")}</strong>
+          <span class="schedule-list-status ${statusClass}">${escapeHtml(statusLabel)}</span>
+        </div>
+        <div class="schedule-list-meta">
+          <span><i class="bi bi-briefcase"></i> ${escapeHtml(schedule.service_name || "-")}</span>
+          <span><i class="bi bi-clock"></i> ${escapeHtml(schedule.scheduled_time || "-")}</span>
+        </div>
+        <div class="schedule-list-details"${isExpanded ? "" : ' hidden'}>
+          <span><i class="bi bi-calendar-event"></i> ${escapeHtml(formatCompactBrDate(schedule.scheduled_date || ""))}</span>
+          ${scheduleAccountLabel ? `<span><i class="bi bi-whatsapp"></i> ${escapeHtml(scheduleAccountLabel)}</span>` : ""}
+          ${schedule.duration_minutes ? `<span><i class="bi bi-hourglass-split"></i> ${escapeHtml(String(schedule.duration_minutes))} min</span>` : ""}
+          ${schedule.notes ? `<span><i class="bi bi-card-text"></i> ${escapeHtml(schedule.notes)}</span>` : ""}
+          ${schedule.confirmation_note ? `<span><i class="bi bi-patch-check"></i> ${escapeHtml(schedule.confirmation_note)}</span>` : ""}
+          ${schedule.cancel_reason ? `<span><i class="bi bi-x-octagon"></i> ${escapeHtml(schedule.cancel_reason)}</span>` : ""}
+        </div>
+      </div>
+      <div class="schedule-list-actions">
+        ${
+          schedule.conversation_id
+            ? `<button type="button" class="schedule-icon-btn goto" data-action="open-schedule-chat" data-schedule-id="${schedule.id}" title="Ir para a conversa" aria-label="Ir para a conversa">
+                <i class="bi bi-chat-dots"></i>
+              </button>`
+            : ""
+        }
+        ${
+          scheduleStatus !== "cancelled"
+            ? `<button type="button" class="schedule-icon-btn reschedule" data-action="reschedule-schedule" data-schedule-id="${schedule.id}" title="Reagendar" aria-label="Reagendar">
+                <i class="bi bi-calendar2-event"></i>
+              </button>`
+            : ""
+        }
+        ${
+          scheduleStatus === "pending_confirmation"
+            ? `<button type="button" class="schedule-icon-btn confirm" data-action="confirm-schedule" data-schedule-id="${schedule.id}" title="Confirmar agendamento" aria-label="Confirmar agendamento">
+                <i class="bi bi-check2-circle"></i>
+              </button>`
+            : ""
+        }
+        ${
+          scheduleStatus !== "cancelled"
+            ? `<button type="button" class="schedule-icon-btn cancel" data-action="cancel-schedule" data-schedule-id="${schedule.id}" title="Cancelar agendamento" aria-label="Cancelar agendamento">
+                <i class="bi bi-x-circle"></i>
+              </button>`
+            : ""
+        }
+        <button type="button" class="schedule-icon-btn delete" data-action="delete-schedule" data-schedule-id="${schedule.id}" title="Excluir agendamento" aria-label="Excluir agendamento">
+          <i class="bi bi-trash3"></i>
+        </button>
+      </div>
+    `;
+    schedulesListEl.appendChild(item);
   }
 }
 
@@ -1351,6 +2043,20 @@ async function loadAiOrders() {
   const result = await api("/ai/orders");
   state.productOrders = Array.isArray(result?.items) ? result.items : [];
   renderOrders();
+}
+
+async function loadAiSchedules() {
+  const month = getCurrentScheduleMonth();
+  const result = await api(`/ai/schedules?month=${encodeURIComponent(month)}`);
+  state.productSchedules = Array.isArray(result?.items) ? result.items : [];
+  state.expandedScheduleIds = {};
+  const currentMonthPrefix = `${month}-`;
+  if (!String(state.selectedScheduleDate || "").startsWith(currentMonthPrefix)) {
+    const today = getCurrentDateIso();
+    state.selectedScheduleDate = today.startsWith(currentMonthPrefix) ? today : `${month}-01`;
+  }
+  renderSchedulesCalendar();
+  renderSchedulesList();
 }
 
 function showLoginScreen() {
@@ -1396,6 +2102,7 @@ function renderSettingsHeader() {
   settingsAddNumberBtnEl.hidden = !isAdmin();
   settingsRemoveNumberBtnEl.hidden = !isAdmin();
   settingsTabCompaniesEl.hidden = !isCEO();
+  settingsTabCompaniesEl.style.display = isCEO() ? "inline-flex" : "none";
   if (!isCEO() && state.settingsTab === "companies") {
     state.settingsTab = "perfil";
   }
@@ -1409,7 +2116,7 @@ function renderWhatsAppAccountOptions() {
   accountSwitchListEl.innerHTML = "";
 
   if (!items.length) {
-    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum nÃºmero vinculado.</div>';
+    accountSwitchListEl.innerHTML = '<div class="empty-state">Nenhum número vinculado.</div>';
     return;
   }
 
@@ -1481,7 +2188,7 @@ function closeSettingsModal() {
 function renderUsersList(users) {
   settingsUsersListEl.innerHTML = "";
   if (!users || !users.length) {
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuÃ¡rio cadastrado.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Nenhum usuário cadastrado.</div>';
     return;
   }
 
@@ -1544,7 +2251,7 @@ function renderCompaniesList(items) {
     row.innerHTML = `
       <div class="settings-user-main">
         <strong>${company.name}</strong><br />
-        <small>${company.cnpj || "CNPJ nÃ£o informado"}</small>
+        <small>${company.cnpj || "CNPJ não informado"}</small>
       </div>
       <div class="settings-user-right">
         <span class="settings-user-role">empresa</span>
@@ -1610,7 +2317,7 @@ async function loadUsersForSettings() {
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
-    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuÃ¡rios.</div>';
+    settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuários.</div>';
     renderCompaniesList([]);
     return;
   }
@@ -1621,6 +2328,7 @@ async function loadUsersForSettings() {
   settingsTabSectorsEl.disabled = false;
   settingsTabCompaniesEl.disabled = !isCEO();
   settingsTabCompaniesEl.hidden = !isCEO();
+  settingsTabCompaniesEl.style.display = isCEO() ? "inline-flex" : "none";
   settingsTabAccountsEl.disabled = false;
   if (!isCEO() && state.settingsTab === "companies") {
     setSettingsTab("perfil");
@@ -1687,7 +2395,7 @@ async function loadWhatsAppAccounts() {
 function openAccountSwitchModal(mode = "select") {
   accountSwitchMode = mode;
   if (accountSwitchTitleEl) {
-    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover nÃºmero" : "Selecionar nÃºmero";
+    accountSwitchTitleEl.textContent = mode === "remove" ? "Remover número" : "Selecionar número";
   }
   renderWhatsAppAccountOptions();
   accountSwitchOverlayEl.classList.add("open");
@@ -1762,6 +2470,7 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
     } else if (state.currentView === "products") {
       await loadProducts();
       await loadAiOrders();
+      await loadAiSchedules();
     } else if (state.currentView === "agent") {
       await loadAgentStatus();
     }
@@ -1776,6 +2485,7 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
     if (state.currentView === "products") {
       await loadProducts().catch(() => undefined);
       await loadAiOrders().catch(() => undefined);
+      await loadAiSchedules().catch(() => undefined);
     }
     connectRealtime().catch((innerError) => console.error(innerError));
   }
@@ -1788,7 +2498,7 @@ async function handleProvisionWhatsAppAccount() {
     const result = await api("/whatsapp/accounts/provision", {
       method: "POST",
       body: JSON.stringify({
-        display_name: "Novo nÃºmero",
+        display_name: "Novo número",
       }),
     });
     if (result?.item?.id) {
@@ -1797,12 +2507,12 @@ async function handleProvisionWhatsAppAccount() {
     openProfilePanel();
     await api("/whatsapp/connect", { method: "POST" });
     qrPanelEl.hidden = false;
-    qrHintEl.textContent = "Escaneie o QR code para vincular o novo nÃºmero.";
+    qrHintEl.textContent = "Escaneie o QR code para vincular o novo número.";
     clearQrCode();
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao adicionar nÃºmero.");
+    await showAlert(error.message || "Falha ao adicionar número.");
   }
 }
 
@@ -1810,13 +2520,13 @@ async function handleRemoveWhatsAppAccount(accountId) {
   if (!isAdmin()) return;
   const selected = state.whatsappAccounts.find((item) => item.id === accountId) || null;
   if (!selected?.id) {
-    await showAlert("Selecione um nÃºmero para remover.");
+    await showAlert("Selecione um número para remover.");
     return;
   }
 
   const confirmed = await showConfirm(
-    `Remover o nÃºmero ${formatWhatsAppAccountTitle(selected)}?`,
-    "Remover nÃºmero",
+    `Remover o número ${formatWhatsAppAccountTitle(selected)}?`,
+    "Remover número",
     "Remover",
     "Cancelar",
   );
@@ -1830,9 +2540,9 @@ async function handleRemoveWhatsAppAccount(accountId) {
     const fallbackAccount = state.whatsappAccounts[0] || null;
     await switchSelectedWhatsAppAccount(fallbackAccount?.id || "");
     closeAccountSwitchModal();
-    await showAlert("NÃºmero removido com sucesso.");
+    await showAlert("Número removido com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao remover nÃºmero.");
+    await showAlert(error.message || "Falha ao remover número.");
   }
 }
 
@@ -1842,7 +2552,7 @@ function populateTransferUsers(selectedUserId = "") {
   if (!agents.length) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "Nenhum atendente disponÃ­vel";
+    opt.textContent = "Nenhum atendente disponível";
     transferUserSelectEl.appendChild(opt);
     transferUserSelectEl.disabled = true;
     return;
@@ -1940,8 +2650,8 @@ async function handleDeleteUser(userId) {
   }
 
   const confirmed = await showConfirm(
-    `Excluir o usuÃ¡rio ${user.name}?`,
-    "Excluir usuÃ¡rio",
+    `Excluir o usuário ${user.name}?`,
+    "Excluir usuário",
     "Excluir",
     "Cancelar",
   );
@@ -1950,9 +2660,9 @@ async function handleDeleteUser(userId) {
   try {
     await api(`/auth/users/${user.id}`, { method: "DELETE" });
     await loadUsersForSettings();
-    await showAlert("UsuÃ¡rio excluÃ­do com sucesso.");
+    await showAlert("Usuário excluído com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao excluir o usuÃ¡rio.");
+    await showAlert(error.message || "Falha ao excluir o usuário.");
   }
 }
 
@@ -2071,13 +2781,13 @@ async function parseContactsFromRows(rows, onProgress) {
       await tick();
     }
   }
-  onProgress?.(96, `${processed}/${total} linhas processadas`, "Finalizando importacao...");
+  onProgress?.(96, `${processed}/${total} linhas processadas`, "Finalizando importação...");
   return contacts;
 }
 
 async function parseContactsFromExcel(file, onProgress) {
   if (!window.XLSX) {
-    throw new Error("Leitor de Excel nÃ£o carregado. Recarregue a pÃ¡gina.");
+    throw new Error("Leitor de Excel não carregado. Recarregue a página.");
   }
 
   onProgress?.(10, "Lendo arquivo...", "Carregando arquivo Excel...");
@@ -2222,7 +2932,7 @@ async function stopBulkJob(job) {
 
 async function deleteBulkJob(job) {
   const confirmed = await showConfirm(
-    "Excluir este disparo do histÃ³rico?",
+    "Excluir este disparo do histórico?",
     "Excluir disparo",
     "Excluir",
     "Cancelar",
@@ -2365,8 +3075,11 @@ function resetAppAfterLogout() {
   state.companies = [];
   state.products = [];
   state.productOrders = [];
+  state.productSchedules = [];
   state.productsTab = "store-info";
   state.editingProductId = "";
+  state.scheduleCalendarMonth = "";
+  state.selectedScheduleDate = "";
   state.agentSettings = null;
   state.currentView = "chats";
   writeSessionToken("");
@@ -4218,7 +4931,7 @@ async function startRecording() {
   }
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    await showAlert("Seu navegador nÃ£o suporta gravaÃ§Ã£o de Ã¡udio.");
+    await showAlert("Seu navegador não suporta gravação de áudio.");
     return;
   }
 
@@ -4277,7 +4990,7 @@ async function startRecording() {
     }, 1000);
     audioTimerEl.textContent = fmtDuration(recordingSeconds);
   } catch (error) {
-    await showAlert(error.message || "NÃ£o foi possÃ­vel iniciar a gravaÃ§Ã£o.");
+    await showAlert(error.message || "Não foi possível iniciar a gravação.");
     setComposerMode("text");
   }
 }
@@ -4333,7 +5046,7 @@ async function deleteContextConversation() {
   const contactName = conv ? conversationDisplayName(conv) : "este contato";
 
   const confirmed = await showConfirm(
-    `Confirma excluir a conversa de ${contactName}?\n\nIsso tambÃ©m remove o contato salvo no app (se ele nÃ£o estiver em outra conversa).`,
+    `Confirma excluir a conversa de ${contactName}?\n\nIsso também remove o contato salvo no app (se ele não estiver em outra conversa).`,
     "Excluir conversa",
     "Excluir",
     "Cancelar",
@@ -4517,7 +5230,7 @@ async function handleLoginSubmit(event) {
   const username = String(loginUsernameEl.value || "").trim();
   const password = String(loginPasswordEl.value || "").trim();
   if (!username || !password) {
-    await showAlert("Informe usuÃ¡rio e senha.");
+    await showAlert("Informe usuário e senha.");
     return;
   }
 
@@ -4559,7 +5272,7 @@ async function handleCreateUserSubmit(event) {
   const sectorId = String(newUserSectorEl.value || "").trim();
 
   if (!name || !username || !password || !sectorId) {
-    await showAlert("Preencha nome, usuÃ¡rio, senha e setor.");
+    await showAlert("Preencha nome, usuário, senha e setor.");
     return;
   }
 
@@ -4572,9 +5285,9 @@ async function handleCreateUserSubmit(event) {
     renderRoleOptions(newUserRoleEl, "operador");
     renderSectorOptions();
     await loadUsersForSettings();
-    await showAlert("UsuÃ¡rio cadastrado com sucesso.");
+    await showAlert("Usuário cadastrado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao cadastrar o usuÃ¡rio.");
+    await showAlert(error.message || "Falha ao cadastrar o usuário.");
   }
 }
 
@@ -4738,7 +5451,7 @@ settingsUsersListEl.addEventListener("click", async (event) => {
   }
 });
 settingsLogoutBtnEl.addEventListener("click", async () => {
-  const confirmed = await showConfirm("Deseja encerrar sua sessÃ£o neste navegador?", "Encerrar sessÃ£o", "Sair", "Cancelar");
+  const confirmed = await showConfirm("Deseja encerrar sua sessão neste navegador?", "Encerrar sessão", "Sair", "Cancelar");
   if (!confirmed) return;
   closeSettingsModal();
   await performLogout();
@@ -4959,7 +5672,7 @@ settingsRemoveNumberBtnEl.addEventListener("click", () => {
 });
 agentTestBtnEl.addEventListener("click", async () => {
   agentTestBtnEl.disabled = true;
-  agentTestResultEl.textContent = "Testando conexÃ£o com a OpenAI...";
+  agentTestResultEl.textContent = "Testando conexão com a OpenAI...";
   try {
     const result = await api("/ai/test", {
       method: "POST",
@@ -4967,11 +5680,11 @@ agentTestBtnEl.addEventListener("click", async () => {
     });
     renderAgentStatus(result);
     agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
-    agentTestResultEl.textContent = `ConexÃ£o OK. Resposta: ${String(result.reply || "").trim() || "ok"}`;
+    agentTestResultEl.textContent = `Catálogo disponível para o agente: ${Number(data.productsCount || 0)} produto(s).`;
   } catch (error) {
     agentLastTestEl.textContent = `${fmtDateShort(new Date().toISOString())} ${fmtTime(new Date().toISOString())}`.trim();
-    agentTestResultEl.textContent = error.message || "Falha ao testar a conexÃ£o com a OpenAI.";
-    await showAlert(error.message || "Falha ao testar a conexÃ£o com a OpenAI.");
+    agentTestResultEl.textContent = error.message || "Falha ao testar a conexão com a OpenAI.";
+    await showAlert(error.message || "Falha ao testar a conexão com a OpenAI.");
   } finally {
     agentTestBtnEl.disabled = false;
   }
@@ -4980,7 +5693,7 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    await showAlert("Selecione um nÃºmero para configurar o agente.");
+    await showAlert("Selecione um número para configurar o agente.");
     return;
   }
 
@@ -5003,9 +5716,9 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
     });
     state.agentSettings = result.settings || null;
     renderAgentSettings();
-    await showAlert("ConfiguraÃ§Ãµes do agente salvas com sucesso.");
+    await showAlert("Configurações do agente salvas com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao salvar as configuraÃ§Ãµes do agente.");
+    await showAlert(error.message || "Falha ao salvar as configurações do agente.");
   } finally {
     agentSettingsSaveBtnEl.disabled = false;
   }
@@ -5014,7 +5727,7 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
-    await showAlert("Selecione um nÃºmero para configurar a loja.");
+    await showAlert("Selecione um número para configurar a loja.");
     return;
   }
 
@@ -5037,17 +5750,129 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
     });
     state.agentSettings = result.settings || null;
     renderAgentSettings();
-    await showAlert("InformaÃ§Ãµes da loja salvas com sucesso.");
+    await showAlert("Informações da loja salvas com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao salvar as informaÃ§Ãµes da loja.");
+    await showAlert(error.message || "Falha ao salvar as informações da loja.");
   } finally {
     storeInfoSaveBtnEl.disabled = false;
+  }
+});
+scheduleSettingsFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const accountId = String(state.selectedWhatsAppAccountId || "").trim();
+  if (!accountId) {
+    await showAlert("Selecione um número para configurar o agendamento.");
+    return;
+  }
+
+  const scheduleWorkingDays = normalizeScheduleWorkingDays(readScheduleWorkingDays());
+  const enabledDays = scheduleWorkingDays.filter((item) => item.enabled);
+  for (const item of enabledDays) {
+    const activePeriods = [
+      item.morning_enabled && item.morning_start && item.morning_end ? { label: "manhã", start: item.morning_start, end: item.morning_end } : null,
+      item.afternoon_enabled && item.afternoon_start && item.afternoon_end ? { label: "tarde", start: item.afternoon_start, end: item.afternoon_end } : null,
+      item.night_enabled && item.night_start && item.night_end ? { label: "noite", start: item.night_start, end: item.night_end } : null,
+    ].filter(Boolean);
+    if (!activePeriods.length) {
+      await showAlert(`Ative pelo menos um período em ${item.label}.`);
+      return;
+    }
+    for (const period of activePeriods) {
+      if (period.start >= period.end) {
+        await showAlert(`O horário da ${period.label} em ${item.label} precisa terminar depois do início.`);
+        return;
+      }
+    }
+  }
+
+  const intervalMinutesRaw = String(scheduleIntervalMinutesInputEl?.value || "").trim();
+  const reminderEnabled = Boolean(scheduleReminderEnabledInputEl?.checked);
+  const intervalMinutes = intervalMinutesRaw ? Number(intervalMinutesRaw) : null;
+  const reminderRules = reminderEnabled ? readScheduleReminderRules() : [];
+
+  if (intervalMinutesRaw && (!Number.isFinite(intervalMinutes) || intervalMinutes < 0)) {
+    await showAlert("Informe um intervalo válido entre atendimentos.");
+    return;
+  }
+  if (reminderEnabled && !reminderRules.length) {
+    await showAlert("Adicione pelo menos um lembrete.");
+    return;
+  }
+
+  scheduleSettingsSaveBtnEl.disabled = true;
+  try {
+    const result = await api("/ai/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        account_id: accountId,
+        mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
+        agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
+        company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),
+        store_name: String(storeNameInputEl?.value || state.agentSettings?.store_name || "").trim(),
+        store_cnpj: String(storeCnpjInputEl?.value || state.agentSettings?.store_cnpj || "").trim(),
+        store_address: buildStoreAddressText() || String(state.agentSettings?.store_address || "").trim(),
+        store_description: String(storeDescriptionInputEl?.value || state.agentSettings?.store_description || "").trim(),
+        store_payment_methods: readStorePaymentMethods(),
+        store_delivery_fees: readStoreDeliveryFees(),
+        schedule_working_days: scheduleWorkingDays.map((item) => ({
+          day_of_week: item.day_of_week,
+          enabled: Boolean(item.enabled),
+          start_time: String(item.start_time || "").trim(),
+          end_time: String(item.end_time || "").trim(),
+          morning_enabled: Boolean(item.morning_enabled),
+          morning_start: String(item.morning_start || "").trim(),
+          morning_end: String(item.morning_end || "").trim(),
+          afternoon_enabled: Boolean(item.afternoon_enabled),
+          afternoon_start: String(item.afternoon_start || "").trim(),
+          afternoon_end: String(item.afternoon_end || "").trim(),
+          night_enabled: Boolean(item.night_enabled),
+          night_start: String(item.night_start || "").trim(),
+          night_end: String(item.night_end || "").trim(),
+        })),
+        schedule_interval_minutes: Number.isFinite(intervalMinutes) ? Math.max(0, Math.round(intervalMinutes)) : null,
+        schedule_reminder_enabled: reminderEnabled,
+        schedule_reminder_minutes:
+          reminderEnabled && reminderRules.length && reminderRules[0].unit === "minutes"
+            ? Math.max(1, Math.round(Number(reminderRules[0].value)))
+            : null,
+        schedule_reminder_rules: reminderRules,
+      }),
+    });
+    state.agentSettings = result.settings || null;
+    renderAgentSettings();
+    await showAlert("Configuração de agendamento salva com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao salvar a configuração de agendamento.");
+  } finally {
+    scheduleSettingsSaveBtnEl.disabled = false;
   }
 });
 productsTabStoreInfoEl.addEventListener("click", () => setProductsTab("store-info"));
 productsTabCreateEl.addEventListener("click", () => setProductsTab("create"));
 productsTabListEl.addEventListener("click", () => setProductsTab("list"));
 productsTabOrdersEl.addEventListener("click", () => setProductsTab("orders"));
+productsTabSchedulesEl.addEventListener("click", () => {
+  setProductsTab("schedules");
+  loadAiSchedules().catch((error) => console.error(error));
+});
+productsTabScheduleSettingsEl?.addEventListener("click", () => {
+  setProductsTab("schedule-settings");
+  renderAgentSettings();
+});
+scheduleReminderEnabledInputEl?.addEventListener("change", () => updateScheduleReminderState());
+scheduleReminderAddBtnEl?.addEventListener("click", () => {
+  if (!scheduleReminderRulesListEl) return;
+  scheduleReminderRulesListEl.appendChild(createScheduleReminderRuleRow({ value: 1, unit: "hours" }));
+});
+scheduleReminderRulesListEl?.addEventListener("click", (event) => {
+  const target = event.target.closest('[data-action="remove-schedule-reminder"]');
+  if (!target) return;
+  const row = target.closest(".schedule-reminder-rule-row");
+  row?.remove();
+  if (scheduleReminderEnabledInputEl?.checked && scheduleReminderRulesListEl && !scheduleReminderRulesListEl.children.length) {
+    renderScheduleReminderRules([{ value: 1, unit: "hours" }]);
+  }
+});
 storeAddPaymentMethodBtnEl.addEventListener("click", () => {
   storePaymentMethodsListEl.appendChild(createStorePaymentMethodRow(""));
 });
@@ -5082,8 +5907,10 @@ productNameEl.addEventListener("input", () => updateProductPreview());
 productTypeEl.addEventListener("change", () => updateProductTypeState());
 productPriceEl.addEventListener("input", () => updateProductPreview());
 productDiscountEnabledEl.addEventListener("change", () => updateProductDiscountState());
+productScheduleEnabledEl.addEventListener("change", () => updateProductScheduleState());
 productDiscountPriceEl.addEventListener("input", () => updateProductPreview());
 productStockEl.addEventListener("input", () => updateProductPreview());
+productServiceDurationEl.addEventListener("input", () => updateProductPreview());
 productDescriptionEl.addEventListener("input", () => updateProductPreview());
 productImageEl.addEventListener("change", async () => {
   const file = productImageEl.files?.[0] || null;
@@ -5097,6 +5924,7 @@ productImageEl.addEventListener("change", async () => {
 });
 updateProductPreview();
 updateProductDiscountState();
+updateProductScheduleState();
 productsListEl.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action='edit-product']");
   if (!target) return;
@@ -5112,12 +5940,17 @@ ordersListEl.addEventListener("click", async (event) => {
   const order = findOrderById(orderId);
   if (!orderId || !order) return;
 
+  if (action === "open-order-chat") {
+    await openConversationFromEntity(order.conversation_id);
+    return;
+  }
+
   if (action === "confirm-order") {
     const confirmData = await showOrderConfirmDialog();
     if (!confirmData) return;
     const readyTimeMinutes = Number(confirmData.readyTimeMinutes);
     if (!Number.isFinite(readyTimeMinutes) || readyTimeMinutes <= 0) {
-      await showAlert("Informe um tempo mÃ­nimo vÃ¡lido em minutos.");
+      await showAlert("Informe um tempo mínimo válido em minutos.");
       return;
     }
     const confirmationNote = String(confirmData.confirmationNote || "").trim();
@@ -5199,13 +6032,178 @@ ordersListEl.addEventListener("click", async (event) => {
       });
       invalidateConversationSummaryCache();
       await loadAiOrders();
-      await showAlert("Pedido excluido com sucesso.");
+      await showAlert("Pedido excluído com sucesso.");
     } catch (error) {
       await showAlert(error.message || "Falha ao excluir pedido.");
     } finally {
       actionTarget.disabled = false;
     }
   }
+});
+schedulesListEl.addEventListener("click", async (event) => {
+  const actionTarget = event.target.closest("[data-action]");
+  if (!actionTarget) return;
+  const action = String(actionTarget.getAttribute("data-action") || "").trim();
+  const scheduleId = String(actionTarget.getAttribute("data-schedule-id") || "").trim();
+  const schedule = findScheduleById(scheduleId);
+  if (!scheduleId || !schedule) return;
+
+  if (action === "toggle-schedule-details") {
+    state.expandedScheduleIds[scheduleId] = !state.expandedScheduleIds[scheduleId];
+    renderSelectedScheduleDay();
+    return;
+  }
+
+  if (action === "open-schedule-chat") {
+    await openConversationFromEntity(schedule.conversation_id);
+    return;
+  }
+
+  if (action === "reschedule-schedule") {
+    const useAi = await showConfirm(
+      "Quer que a IA converse com o cliente sobre o reagendamento? Se escolher cancelar, vamos abrir o chat para você assumir o atendimento.",
+      "Reagendar",
+      "IA conversar",
+      "Assumir atendimento",
+    );
+    if (!useAi) {
+      if (!schedule.conversation_id) {
+        await showAlert("Esse agendamento não tem conversa vinculada para atendimento manual.");
+        return;
+      }
+      await openConversationFromEntity(schedule.conversation_id);
+      await ensureConversationReadyForCompose();
+      await showAlert("Chat aberto para você assumir o atendimento do reagendamento.");
+      return;
+    }
+
+    const reason = await showPrompt("Qual o motivo do reagendamento?", "", {
+      title: "Reagendar com IA",
+      confirmText: "Continuar",
+      cancelText: "Cancelar",
+      placeholder: "Ex.: tivemos um ajuste interno na agenda",
+    });
+    if (reason === null) return;
+    const nextDate = await showPrompt(
+      "Qual data disponível a IA pode sugerir primeiro para o cliente?",
+      formatCompactBrDate(String(schedule.scheduled_date || "")),
+      {
+        title: "Reagendar com IA",
+        confirmText: "Continuar",
+        cancelText: "Cancelar",
+        placeholder: "DD/MM/AA",
+      },
+    );
+    if (nextDate === null) return;
+    const nextTime = await showPrompt("Qual horário disponível a IA pode sugerir primeiro?", String(schedule.scheduled_time || ""), {
+      title: "Reagendar com IA",
+      confirmText: "Enviar para a IA",
+      cancelText: "Cancelar",
+      placeholder: "HH:mm",
+    });
+    if (nextTime === null) return;
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/schedules/${encodeURIComponent(scheduleId)}/reschedule-assistant`, {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "ai",
+          reason: String(reason || "").trim(),
+          suggested_date: parseCompactBrDateToIso(nextDate),
+          suggested_time: String(nextTime || "").trim(),
+        }),
+      });
+      await loadAiSchedules();
+      await showAlert("A IA iniciou a conversa de reagendamento com o cliente.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao reagendar agendamento.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "confirm-schedule") {
+    const confirmationNote = await showPrompt("Observação da confirmação (opcional):", "", {
+      title: "Confirmar agendamento",
+      confirmText: "Confirmar",
+      cancelText: "Cancelar",
+      placeholder: "Ex.: chegar com 10 min de antecedência",
+    });
+    if (confirmationNote === null) return;
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/schedules/${encodeURIComponent(scheduleId)}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          confirmation_note: String(confirmationNote || "").trim(),
+        }),
+      });
+      await loadAiSchedules();
+      await showAlert("Agendamento confirmado com sucesso. O cliente foi avisado.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao confirmar agendamento.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "cancel-schedule") {
+    const reason = await showPrompt("Informe o motivo do cancelamento:", "", {
+      title: "Cancelar agendamento",
+      confirmText: "Cancelar agendamento",
+      cancelText: "Voltar",
+      placeholder: "Ex.: horário indisponível, agenda cheia...",
+    });
+    if (!reason) return;
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/schedules/${encodeURIComponent(scheduleId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      await loadAiSchedules();
+      await showAlert("Agendamento cancelado com sucesso. O cliente foi avisado.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao cancelar agendamento.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+    return;
+  }
+
+  if (action === "delete-schedule") {
+    const confirmed = await showConfirm(
+      `Excluir o agendamento de ${schedule.customer_name || schedule.conversation_name || "cliente"}?`,
+      "Excluir agendamento",
+      "Excluir",
+      "Cancelar"
+    );
+    if (!confirmed) return;
+    actionTarget.disabled = true;
+    try {
+      await api(`/ai/schedules/${encodeURIComponent(scheduleId)}`, {
+        method: "DELETE",
+      });
+      await loadAiSchedules();
+      await showAlert("Agendamento excluído com sucesso.");
+    } catch (error) {
+      await showAlert(error.message || "Falha ao excluir agendamento.");
+    } finally {
+      actionTarget.disabled = false;
+    }
+  }
+});
+schedulePrevMonthBtnEl.addEventListener("click", () => {
+  state.scheduleCalendarMonth = shiftMonth(getCurrentScheduleMonth(), -1);
+  state.selectedScheduleDate = "";
+  loadAiSchedules().catch((error) => console.error(error));
+});
+scheduleNextMonthBtnEl.addEventListener("click", () => {
+  state.scheduleCalendarMonth = shiftMonth(getCurrentScheduleMonth(), 1);
+  state.selectedScheduleDate = "";
+  loadAiSchedules().catch((error) => console.error(error));
 });
 productsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -5215,6 +6213,8 @@ productsFormEl.addEventListener("submit", async (event) => {
   const price = String(productPriceEl.value || "").trim();
   const discountEnabled = Boolean(productDiscountEnabledEl.checked);
   const discountPrice = String(productDiscountPriceEl.value || "").trim();
+  const scheduleEnabled = type === "service" && Boolean(productScheduleEnabledEl.checked);
+  const serviceDurationMinutes = String(productServiceDurationEl.value || "").trim();
   const stock = type === "service" ? "0" : String(productStockEl.value || "").trim();
   const description = String(productDescriptionEl.value || "").trim();
   const image = productImageEl.files?.[0] || null;
@@ -5229,11 +6229,18 @@ productsFormEl.addEventListener("submit", async (event) => {
   }
   if (discountEnabled) {
     if (!discountPrice) {
-      await showAlert("Informe o preÃ§o com desconto.");
+      await showAlert("Informe o preço com desconto.");
       return;
     }
     if (Number(discountPrice) >= Number(price || 0)) {
-      await showAlert("O preÃ§o com desconto deve ser menor que o preÃ§o base.");
+      await showAlert("O preço com desconto deve ser menor que o preço base.");
+      return;
+    }
+  }
+
+  if (scheduleEnabled) {
+    if (!serviceDurationMinutes || !Number.isFinite(Number(serviceDurationMinutes)) || Number(serviceDurationMinutes) <= 0) {
+      await showAlert("Informe o tempo médio do serviço em minutos.");
       return;
     }
   }
@@ -5247,6 +6254,8 @@ productsFormEl.addEventListener("submit", async (event) => {
     form.append("price", price || "0");
     form.append("discount_enabled", discountEnabled ? "true" : "false");
     form.append("discount_price", discountEnabled ? (discountPrice || "0") : "");
+    form.append("schedule_enabled", scheduleEnabled ? "true" : "false");
+    form.append("service_duration_minutes", scheduleEnabled ? serviceDurationMinutes : "");
     form.append("stock", stock || "0");
     if (image) {
       form.append("image", image);
@@ -5317,19 +6326,19 @@ conversationAIAgentToggleEl.addEventListener("change", async () => {
     if (enabled && result?.automation && !result.automation.replied) {
       const reason = String(result.automation.reason || "").trim();
       const reasonMap = {
-        busy: "O agente jÃ¡ estÃ¡ processando esta conversa.",
-        conversation_not_found: "Conversa nÃ£o encontrada para o agente.",
-        disabled: "O agente ainda estÃ¡ desabilitado neste chat.",
+        busy: "O agente já está processando esta conversa.",
+        conversation_not_found: "Conversa não encontrada para o agente.",
+        disabled: "O agente ainda está desabilitado neste chat.",
         human_in_charge: "Existe um atendente humano em atendimento neste chat.",
-        missing_account_or_phone: "Falta conta WhatsApp ou telefone vÃ¡lido para o agente responder.",
-        no_messages: "NÃ£o hÃ¡ mensagens suficientes nesta conversa para o agente responder.",
-        last_message_from_company: "A Ãºltima mensagem ainda Ã© da empresa. O agente vai responder na prÃ³xima mensagem do cliente.",
-        model_chose_not_to_reply: "O agente analisou a conversa e decidiu nÃ£o responder agora.",
+        missing_account_or_phone: "Falta conta WhatsApp ou telefone válido para o agente responder.",
+        no_messages: "Não há mensagens suficientes nesta conversa para o agente responder.",
+        last_message_from_company: "A última mensagem ainda é da empresa. O agente vai responder na próxima mensagem do cliente.",
+        model_chose_not_to_reply: "O agente analisou a conversa e decidiu não responder agora.",
       };
       if (reason && reasonMap[reason]) {
         await showAlert(reasonMap[reason]);
       } else if (reason) {
-        await showAlert(`O agente nÃ£o respondeu agora: ${reason}`);
+        await showAlert(`O agente não respondeu agora: ${reason}`);
       }
     }
   } catch (error) {
@@ -5359,18 +6368,18 @@ connectBtnEl.addEventListener("click", async () => {
   try {
     await api("/whatsapp/connect", { method: "POST" });
     qrPanelEl.hidden = false;
-    qrHintEl.textContent = "Gerando QR code. Depois da leitura, a sincronizacao sera iniciada automaticamente.";
+    qrHintEl.textContent = "Gerando QR code. Depois da leitura, a sincronização será iniciada automaticamente.";
     clearQrCode();
     await pollQrCode();
     startQrPolling();
   } catch (error) {
-    await showAlert(error.message || "Falha ao iniciar a conexÃ£o.");
+    await showAlert(error.message || "Falha ao iniciar a conexão.");
   }
 });
 syncHistoryBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm(
-    "O app vai remover a conexÃ£o atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe nÃ£o houver sincronizaÃ§Ã£o pendente, nada serÃ¡ importado.",
-    "Sincronizar histÃ³rico",
+    "O app vai remover a conexão atual, gerar um novo QR code e, depois da leitura, sincronizar automaticamente as mensagens pendentes.\n\nSe não houver sincronização pendente, nada será importado.",
+    "Sincronizar histórico",
     "Sincronizar",
     "Cancelar",
   );
@@ -5379,7 +6388,7 @@ syncHistoryBtnEl.addEventListener("click", async () => {
   try {
     await api("/whatsapp/sync-history", { method: "POST" });
     qrPanelEl.hidden = false;
-    qrHintEl.textContent = "Leia o novo QR code. Depois da leitura, a sincronizacao vai iniciar automaticamente.";
+    qrHintEl.textContent = "Leia o novo QR code. Depois da leitura, a sincronização vai iniciar automaticamente.";
     clearQrCode();
     await pollQrCode();
     startQrPolling();
@@ -5459,7 +6468,7 @@ editUserFormEl.addEventListener("submit", async (event) => {
   const password = String(editUserPasswordEl.value || "").trim();
 
   if (!name || !username || !role || !sectorId) {
-    await showAlert("Preencha nome, usuÃ¡rio, cargo e setor.");
+    await showAlert("Preencha nome, usuário, cargo e setor.");
     return;
   }
   if (!["ceo", "administrador", "operador"].includes(role)) {
@@ -5484,9 +6493,9 @@ editUserFormEl.addEventListener("submit", async (event) => {
     });
     closeEditUserModal();
     await loadUsersForSettings();
-    await showAlert("UsuÃ¡rio atualizado com sucesso.");
+    await showAlert("Usuário atualizado com sucesso.");
   } catch (error) {
-    await showAlert(error.message || "Falha ao editar o usuÃ¡rio.");
+    await showAlert(error.message || "Falha ao editar o usuário.");
   }
 });
 document.addEventListener("click", (event) => {
@@ -5603,6 +6612,5 @@ window.addEventListener("resize", () => {
   applyResponsiveLayoutState();
   renderHeader();
 });
-
 
 

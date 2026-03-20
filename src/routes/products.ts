@@ -65,6 +65,25 @@ function parseDiscountInput(body: any, basePrice: number) {
   return { discountEnabled: true, discountPrice: Number(discountPrice) };
 }
 
+function parseScheduleInput(body: any, type: "product" | "service") {
+  const scheduleEnabled = type === "service" && String(body?.schedule_enabled || "").trim() === "true";
+  const durationRaw = String(body?.service_duration_minutes || "").trim();
+  const durationMinutes = scheduleEnabled && durationRaw ? Number(durationRaw) : null;
+
+  if (!scheduleEnabled) {
+    return { scheduleEnabled: false, serviceDurationMinutes: null };
+  }
+
+  if (!Number.isFinite(durationMinutes) || Number(durationMinutes) <= 0) {
+    throw new Error("Informe um tempo médio válido em minutos.");
+  }
+
+  return {
+    scheduleEnabled: true,
+    serviceDurationMinutes: Math.round(Number(durationMinutes)),
+  };
+}
+
 router.get("/", async (req, res) => {
   const authReq = req as AuthRequest;
   if (!authReq.authUser?.company_id) {
@@ -98,6 +117,7 @@ router.post("/", upload.single("image"), async (req, res) => {
     }
 
     const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
+    const { scheduleEnabled, serviceDurationMinutes } = parseScheduleInput(req.body, type);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
     if (!authReq.authUser?.company_id) {
       return res.status(400).json({ error: "Usuario sem empresa vinculada." });
@@ -110,6 +130,8 @@ router.post("/", upload.single("image"), async (req, res) => {
       price,
       discountEnabled,
       discountPrice,
+      scheduleEnabled,
+      serviceDurationMinutes,
       stock: Math.floor(stock),
       imageUrl,
       createdBy: authReq.authUser?.id || null,
@@ -149,6 +171,7 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
     }
 
     const { discountEnabled, discountPrice } = parseDiscountInput(req.body, price);
+    const { scheduleEnabled, serviceDurationMinutes } = parseScheduleInput(req.body, type);
     const imageUrl = req.file?.filename ? `/media/${req.file.filename}` : null;
     if (!authReq.authUser?.company_id) {
       return res.status(400).json({ error: "Usuario sem empresa vinculada." });
@@ -162,6 +185,8 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
       price,
       discountEnabled,
       discountPrice,
+      scheduleEnabled,
+      serviceDurationMinutes,
       stock: Math.floor(stock),
       imageUrl,
     });

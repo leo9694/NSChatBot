@@ -8,6 +8,7 @@ import { ensureAuthSchema } from "./repositories/auth.repository";
 import { cleanupInvalidConversations } from "./repositories/conversations.repository";
 import authRoutes from "./routes/auth";
 import aiRoutes from "./routes/ai";
+import { processDueScheduleReminders } from "./routes/ai";
 import conversationRoutes from "./routes/conversations";
 import healthRoutes from "./routes/health";
 import bulkDispatchRoutes from "./routes/bulk-dispatch";
@@ -76,6 +77,14 @@ app.listen(env.port, async () => {
     const cleanup = await cleanupInvalidConversations();
     await startKnownWhatsAppSessions();
     await resumePendingBulkDispatchJobs();
+    void processDueScheduleReminders().catch((error) => {
+      console.error("Falha ao processar lembretes de agendamento na inicialização:", error);
+    });
+    setInterval(() => {
+      void processDueScheduleReminders().catch((error) => {
+        console.error("Falha ao processar lembretes de agendamento:", error);
+      });
+    }, 60_000);
     syncLocalMediaDirectoryToDatabase()
       .then((result) => {
         if (result.synced > 0) {
