@@ -7,10 +7,12 @@ import {
   createUserSession,
   createSector,
   ensureAuthSchema,
+  getCompanyBranding,
   listCompanies,
   listSectors,
   listUsers,
   revokeSessionByToken,
+  updateCompanyBranding,
   updateUser,
 } from "../repositories/auth.repository";
 import {
@@ -80,6 +82,50 @@ router.get("/me", requireAuth, async (req, res) => {
   return res.status(200).json({
     user: authReq.authUser,
   });
+});
+
+router.get("/company-branding", requireAuth, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  const branding = await getCompanyBranding(authReq.authUser.company_id);
+  return res.status(200).json({
+    branding: branding || {
+      company_id: authReq.authUser.company_id,
+      logo_data_url: null,
+      palette_options: [],
+      selected_palette_index: -1,
+      selected_palette: null,
+    },
+  });
+});
+
+router.put("/company-branding", requireAuth, requireAdmin, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.authUser?.company_id) {
+    return res.status(400).json({ error: "Usuario sem empresa vinculada." });
+  }
+  try {
+    const branding = await updateCompanyBranding({
+      companyId: authReq.authUser.company_id,
+      logoDataUrl: req.body?.logo_data_url || null,
+      paletteOptions: req.body?.palette_options,
+      selectedPaletteIndex: req.body?.selected_palette_index,
+    });
+    if (!branding) {
+      return res.status(404).json({ error: "Empresa nao encontrada." });
+    }
+    return res.status(200).json({ status: "ok", branding });
+  } catch (error: any) {
+    if (error?.message === "INVALID_COMPANY_LOGO_DATA_URL") {
+      return res.status(400).json({ error: "Logo invalida. Envie uma imagem PNG, JPG ou WEBP." });
+    }
+    return res.status(400).json({
+      error: "Falha ao salvar a identidade visual da empresa.",
+      details: error?.message || "Unknown error",
+    });
+  }
 });
 
 router.get("/users", requireAuth, requireAdmin, async (req, res) => {

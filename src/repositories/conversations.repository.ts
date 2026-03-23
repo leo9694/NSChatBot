@@ -108,7 +108,14 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
         last_message_preview = $4::text,
         unread_count = CASE WHEN $5 THEN unread_count + 1 ELSE unread_count END,
         service_status = CASE
-          WHEN $5 THEN CASE WHEN assigned_user_id IS NULL THEN 'pending' ELSE 'in_progress' END
+          WHEN $5 THEN CASE
+            WHEN assigned_user_id IS NULL
+              AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
+              AND service_status = 'in_progress'
+              THEN 'in_progress'
+            WHEN assigned_user_id IS NULL THEN 'pending'
+            ELSE 'in_progress'
+          END
           ELSE service_status
         END,
         metadata = jsonb_strip_nulls(
@@ -175,7 +182,14 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
       last_message_preview = EXCLUDED.last_message_preview,
       unread_count = CASE WHEN $6 THEN conversations.unread_count + 1 ELSE conversations.unread_count END,
       service_status = CASE
-        WHEN $6 THEN CASE WHEN conversations.assigned_user_id IS NULL THEN 'pending' ELSE 'in_progress' END
+        WHEN $6 THEN CASE
+          WHEN conversations.assigned_user_id IS NULL
+            AND COALESCE((conversations.metadata->>'ai_agent_enabled')::boolean, false) = true
+            AND conversations.service_status = 'in_progress'
+            THEN 'in_progress'
+          WHEN conversations.assigned_user_id IS NULL THEN 'pending'
+          ELSE 'in_progress'
+        END
         ELSE conversations.service_status
       END,
       metadata = jsonb_strip_nulls(
@@ -301,7 +315,7 @@ export async function updateConversationAiEnabled(conversationId: string, enable
     SET
       metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{ai_agent_enabled}', to_jsonb($2::boolean), true),
       service_status = CASE
-        WHEN $2 = true THEN 'in_progress'
+        WHEN $2 = true THEN service_status
         WHEN $2 = false AND assigned_user_id IS NULL AND service_status = 'in_progress' THEN 'pending'
         ELSE service_status
       END,
@@ -323,6 +337,30 @@ export async function updateConversationAiEnabled(conversationId: string, enable
     WHERE id = $1
     `,
     [conversationId, enabled],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function activateAiConversation(conversationId: string): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      service_status = 'in_progress',
+      assigned_user_id = NULL,
+      assigned_at = COALESCE(assigned_at, NOW()),
+      finalized_at = NULL,
+      metadata = CASE
+        WHEN metadata IS NULL THEN '{}'::jsonb
+        ELSE metadata - 'bulk_initiated' - 'bulk_replied' - 'bulk_started_at' - 'bulk_replied_at' - 'ai_transfer_pending' - 'ai_transfer_reason'
+      END,
+      updated_at = NOW()
+    WHERE id = $1
+      AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
+    `,
+    [conversationId],
   );
 
   return (result.rowCount || 0) > 0;
@@ -407,6 +445,59 @@ export async function clearConversationBulkInitiated(conversationId: string): Pr
   );
 }
 
+export async function markConversationForHumanTransfer(input: {
+  conversationId: string;
+  reason?: string | null;
+}): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      service_status = 'pending',
+      assigned_user_id = NULL,
+      assigned_at = NULL,
+      finalized_at = NULL,
+      metadata = jsonb_strip_nulls(
+        (COALESCE(metadata, '{}'::jsonb)
+          || jsonb_build_object(
+            'ai_transfer_pending', true,
+            'ai_transfer_resume_after_finalize', true,
+            'ai_agent_enabled', false
+          ))
+        || CASE
+          WHEN $2::text IS NOT NULL THEN jsonb_build_object('ai_transfer_reason', $2::text)
+          ELSE '{}'::jsonb
+        END
+      ),
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [input.conversationId, input.reason || null],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function clearConversationHumanTransferAlert(conversationId: string): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = COALESCE(metadata, '{}'::jsonb)
+        - 'ai_transfer_pending'
+        - 'ai_transfer_reason'
+        - 'ai_transfer_resume_after_finalize',
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [conversationId],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
 export async function claimConversation(conversationId: string, userId: string): Promise<boolean> {
   await ensureConversationWorkflowSchema();
   const result = await pool.query(
@@ -419,7 +510,7 @@ export async function claimConversation(conversationId: string, userId: string):
       finalized_at = NULL,
       metadata = CASE
         WHEN metadata IS NULL THEN '{}'::jsonb
-        ELSE metadata - 'bulk_initiated' - 'bulk_replied' - 'bulk_started_at' - 'bulk_replied_at'
+        ELSE metadata - 'bulk_initiated' - 'bulk_replied' - 'bulk_started_at' - 'bulk_replied_at' - 'ai_transfer_pending' - 'ai_transfer_reason'
       END,
       updated_at = NOW()
     WHERE id = $1
@@ -444,6 +535,20 @@ export async function finalizeConversation(conversationId: string, userId: strin
       service_status = 'finalized',
       assigned_user_id = NULL,
       finalized_at = NOW(),
+      metadata = jsonb_strip_nulls(
+        CASE
+          WHEN COALESCE((metadata->>'ai_transfer_resume_after_finalize')::boolean, false) = true
+            THEN (
+              (COALESCE(metadata, '{}'::jsonb)
+                - 'ai_transfer_pending'
+                - 'ai_transfer_reason'
+                - 'ai_transfer_resume_after_finalize')
+              || jsonb_build_object('ai_agent_enabled', true)
+            )
+          WHEN metadata IS NULL THEN '{}'::jsonb
+          ELSE metadata - 'ai_transfer_pending' - 'ai_transfer_reason' - 'ai_transfer_resume_after_finalize'
+        END
+      ),
       updated_at = NOW()
     WHERE id = $1
       AND (assigned_user_id IS NULL OR assigned_user_id = $2)
@@ -452,6 +557,64 @@ export async function finalizeConversation(conversationId: string, userId: strin
   );
 
   return (result.rowCount || 0) > 0;
+}
+
+export async function finalizeAiConversation(conversationId: string): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      service_status = 'finalized',
+      assigned_user_id = NULL,
+      finalized_at = NOW(),
+      updated_at = NOW()
+    WHERE id = $1
+      AND assigned_user_id IS NULL
+      AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
+    `,
+    [conversationId],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function finalizeInactiveAiConversations(hoursWithoutReply = 24): Promise<number> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    WITH stale AS (
+      SELECT c.id
+      FROM conversations c
+      JOIN LATERAL (
+        SELECT
+          m.from_me,
+          COALESCE(m.sent_at, m.created_at) AS last_message_at
+        FROM messages m
+        WHERE m.conversation_id = c.id
+          AND m.message_type <> 'protocolMessage'
+        ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.created_at DESC
+        LIMIT 1
+      ) lm ON true
+      WHERE c.service_status = 'in_progress'
+        AND c.assigned_user_id IS NULL
+        AND COALESCE((c.metadata->>'ai_agent_enabled')::boolean, false) = true
+        AND lm.from_me = true
+        AND lm.last_message_at <= NOW() - ($1::int * INTERVAL '1 hour')
+    )
+    UPDATE conversations c
+    SET
+      service_status = 'finalized',
+      assigned_user_id = NULL,
+      finalized_at = NOW(),
+      updated_at = NOW()
+    FROM stale
+    WHERE c.id = stale.id
+    `,
+    [Math.max(1, Number(hoursWithoutReply || 24))],
+  );
+
+  return Number(result.rowCount || 0);
 }
 
 export async function getConversationAccess(conversationId: string): Promise<{
@@ -489,7 +652,7 @@ export async function transferConversationToUser(conversationId: string, targetU
       finalized_at = NULL,
       metadata = CASE
         WHEN metadata IS NULL THEN '{}'::jsonb
-        ELSE metadata - 'bulk_initiated' - 'bulk_replied' - 'bulk_started_at' - 'bulk_replied_at'
+        ELSE metadata - 'bulk_initiated' - 'bulk_replied' - 'bulk_started_at' - 'bulk_replied_at' - 'ai_transfer_pending' - 'ai_transfer_reason'
       END,
       updated_at = NOW()
     WHERE id = $1

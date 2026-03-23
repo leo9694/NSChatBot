@@ -14,16 +14,10 @@ import {
   updatePendingAiOrder,
   upsertConversationAiMemory,
 } from "../repositories/ai.repository";
-import {
-  activateAiConversation,
-  clearConversationAiRescheduleContext,
-  finalizeAiConversation,
-  markConversationForHumanTransfer,
-  setConversationAiRescheduleContext,
-} from "../repositories/conversations.repository";
+import { clearConversationAiRescheduleContext, setConversationAiRescheduleContext } from "../repositories/conversations.repository";
 import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { listProductsForAgentDetailedContext } from "../repositories/products.repository";
-import { evaluateAiHumanTransferIntent, generateAiSalesReply } from "./openai.service";
+import { generateAiSalesReply } from "./openai.service";
 import { loadMediaBufferFromUrl } from "./media.service";
 import { sendWhatsAppMedia, sendWhatsAppText, setWhatsAppTypingPresence } from "./whatsapp.service";
 
@@ -205,7 +199,7 @@ function buildCustomerTurnContext(messages: any[]): {
     .join("\n")
     .trim();
   const combinedQuotedBody = turnMessages
-    .map((item) => (typeof item?.metadata?.quoted_body === "string" ? item.metadata.quoted_body.trim() : ""))
+    .map((item) => (typeof item?.metadata?.quoted_body === "string" - item.metadata.quoted_body.trim() : ""))
     .filter(Boolean)
     .join("\n")
     .trim();
@@ -295,9 +289,9 @@ function hasDirectScheduleSelection(body: string, quotedBody?: string | null): b
   return (hasAcceptance || hasBareTimeSelection) && (hasTimeReference || hasDateReference || hasBareTimeSelection);
 }
 
-function isScheduleRescheduleRequest(body: string, quotedBody?: string | null): boolean {
-  const text = normalizeText([body, quotedBody].filter(Boolean).join(" "));
-  const rawText = [String(body || ""), String(quotedBody || "")]
+function isScheduleRescheduleRequest(body: string, quotedBody?: string | null, previousCompanyBody?: string | null): boolean {
+  const text = normalizeText([body, quotedBody, previousCompanyBody].filter(Boolean).join(" "));
+  const rawText = [String(body || ""), String(quotedBody || ""), String(previousCompanyBody || "")]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -307,45 +301,18 @@ function isScheduleRescheduleRequest(body: string, quotedBody?: string | null): 
   }
 
   return (
-    /(reagendar|reagendamento|remarcar|mudar horario|mudar data|mudar agendamento|mudar atendimento|alterar horario|alterar data|alterar agendamento|alterar atendimento|trocar horario|trocar data|trocar agendamento|trocar atendimento|trocar o horario do meu agendamento|trocar o horario do meu atendimento|antecipar|adiar)/.test(
+    /\b(reagendar|reagendamento|remarcar|mudar horario|mudar data|mudar agendamento|alterar horario|alterar data|alterar agendamento|trocar horario|trocar data|outro horario|outro dia|antecipar|adiar)\b/.test(
       text,
     ) ||
     rawText.includes("reagendar") ||
     rawText.includes("reagendamento") ||
     rawText.includes("remarcar") ||
-    rawText.includes("mudar hor?rio") ||
+    rawText.includes("mudar hor�rio") ||
     rawText.includes("mudar meu agendamento") ||
     rawText.includes("mudar o agendamento") ||
-    rawText.includes("mudar o atendimento") ||
-    rawText.includes("trocar o hor?rio do meu agendamento") ||
-    rawText.includes("trocar o hor?rio do meu atendimento") ||
     rawText.includes("alterar o agendamento") ||
-    rawText.includes("alterar o atendimento") ||
-    rawText.includes("trocar o agendamento") ||
-    rawText.includes("trocar o atendimento") ||
-    rawText.includes("trocar hor?rio")
-  );
-}
-
-export function __isScheduleRescheduleRequestForTests(body: string, quotedBody?: string | null): boolean {
-  return isScheduleRescheduleRequest(body, quotedBody);
-}
-
-export function __shouldUseConfirmedScheduleContextForTests(input: {
-  openScheduleId?: string | null;
-  confirmedScheduleId?: string | null;
-  aiRescheduleActive?: boolean;
-  customerRescheduleRequest?: boolean;
-  rescheduleTargetScheduleId?: string | null;
-}): boolean {
-  const useRescheduleTargetConfirmedSchedule =
-    Boolean(input.aiRescheduleActive) &&
-    String(input.rescheduleTargetScheduleId || "").trim() &&
-    String(input.confirmedScheduleId || "").trim() === String(input.rescheduleTargetScheduleId || "").trim();
-
-  return (
-    useRescheduleTargetConfirmedSchedule ||
-    (!String(input.openScheduleId || "").trim() && (Boolean(input.aiRescheduleActive) || Boolean(input.customerRescheduleRequest)))
+    rawText.includes("trocar hor�rio") ||
+    rawText.includes("outro hor�rio")
   );
 }
 
@@ -386,7 +353,7 @@ function buildOrderConfirmationPrompt(params: {
 }): string {
   const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirma��o final."];
   const itemLines = Array.isArray(params.items)
-    ? params.items
+    - params.items
         .map((item) => {
           const name = String(item?.name || "").trim();
           const quantity = Number(item?.quantity || 0);
@@ -424,18 +391,18 @@ function buildScheduleConfirmationPrompt(params: {
   scheduledTime?: string | null;
   durationMinutes?: number | null;
 }): string {
-  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirmação final."];
+  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirma��o final."];
   if (String(params.serviceName || "").trim()) {
-    lines.push("", `Serviço: ${String(params.serviceName || "").trim()}`);
+    lines.push("", `Servi�o: ${String(params.serviceName || "").trim()}`);
   }
   if (String(params.scheduledDate || "").trim() || String(params.scheduledTime || "").trim()) {
-    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" às ");
-    lines.push(`Data e horário: ${when}`);
+    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" �s ");
+    lines.push(`Data e hor�rio: ${when}`);
   }
   if (Number.isFinite(Number(params.durationMinutes))) {
-    lines.push(`Duração média: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
+    lines.push(`Dura��o m�dia: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
   }
-  lines.push("", "Se estiver tudo certo, me responda com uma confirmação para eu gerar o agendamento pendente.");
+  lines.push("", "Se estiver tudo certo, me responda com uma confirma��o para eu gerar o agendamento pendente.");
   return lines.join("\n");
 }
 
@@ -471,7 +438,7 @@ function isShortContextReply(body: string): boolean {
 function findLastCompanyMessageBeforeTurn(messages: any[], turnMessages: any[]): any | null {
   const firstTurnMessageId = turnMessages[0]?.id || null;
   const searchPool = firstTurnMessageId
-    ? messages.slice(0, Math.max(0, messages.findIndex((item) => item?.id === firstTurnMessageId)))
+    - messages.slice(0, Math.max(0, messages.findIndex((item) => item?.id === firstTurnMessageId)))
     : messages;
 
   for (let index = searchPool.length - 1; index >= 0; index -= 1) {
@@ -629,9 +596,9 @@ function buildDeliveryAddressForm() {
     "",
     "Cidade:",
     "Rua:",
-    "Número: (se não tiver, informe: sem número)",
+    "N�mero: (se n�o tiver, informe: sem n�mero)",
     "Bairro:",
-    "Ponto de referência:",
+    "Ponto de refer�ncia:",
   ].join("\n");
 }
 
@@ -727,11 +694,11 @@ function enrichDeliveryAddressWithCustomerText(
   }
 
   const orderedLines = [
-    current.city ? `Cidade: ${current.city}` : "",
-    current.street ? `Rua: ${current.street}` : "",
-    current.number ? `N�mero: ${current.number}` : "",
-    current.neighborhood ? `Bairro: ${current.neighborhood}` : "",
-    current.reference ? `Ponto de refer�ncia: ${current.reference}` : "",
+    current.city - `Cidade: ${current.city}` : "",
+    current.street - `Rua: ${current.street}` : "",
+    current.number - `N�mero: ${current.number}` : "",
+    current.neighborhood - `Bairro: ${current.neighborhood}` : "",
+    current.reference - `Ponto de refer�ncia: ${current.reference}` : "",
   ].filter(Boolean);
 
   if (!orderedLines.length) {
@@ -749,20 +716,20 @@ function buildMissingReferenceReply(
   const noNumber = textIndicatesNoNumber(customerText) || normalizeText(String(parsed.number || "")).includes("sem numero");
   const city = parsed.city || "";
   const street = parsed.street || "";
-  const number = noNumber ? "sem n�mero" : parsed.number || "";
+  const number = noNumber - "sem n�mero" : parsed.number || "";
   const neighborhood = parsed.neighborhood || "";
 
   return [
-    "Falta só o ponto de referência para eu gerar o pedido.",
+    "Falta s� o ponto de refer�ncia para eu gerar o pedido.",
     "",
     "Confirma assim:",
-    city ? `Cidade: ${city}` : "Cidade:",
-    street ? `Rua: ${street}` : "Rua:",
-    number ? `Número: ${number}` : "Número:",
-    neighborhood ? `Bairro: ${neighborhood}` : "Bairro:",
-    "Ponto de referência:",
+    city - `Cidade: ${city}` : "Cidade:",
+    street - `Rua: ${street}` : "Rua:",
+    number - `N�mero: ${number}` : "N�mero:",
+    neighborhood - `Bairro: ${neighborhood}` : "Bairro:",
+    "Ponto de refer�ncia:",
     "",
-    "Assim que você me enviar o ponto de referência, eu gero o pedido e deixo pendente de confirmação interna.",
+    "Assim que voc� me enviar o ponto de refer�ncia, eu gero o pedido e deixo pendente de confirma��o interna.",
   ].join("\n");
 }
 
@@ -855,7 +822,7 @@ function getCustomerFirstName(displayName?: string | null): string | null {
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  return parts.length ? parts[0] : null;
+  return parts.length - parts[0] : null;
 }
 
 function buildGreetingReply(
@@ -865,15 +832,15 @@ function buildGreetingReply(
   const firstName = getCustomerFirstName(customerDisplayName);
   if (mood === "formal") {
     return firstName
-      ? `Bom dia, ${firstName}. Como posso ajudar?`
+      - `Bom dia, ${firstName}. Como posso ajudar?`
       : "Bom dia. Como posso ajudar?";
   }
   if (mood === "amigavel") {
     return firstName
-      ? `Bom dia, ${firstName}. Como posso te ajudar? `
+      - `Bom dia, ${firstName}. Como posso te ajudar? `
       : "Bom dia. Como posso te ajudar? ";
   }
-  return firstName ? `Bom dia, ${firstName}. Como posso ajudar?` : "Bom dia. Como posso ajudar?";
+  return firstName - `Bom dia, ${firstName}. Como posso ajudar?` : "Bom dia. Como posso ajudar?";
 }
 
 function isDiscountQuestion(body: string): boolean {
@@ -894,13 +861,13 @@ function detectUnrealisticSalesRequest(input: {
 }) {
   const text = normalizeText(input.body);
   const requestedQuantityMatch = text.match(/\b(\d{4,})\b/);
-  const requestedQuantity = requestedQuantityMatch ? Number(requestedQuantityMatch[1]) : null;
+  const requestedQuantity = requestedQuantityMatch - Number(requestedQuantityMatch[1]) : null;
   const asksFreeShipping = text.includes("frete gratis") || text.includes("frete gr�tis");
   const asksUnsupportedDestination = text.includes("japao") || text.includes("jap�o") || text.includes("lua");
   const maxStock = input.catalog.reduce((highest, item) => {
     if (item.type === "service") return highest;
     const stock = Number(item.stock || 0);
-    return stock > highest ? stock : highest;
+    return stock > highest - stock : highest;
   }, 0);
 
   if (!requestedQuantity && !asksFreeShipping && !asksUnsupportedDestination) {
@@ -959,7 +926,7 @@ function buildClosingReply(mood: "amigavel" | "informal" | "formal") {
     return "Tudo certo. Fico por aqui ";
   }
   if (mood === "formal") {
-    return "Tudo certo. Fico à disposição.";
+    return "Tudo certo. Fico � disposi��o.";
   }
   return "Tudo certo. Fico por aqui.";
 }
@@ -994,12 +961,12 @@ function buildScheduleFallbackReply(input: {
 }) {
   if (input.reopenedConfirmedSchedule) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+      return "Perfeito. Ajustei seu agendamento confirmado com o novo hor�rio e ele voltou para pendente de confirma��o interna. Assim que for confirmado de novo, eu te aviso por aqui ";
     }
     if (input.mood === "formal") {
-      return "Perfeito. O agendamento confirmado foi ajustado com o novo horário e voltou para pendente de confirmação interna. Assim que houver a nova confirmação, informarei por aqui.";
+      return "Perfeito. O agendamento confirmado foi ajustado com o novo hor�rio e voltou para pendente de confirma��o interna. Assim que houver a nova confirma��o, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu agendamento confirmado com o novo hor�rio e ele voltou para pendente de confirma��o interna. Assim que for confirmado de novo, eu te aviso por aqui.";
   }
 
   if (input.updatedPendingSchedule) {
@@ -1030,16 +997,16 @@ function buildScheduleCancellationFallbackReply(input: {
   const serviceLabel = String(input.serviceName || "seu agendamento").trim();
   const whenLabel =
     input.scheduledDate && input.scheduledTime
-      ? ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} �s ${String(input.scheduledTime || "").trim()}`
+      - ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} �s ${String(input.scheduledTime || "").trim()}`
       : "";
 
   if (input.mood === "amigavel") {
-    return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
+    return `Prontinho � cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tamb�m posso te ajudar a remarcar `;
   }
   if (input.mood === "formal") {
-    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo horário.`;
+    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo hor�rio.`;
   }
-  return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
+  return `Prontinho � cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tamb�m posso te ajudar a remarcar.`;
 }
 
 function wasAwaitingScheduleConfirmation(messages: any[]): boolean {
@@ -1180,10 +1147,10 @@ function resolveRelativeScheduleDate(rawValue: string | null | undefined, source
   }
 
   const todayIso = getCurrentCuiabaDateIso(baseDate);
-  if (/\bdepois de amanha\b/.test(normalized) || rawText.includes("depois de amanhã")) {
+  if (/\bdepois de amanha\b/.test(normalized) || rawText.includes("depois de amanh?")) {
     return addDaysToIsoDate(todayIso, 2);
   }
-  if (/\bamanha\b/.test(normalized) || rawText.includes("amanhã")) {
+  if (/\bamanha\b/.test(normalized) || rawText.includes("amanh?")) {
     return addDaysToIsoDate(todayIso, 1);
   }
   if (/\bhoje\b/.test(normalized)) {
@@ -1229,23 +1196,23 @@ function buildScheduleSummary(input: {
   durationMinutes?: number | null;
 }) {
   const durationPart = Number.isFinite(input.durationMinutes)
-    ? ` | dura��o m�dia: ${Math.round(Number(input.durationMinutes))} min`
+    - ` | dura��o m�dia: ${Math.round(Number(input.durationMinutes))} min`
     : "";
-  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} às ${input.scheduledTime}${durationPart}`;
+  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} �s ${input.scheduledTime}${durationPart}`;
 }
 
 function buildScheduleConflictReply(input: {
   mood: "amigavel" | "informal" | "formal";
   conflict: { scheduled_date: string; scheduled_time: string; service_name?: string | null };
 }) {
-  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} às ${String(input.conflict.scheduled_time || "").trim()}`;
+  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} �s ${String(input.conflict.scheduled_time || "").trim()}`;
   if (input.mood === "amigavel") {
-    return `Nesse horário eu já tenho um agendamento registrado (${whenLabel}). Me passa outro horário que eu sigo com você.`;
+    return `Nesse hor�rio eu j� tenho um agendamento registrado (${whenLabel}). Me passa outro hor�rio que eu sigo com voc� `;
   }
   if (input.mood === "formal") {
-    return `Já existe um agendamento registrado para ${whenLabel}. Por favor, informe outro horário para que eu possa seguir com o agendamento.`;
+    return `J� existe um agendamento registrado para ${whenLabel}. Por favor, informe outro hor�rio para que eu possa seguir com o agendamento.`;
   }
-  return `Já existe um agendamento registrado para ${whenLabel}. Me passa outro horário que eu sigo com você.`;
+  return `J� existe um agendamento registrado para ${whenLabel}. Me passa outro hor�rio que eu sigo com voc�.`;
 }
 
 function findSchedulableServiceMatch(
@@ -1335,7 +1302,7 @@ function findSchedulableServiceInConversationText(
     }
   }
 
-  return bestScore > 0 ? bestMatch : null;
+  return bestScore > 0 - bestMatch : null;
 }
 
 function buildMissingImageReply(input: {
@@ -1343,7 +1310,7 @@ function buildMissingImageReply(input: {
   requestedName?: string | null;
 }) {
   const itemName = String(input.requestedName || "").trim();
-  const itemLabel = itemName ? ` de ${itemName}` : "";
+  const itemLabel = itemName - ` de ${itemName}` : "";
 
   if (input.mood === "amigavel") {
     return `Ainda n�o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto `;
@@ -1384,193 +1351,32 @@ function isPlanLikeInquiry(body: string, quotedBody?: string | null, previousCom
 
 function buildMissingPlanReply(mood: "amigavel" | "informal" | "formal"): string {
   if (mood === "formal") {
-    return "No momento, n\u00e3o h\u00e1 planos cadastrados no sistema desta empresa. Posso seguir com os produtos e servi\u00e7os dispon\u00edveis, se desejar.";
+    return "No momento, n�o h� planos cadastrados no sistema desta empresa. Posso seguir com os produtos e servi�os dispon�veis, se desejar.";
   }
   if (mood === "amigavel") {
-    return "No momento eu n\u00e3o tenho planos cadastrados no sistema desta empresa. Se quiser, eu sigo com os produtos e servi\u00e7os dispon\u00edveis.";
+    return "No momento eu n�o tenho planos cadastrados no sistema desta empresa. Se quiser, eu sigo com os produtos e servi�os dispon�veis ";
   }
-  return "No momento eu n\u00e3o tenho planos cadastrados no sistema desta empresa. Se quiser, eu sigo com os produtos e servi\u00e7os dispon\u00edveis.";
+  return "No momento eu n�o tenho planos cadastrados no sistema desta empresa. Se quiser, eu sigo com os produtos e servi�os dispon�veis.";
 }
 
 function buildOffTopicReply(mood: "amigavel" | "informal" | "formal") {
   if (mood === "amigavel") {
-    return "N\u00e3o consigo responder isso por aqui. Se quiser, posso seguir com produtos, pedidos ou suporte de venda.";
+    return "N�o consigo responder isso por aqui. Se quiser, posso seguir com produtos, pedidos ou suporte de venda ";
   }
   if (mood === "formal") {
-    return "N\u00e3o consigo responder isso por aqui. Se desejar, posso seguir com atendimento sobre produtos, pedidos ou suporte comercial.";
+    return "N�o consigo responder isso por aqui. Se desejar, posso seguir com atendimento sobre produtos, pedidos ou suporte comercial.";
   }
-  return "N\u00e3o consigo responder isso por aqui. Se quiser, posso seguir com produtos, pedidos ou suporte de venda.";
+  return "N�o consigo responder isso por aqui. Se quiser, posso seguir com produtos, pedidos ou suporte de venda.";
 }
 
 function buildUnknownSalesReply(mood: "amigavel" | "informal" | "formal") {
   if (mood === "amigavel") {
-    return "N\u00e3o tenho essa informa\u00e7\u00e3o no sistema no momento. Se voc\u00ea preferir, posso encaminhar para um agente humano.";
+    return "N�o tenho essa informa��o no sistema no momento. Se voc� preferir, posso encaminhar para um agente humano ";
   }
   if (mood === "formal") {
-    return "N\u00e3o tenho essa informa\u00e7\u00e3o dispon\u00edvel no sistema no momento. Se desejar, posso direcionar o atendimento para um agente humano.";
+    return "N�o tenho essa informa��o dispon�vel no sistema no momento. Se desejar, posso direcionar o atendimento para um agente humano.";
   }
-  return "N\u00e3o tenho essa informa\u00e7\u00e3o no sistema no momento. Se preferir, posso encaminhar para um agente humano.";
-}
-
-function buildUnknownNoTransferReply(mood: "amigavel" | "informal" | "formal") {
-  if (mood === "amigavel") {
-    return "N\u00e3o tenho essa informa\u00e7\u00e3o no sistema no momento.";
-  }
-  if (mood === "formal") {
-    return "N\u00e3o tenho essa informa\u00e7\u00e3o dispon\u00edvel no sistema no momento.";
-  }
-  return "N\u00e3o tenho essa informa\u00e7\u00e3o no sistema no momento.";
-}
-
-function isExplicitHumanTransferRequest(body: string, quotedBody?: string | null): boolean {
-  const text = normalizeText([body, quotedBody || ""].filter(Boolean).join(" "));
-  if (!text) return false;
-  return /\b(gostaria de falar com outro atendente|quero falar com outro atendente|falar com outro atendente|outro atendente|gostaria de falar com outra pessoa|falar com outra pessoa|quero falar com outra pessoa|quero falar com alguem|quero falar com algu?m|quero falar com humano|falar com humano|atendente humano|agente humano|suporte humano|falar com atendente|falar com vendedor|falar com gerente|falar com financeiro|passa para o financeiro|me transfere|pode me transferir|pode me transferir pra outro atendente|pode me transferir para outro atendente|transfere meu atendimento)\b/.test(text);
-}
-
-function isBusinessRelevantTransferTopic(input: {
-  body: string;
-  quotedBody?: string | null;
-  previousCompanyBody?: string | null;
-  catalog: Array<{ name?: string | null; description?: string | null }>;
-}): boolean {
-  const combined = normalizeText([input.body, input.quotedBody || "", input.previousCompanyBody || ""].filter(Boolean).join(" "));
-  if (!combined) return false;
-
-  const businessKeywords =
-    /\b(produto|produtos|servico|servicos|pedido|pedidos|agendamento|agendamentos|atendimento|atendimentos|pagamento|pagamentos|entrega|retirada|frete|garantia|suporte|financeiro|orcamento|orçamento|preco|preço|valor|valores|desconto|estoque|disponibilidade|prazo|cnpj|endereco|endereço|troca|cancelamento|cancelar)\b/.test(
-      combined,
-    );
-
-  const mentionsCatalogItem = input.catalog.some((item) => {
-    const name = normalizeText(String(item?.name || ""));
-    const description = normalizeText(String(item?.description || ""));
-    if (!name && !description) return false;
-    const parts = getSignificantNameParts([name, description].filter(Boolean).join(" "));
-    return (name && combined.includes(name)) || parts.some((part) => combined.includes(part));
-  });
-
-  return businessKeywords || mentionsCatalogItem;
-}
-
-function shouldTriggerHumanTransfer(input: {
-  evaluatedTransfer: boolean;
-  aiRequestedTransfer: boolean;
-  body: string;
-  quotedBody?: string | null;
-  previousCompanyBody?: string | null;
-  catalog: Array<{ name?: string | null; description?: string | null }>;
-  scheduleFlowRequested?: boolean;
-  customerScheduleInquiry?: boolean;
-  customerScheduleCancellationRequest?: boolean;
-  customerRescheduleRequest?: boolean;
-  customerExplicitScheduleIntent?: boolean;
-  customerDirectScheduleSelection?: boolean;
-  awaitingScheduleConfirmation?: boolean;
-}): boolean {
-  const explicitHumanRequest = isExplicitHumanTransferRequest(input.body, input.quotedBody);
-  const scheduleFlowContext =
-    Boolean(input.scheduleFlowRequested) ||
-    Boolean(input.customerScheduleInquiry) ||
-    Boolean(input.customerScheduleCancellationRequest) ||
-    Boolean(input.customerRescheduleRequest) ||
-    Boolean(input.customerExplicitScheduleIntent) ||
-    Boolean(input.customerDirectScheduleSelection) ||
-    Boolean(input.awaitingScheduleConfirmation);
-
-  if (explicitHumanRequest) {
-    return true;
-  }
-
-  if (scheduleFlowContext) {
-    return false;
-  }
-
-  if (input.evaluatedTransfer) {
-    return true;
-  }
-
-  if (!input.aiRequestedTransfer) {
-    return false;
-  }
-
-  return isBusinessRelevantTransferTopic({
-    body: input.body,
-    quotedBody: input.quotedBody,
-    previousCompanyBody: input.previousCompanyBody,
-    catalog: input.catalog,
-  });
-}
-
-export function __shouldTriggerHumanTransferForTests(input: {
-  evaluatedTransfer: boolean;
-  aiRequestedTransfer: boolean;
-  body: string;
-  quotedBody?: string | null;
-  previousCompanyBody?: string | null;
-  catalog?: Array<{ name?: string | null; description?: string | null }>;
-  scheduleFlowRequested?: boolean;
-  customerScheduleInquiry?: boolean;
-  customerScheduleCancellationRequest?: boolean;
-  customerRescheduleRequest?: boolean;
-  customerExplicitScheduleIntent?: boolean;
-  customerDirectScheduleSelection?: boolean;
-  awaitingScheduleConfirmation?: boolean;
-}): boolean {
-  return shouldTriggerHumanTransfer({
-    evaluatedTransfer: input.evaluatedTransfer,
-    aiRequestedTransfer: input.aiRequestedTransfer,
-    body: input.body,
-    quotedBody: input.quotedBody,
-    previousCompanyBody: input.previousCompanyBody,
-    catalog: input.catalog || [],
-    scheduleFlowRequested: input.scheduleFlowRequested,
-    customerScheduleInquiry: input.customerScheduleInquiry,
-    customerScheduleCancellationRequest: input.customerScheduleCancellationRequest,
-    customerRescheduleRequest: input.customerRescheduleRequest,
-    customerExplicitScheduleIntent: input.customerExplicitScheduleIntent,
-    customerDirectScheduleSelection: input.customerDirectScheduleSelection,
-    awaitingScheduleConfirmation: input.awaitingScheduleConfirmation,
-  });
-}
-
-export function __shouldKeepScheduleFlowWithAiForTests(input: {
-  scheduleFlowRequested?: boolean;
-  hasConflict?: boolean;
-  hasCompleteScheduleProposal?: boolean;
-  scheduleWindowOk?: boolean;
-  scheduleOutsideHoursFromRepository?: boolean;
-  scheduleTooSoonOrPastFromRepository?: boolean;
-}): boolean {
-  return (
-    Boolean(input.scheduleFlowRequested) &&
-    (Boolean(input.hasConflict) ||
-      (Boolean(input.hasCompleteScheduleProposal) &&
-        (!Boolean(input.scheduleWindowOk) ||
-          Boolean(input.scheduleOutsideHoursFromRepository) ||
-          Boolean(input.scheduleTooSoonOrPastFromRepository))))
-  );
-}
-
-export function __shouldReuseOpenPendingScheduleForTests(input: {
-  openScheduleId?: string | null;
-  openScheduleServiceName?: string | null;
-  mergedScheduleServiceName?: string | null;
-  awaitingScheduleConfirmation?: boolean;
-  aiRescheduleActive?: boolean;
-  customerRescheduleRequest?: boolean;
-}): boolean {
-  const normalizedMergedScheduleServiceName = normalizeText(String(input.mergedScheduleServiceName || "").trim());
-  const normalizedOpenPendingScheduleServiceName = normalizeText(String(input.openScheduleServiceName || "").trim());
-  return (
-    Boolean(input.openScheduleId) &&
-    (!normalizedMergedScheduleServiceName ||
-      !normalizedOpenPendingScheduleServiceName ||
-      normalizedMergedScheduleServiceName === normalizedOpenPendingScheduleServiceName ||
-      Boolean(input.awaitingScheduleConfirmation) ||
-      Boolean(input.aiRescheduleActive) ||
-      Boolean(input.customerRescheduleRequest))
-  );
+  return "N�o tenho essa informa��o no sistema no momento. Se preferir, posso encaminhar para um agente humano.";
 }
 
 function isCustomerScheduleInquiry(body: string, quotedBody?: string | null, previousCompanyBody?: string | null): boolean {
@@ -1606,7 +1412,7 @@ function isCustomerScheduleInquiry(body: string, quotedBody?: string | null, pre
     return false;
   }
 
-  if (isScheduleRescheduleRequest(body, quotedBody)) {
+  if (isScheduleRescheduleRequest(body, quotedBody, previousCompanyBody)) {
     return false;
   }
 
@@ -1646,22 +1452,22 @@ function buildCustomerSchedulesReply(input: {
   if (!baseSchedules.length) {
     if (onlyPending) {
       return input.mood === "formal"
-        ? "No momento, n�o encontrei agendamentos pendentes em seu nome por aqui."
+        - "No momento, n�o encontrei agendamentos pendentes em seu nome por aqui."
         : "No momento eu n�o encontrei agendamentos pendentes seus por aqui.";
     }
     return input.mood === "formal"
-      ? "No momento, n�o encontrei agendamentos ativos em seu nome por aqui."
+      - "No momento, n�o encontrei agendamentos ativos em seu nome por aqui."
       : "No momento eu n�o encontrei agendamentos seus em aberto por aqui.";
   }
 
-  const targetSchedules = wantsNext ? baseSchedules.slice(0, 1) : baseSchedules.slice(0, 5);
+  const targetSchedules = wantsNext - baseSchedules.slice(0, 1) : baseSchedules.slice(0, 5);
   const lines = targetSchedules.map((item) => {
-    const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    return `- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`;
+    const statusLabel = String(item.status || "").trim() === "confirmed" - "Confirmado" : "Pendente";
+    return `- ${String(item.service_name || "Atendimento").trim()} � ${formatShortBrDate(item.scheduled_date)} �s ${String(item.scheduled_time || "").trim()} (${statusLabel})`;
   });
 
   if (wantsNext) {
-    return ["Seu próximo atendimento é:", ...lines].join("\n");
+    return [`Seu pr�ximo atendimento �:`, ...lines].join("\n");
   }
 
   return [`Encontrei estes atendimentos seus:`, ...lines].join("\n");
@@ -1696,8 +1502,8 @@ function findRescheduleTargetSchedule(
     const normalizedName = normalizeName(String(item.service_name || ""));
     const nameParts = getSignificantNameParts(String(item.service_name || ""));
     const matchesName = combined.includes(normalizedName) || nameParts.some((part) => combined.includes(part));
-    const matchesDate = directDate ? String(item.scheduled_date || "").trim() === directDate : false;
-    const matchesTime = directTimes.length ? directTimes.includes(String(item.scheduled_time || "").trim()) : false;
+    const matchesDate = directDate - String(item.scheduled_date || "").trim() === directDate : false;
+    const matchesTime = directTimes.length - directTimes.includes(String(item.scheduled_time || "").trim()) : false;
     return matchesName || matchesDate || matchesTime;
   });
 
@@ -1716,10 +1522,10 @@ function buildScheduleDisambiguationReply(input: {
     status: string;
   }>;
 }) {
-  const lines = ["Encontrei mais de um atendimento seu. Me diga qual você quer remarcar:"];
+  const lines = ["Encontrei mais de um atendimento seu. Me diga qual voc� quer remarcar:"];
   for (const item of input.schedules.slice(0, 5)) {
-    const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
+    const statusLabel = String(item.status || "").trim() === "confirmed" - "Confirmado" : "Pendente";
+    lines.push(`- ${String(item.service_name || "Atendimento").trim()} � ${formatShortBrDate(item.scheduled_date)} �s ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
   }
   return lines.join("\n");
 }
@@ -1732,10 +1538,10 @@ function buildScheduleCancellationDisambiguationReply(input: {
     status: string;
   }>;
 }) {
-  const lines = ["Encontrei mais de um atendimento seu. Me diga qual você quer cancelar:"];
+  const lines = ["Encontrei mais de um atendimento seu. Me diga qual voc� quer cancelar:"];
   for (const item of input.schedules.slice(0, 5)) {
-    const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
+    const statusLabel = String(item.status || "").trim() === "confirmed" - "Confirmado" : "Pendente";
+    lines.push(`- ${String(item.service_name || "Atendimento").trim()} � ${formatShortBrDate(item.scheduled_date)} �s ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
   }
   return lines.join("\n");
 }
@@ -1777,7 +1583,7 @@ function getDiscountAwareProducts(
     return matchedDiscountedProducts;
   }
 
-  return asksForAllDiscounts ? discountedProducts : [];
+  return asksForAllDiscounts - discountedProducts : [];
 }
 
 function buildQuotedContextFallbackReply(input: {
@@ -1843,7 +1649,7 @@ function buildDeterministicCatalogReply(input: {
   if (isPriceQuestion(input.body, input.quotedBody) || isShortQuotedFollowup(input.body)) {
     if (matches.length === 1) {
       const item = matches[0];
-      return `${item.name} � R$ ${Number(item.price || 0).toFixed(2).replace(".", ",")}${item.type === "service" ? "" : " por unidade"}.`;
+      return `${item.name} � R$ ${Number(item.price || 0).toFixed(2).replace(".", ",")}${item.type === "service" - "" : " por unidade"}.`;
     }
 
     return matches
@@ -1882,10 +1688,10 @@ function parseStoreInfo(settings: any) {
   }
 
   const paymentMethods = Array.isArray(settings?.store_payment_methods)
-    ? settings.store_payment_methods.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+    - settings.store_payment_methods.map((item: unknown) => String(item || "").trim()).filter(Boolean)
     : [];
   const deliveryFees = Array.isArray(settings?.store_delivery_fees)
-    ? settings.store_delivery_fees
+    - settings.store_delivery_fees
         .map((item: any) => ({
           label: String(item?.label || "").trim(),
           price: String(item?.price || "").trim(),
@@ -1906,36 +1712,36 @@ function parseStoreInfo(settings: any) {
 
 function parseScheduleSettings(settings: any) {
   const workingDays = Array.isArray(settings?.schedule_working_days)
-    ? settings.schedule_working_days
+    - settings.schedule_working_days
         .map((item: any) => ({
-          dayOfWeek: Number(item?.day_of_week ?? item?.dayOfWeek),
+          dayOfWeek: Number(item?.day_of_week  item?.dayOfWeek),
           enabled: Boolean(item?.enabled),
-          startTime: String(item?.start_time ?? item?.startTime ?? "").trim(),
-          endTime: String(item?.end_time ?? item?.endTime ?? "").trim(),
+          startTime: String(item?.start_time  item?.startTime  "").trim(),
+          endTime: String(item?.end_time  item?.endTime  "").trim(),
           morningEnabled:
             item?.morning_enabled === undefined && item?.morningEnabled === undefined
-              ? undefined
-              : Boolean(item?.morning_enabled ?? item?.morningEnabled),
-          morningStart: String(item?.morning_start ?? item?.morningStart ?? "").trim(),
-          morningEnd: String(item?.morning_end ?? item?.morningEnd ?? "").trim(),
+              - undefined
+              : Boolean(item?.morning_enabled  item?.morningEnabled),
+          morningStart: String(item?.morning_start  item?.morningStart  "").trim(),
+          morningEnd: String(item?.morning_end  item?.morningEnd  "").trim(),
           afternoonEnabled:
             item?.afternoon_enabled === undefined && item?.afternoonEnabled === undefined
-              ? undefined
-              : Boolean(item?.afternoon_enabled ?? item?.afternoonEnabled),
-          afternoonStart: String(item?.afternoon_start ?? item?.afternoonStart ?? "").trim(),
-          afternoonEnd: String(item?.afternoon_end ?? item?.afternoonEnd ?? "").trim(),
+              - undefined
+              : Boolean(item?.afternoon_enabled  item?.afternoonEnabled),
+          afternoonStart: String(item?.afternoon_start  item?.afternoonStart  "").trim(),
+          afternoonEnd: String(item?.afternoon_end  item?.afternoonEnd  "").trim(),
           nightEnabled:
             item?.night_enabled === undefined && item?.nightEnabled === undefined
-              ? undefined
-              : Boolean(item?.night_enabled ?? item?.nightEnabled),
-          nightStart: String(item?.night_start ?? item?.nightStart ?? "").trim(),
-          nightEnd: String(item?.night_end ?? item?.nightEnd ?? "").trim(),
+              - undefined
+              : Boolean(item?.night_enabled  item?.nightEnabled),
+          nightStart: String(item?.night_start  item?.nightStart  "").trim(),
+          nightEnd: String(item?.night_end  item?.nightEnd  "").trim(),
           lunchBreakEnabled:
             item?.lunch_break_enabled === undefined && item?.lunchBreakEnabled === undefined
-              ? undefined
-              : Boolean(item?.lunch_break_enabled ?? item?.lunchBreakEnabled),
-          lunchStart: String(item?.lunch_start ?? item?.lunchStart ?? "").trim(),
-          lunchEnd: String(item?.lunch_end ?? item?.lunchEnd ?? "").trim(),
+              - undefined
+              : Boolean(item?.lunch_break_enabled  item?.lunchBreakEnabled),
+          lunchStart: String(item?.lunch_start  item?.lunchStart  "").trim(),
+          lunchEnd: String(item?.lunch_end  item?.lunchEnd  "").trim(),
         }))
         .filter((item: { dayOfWeek: number; enabled: boolean; startTime: string; endTime: string }) =>
           Number.isInteger(item.dayOfWeek) && item.dayOfWeek >= 0 && item.dayOfWeek <= 6,
@@ -1945,17 +1751,17 @@ function parseScheduleSettings(settings: any) {
   return {
     workingDays,
     intervalMinutes: Number.isFinite(Number(settings?.schedule_interval_minutes))
-      ? Math.max(0, Math.round(Number(settings.schedule_interval_minutes)))
+      - Math.max(0, Math.round(Number(settings.schedule_interval_minutes)))
       : 0,
     reminderEnabled: Boolean(settings?.schedule_reminder_enabled),
     reminderRules: Array.isArray(settings?.schedule_reminder_rules)
-      ? settings.schedule_reminder_rules
+      - settings.schedule_reminder_rules
           .map((item: any) => {
             const unit = String(item?.unit || "minutes").trim().toLowerCase();
             const value = Number(item?.value);
             if (!Number.isFinite(value) || value <= 0) return null;
             return {
-              unit: unit === "days" || unit === "hours" || unit === "minutes" ? unit : "minutes",
+              unit: unit === "days" || unit === "hours" || unit === "minutes" - unit : "minutes",
               value: Math.max(1, Math.round(value)),
             };
           })
@@ -1963,7 +1769,7 @@ function parseScheduleSettings(settings: any) {
       : [],
     reminderMinutes:
       Boolean(settings?.schedule_reminder_enabled) && Number.isFinite(Number(settings?.schedule_reminder_minutes))
-        ? Math.max(1, Math.round(Number(settings.schedule_reminder_minutes)))
+        - Math.max(1, Math.round(Number(settings.schedule_reminder_minutes)))
         : null,
   };
 }
@@ -1980,13 +1786,13 @@ function timeToMinutes(timeText: string | null | undefined): number | null {
 function buildSchedulePeriods(dayConfig: any): Array<{ label: string; startTime: string; endTime: string }> {
   const periods = [
     dayConfig?.morningEnabled && dayConfig?.morningStart && dayConfig?.morningEnd
-      ? { label: "manh\u00E3", startTime: dayConfig.morningStart, endTime: dayConfig.morningEnd }
+      - { label: "manh�", startTime: dayConfig.morningStart, endTime: dayConfig.morningEnd }
       : null,
     dayConfig?.afternoonEnabled && dayConfig?.afternoonStart && dayConfig?.afternoonEnd
-      ? { label: "tarde", startTime: dayConfig.afternoonStart, endTime: dayConfig.afternoonEnd }
+      - { label: "tarde", startTime: dayConfig.afternoonStart, endTime: dayConfig.afternoonEnd }
       : null,
     dayConfig?.nightEnabled && dayConfig?.nightStart && dayConfig?.nightEnd
-      ? { label: "noite", startTime: dayConfig.nightStart, endTime: dayConfig.nightEnd }
+      - { label: "noite", startTime: dayConfig.nightStart, endTime: dayConfig.nightEnd }
       : null,
   ].filter(Boolean) as Array<{ label: string; startTime: string; endTime: string }>;
 
@@ -2038,7 +1844,7 @@ function validateScheduleWithinWorkingHours(input: {
   }
 
   const appointmentStart = timeToMinutes(input.scheduledTime);
-  const durationMinutes = Number.isFinite(Number(input.durationMinutes)) ? Math.max(1, Math.round(Number(input.durationMinutes))) : 60;
+  const durationMinutes = Number.isFinite(Number(input.durationMinutes)) - Math.max(1, Math.round(Number(input.durationMinutes))) : 60;
   if (appointmentStart === null) {
     return { ok: true, intervalMinutes: parsedSettings.intervalMinutes };
   }
@@ -2055,8 +1861,8 @@ function validateScheduleWithinWorkingHours(input: {
   const appointmentEnd = appointmentStart + durationMinutes;
   const periods = buildSchedulePeriods(dayConfig);
   const automaticLunchBreak = getAutomaticLunchBreak(dayConfig);
-  const lunchStartMinutes = automaticLunchBreak?.startTime ? timeToMinutes(automaticLunchBreak.startTime) : null;
-  const lunchEndMinutes = automaticLunchBreak?.endTime ? timeToMinutes(automaticLunchBreak.endTime) : null;
+  const lunchStartMinutes = automaticLunchBreak?.startTime - timeToMinutes(automaticLunchBreak.startTime) : null;
+  const lunchEndMinutes = automaticLunchBreak?.endTime - timeToMinutes(automaticLunchBreak.endTime) : null;
 
   if (
     lunchStartMinutes !== null &&
@@ -2128,51 +1934,51 @@ function buildScheduleOutsideWorkingHoursReply(input: {
   const periods = buildSchedulePeriods(input.dayConfig);
   const automaticLunchBreak = getAutomaticLunchBreak(input.dayConfig);
   const lunchText = automaticLunchBreak
-    ? ` O intervalo de almo\u00E7o \u00E9 das ${automaticLunchBreak.startTime} \u00E0s ${automaticLunchBreak.endTime}.`
+    - ` O intervalo de almo�o � das ${automaticLunchBreak.startTime} �s ${automaticLunchBreak.endTime}.`
     : "";
   const windowText = periods.length
-    ? `Nesse dia eu consigo agendar nos per\u00EDodos de ${periods.map((period) => `${period.label} ${period.startTime} \u00E0s ${period.endTime}`).join(", ")}.${lunchText}`
+    - `Nesse dia eu consigo agendar nos per�odos de ${periods.map((period) => `${period.label} ${period.startTime} �s ${period.endTime}`).join(", ")}.${lunchText}`
     : input.dayConfig?.startTime && input.dayConfig?.endTime
-      ? `Nesse dia eu consigo agendar entre ${input.dayConfig.startTime} e ${input.dayConfig.endTime}.${lunchText}`
-      : "Me passa outro dia ou hor\u00E1rio dentro da escala cadastrada.";
+      - `Nesse dia eu consigo agendar entre ${input.dayConfig.startTime} e ${input.dayConfig.endTime}.${lunchText}`
+      : "Me passa outro dia ou hor�rio dentro da escala cadastrada.";
 
   if (input.dayUnavailable) {
     if (input.mood === "amigavel") {
-      return "Nesse dia eu n\u00E3o tenho atendimento dispon\u00EDvel na agenda. Me passa outro dia ou hor\u00E1rio que eu sigo com voc\u00EA.";
+      return "Nesse dia eu n�o tenho atendimento dispon�vel na agenda. Me passa outro dia ou hor�rio que eu sigo com voc� ";
     }
     if (input.mood === "formal") {
-      return "N\u00E3o h\u00E1 atendimento dispon\u00EDvel para esse dia na agenda cadastrada. Por favor, informe outro dia ou hor\u00E1rio.";
+      return "N�o h� atendimento dispon�vel para esse dia na agenda cadastrada. Por favor, informe outro dia ou hor�rio.";
     }
-    return "Nesse dia eu n\u00E3o tenho atendimento dispon\u00EDvel na agenda. Me passa outro dia ou hor\u00E1rio que eu sigo com voc\u00EA.";
+    return "Nesse dia eu n�o tenho atendimento dispon�vel na agenda. Me passa outro dia ou hor�rio que eu sigo com voc�.";
   }
 
   if (input.timeAlreadyPassed) {
     if (input.mood === "amigavel") {
-      return "Esse hor\u00E1rio j\u00E1 passou ou est\u00E1 muito em cima. Me manda um hor\u00E1rio com pelo menos 15 minutos de anteced\u00EAncia que eu sigo com voc\u00EA.";
+      return "Esse hor�rio j� passou ou est� muito em cima. Me manda um hor�rio com pelo menos 15 minutos de anteced�ncia que eu sigo com voc� ";
     }
     if (input.mood === "formal") {
-      return "Esse hor\u00E1rio j\u00E1 passou ou n\u00E3o respeita a anteced\u00EAncia m\u00EDnima de 15 minutos. Por favor, informe outro hor\u00E1rio dispon\u00EDvel.";
+      return "Esse hor�rio j� passou ou n�o respeita a anteced�ncia m�nima de 15 minutos. Por favor, informe outro hor�rio dispon�vel.";
     }
-    return "Esse hor\u00E1rio j\u00E1 passou ou est\u00E1 muito em cima. Me manda outro com pelo menos 15 minutos de anteced\u00EAncia.";
+    return "Esse hor�rio j� passou ou est� muito em cima. Me manda outro com pelo menos 15 minutos de anteced�ncia.";
   }
 
   if (input.insideLunchBreak) {
     if (input.mood === "amigavel") {
-      return `${windowText} Me manda outro hor\u00E1rio e eu ajusto pra voc\u00EA.`;
+      return `${windowText} Me manda outro hor�rio e eu ajusto pra voc� `;
     }
     if (input.mood === "formal") {
-      return `${windowText} Por favor, informe outro hor\u00E1rio dispon\u00EDvel.`;
+      return `${windowText} Por favor, informe outro hor�rio dispon�vel.`;
     }
-    return `${windowText} Me manda outro hor\u00E1rio e eu ajusto pra voc\u00EA.`;
+    return `${windowText} Me manda outro hor�rio e eu ajusto pra voc�.`;
   }
 
   if (input.mood === "amigavel") {
-    return `${windowText} Se quiser, me manda outro hor\u00e1rio e eu sigo por aqui.`;
+    return `${windowText} Se quiser, me manda outro hor�rio e eu sigo por aqui `;
   }
   if (input.mood === "formal") {
-    return `${windowText} Por favor, informe outro hor\u00E1rio dentro da escala dispon\u00EDvel.`;
+    return `${windowText} Por favor, informe outro hor�rio dentro da escala dispon�vel.`;
   }
-  return `${windowText} Me passa outro hor\u00E1rio e eu sigo por aqui.`;
+  return `${windowText} Me passa outro hor�rio e eu sigo por aqui.`;
 }
 
 function isScheduleAvailabilityQuestion(body: string, quotedBody?: string | null): boolean {
@@ -2213,7 +2019,7 @@ function isExplicitScheduleIntentMessage(body: string, quotedBody?: string | nul
   }
 
   if (
-    isScheduleRescheduleRequest(body, quotedBody) ||
+    isScheduleRescheduleRequest(body, quotedBody, previousCompanyBody) ||
     isCustomerScheduleInquiry(body, quotedBody, previousCompanyBody) ||
     isScheduleAvailabilityQuestion(body, quotedBody) ||
     hasDirectScheduleSelection(body, quotedBody)
@@ -2252,7 +2058,7 @@ function formatPeriodWindow(periods: Array<{ label: string; startTime: string; e
   if (!periods.length) {
     return "";
   }
-  return periods.map((period) => `${period.label} ${period.startTime} \u00E0s ${period.endTime}`).join(", ");
+  return periods.map((period) => `${period.label} ${period.startTime} �s ${period.endTime}`).join(", ");
 }
 
 function detectRequestedSchedulePeriod(body: string, quotedBody?: string | null): "manha" | "tarde" | "noite" | null {
@@ -2261,9 +2067,9 @@ function detectRequestedSchedulePeriod(body: string, quotedBody?: string | null)
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-  if (text.includes("manha") || rawText.includes("manh\u00E3")) return "manha";
+
+  if (text.includes("manha") || rawText.includes("manh�")) return "manha";
   if (text.includes("tarde") || rawText.includes("tarde")) return "tarde";
-  if (text.includes("noite") || rawText.includes("noite")) return "noite";
   if (text.includes("noite") || rawText.includes("noite")) return "noite";
   return null;
 }
@@ -2328,7 +2134,7 @@ async function buildAvailableSlotsForDate(input: {
   const periods = buildSchedulePeriods(dayConfig);
   const automaticLunchBreak = getAutomaticLunchBreak(dayConfig);
   const rawSlots = dayConfig
-    ? buildScheduleCandidateSlots({
+    - buildScheduleCandidateSlots({
         dayConfig,
         durationMinutes: input.durationMinutes,
         intervalMinutes: parsedSettings.intervalMinutes,
@@ -2336,7 +2142,7 @@ async function buildAvailableSlotsForDate(input: {
     : [];
   const existingSchedules =
     input.accountId && input.scheduledDate
-      ? await listAiSchedulesForDate(input.accountId, input.scheduledDate, input.excludeScheduleId || null).catch(() => [])
+      - await listAiSchedulesForDate(input.accountId, input.scheduledDate, input.excludeScheduleId || null).catch(() => [])
       : [];
 
   const validSlots = rawSlots.filter((slot) => {
@@ -2416,30 +2222,30 @@ function inferScheduleTimeFromNaturalSelection(input: {
   }
 
   const normalizedDayConfig = input.dayConfig
-    ? parseScheduleSettings({
+    - parseScheduleSettings({
         schedule_working_days: [input.dayConfig],
-        schedule_interval_minutes: input.intervalMinutes ?? null,
+        schedule_interval_minutes: input.intervalMinutes  null,
       }).workingDays[0] || input.dayConfig
     : null;
   const periods = buildSchedulePeriods(normalizedDayConfig);
   const allSuggestedTimes = extractScheduleTimesFromText(input.previousCompanyBody);
   const fallbackTimes =
     !allSuggestedTimes.length && normalizedDayConfig
-      ? buildScheduleCandidateSlots({
+      - buildScheduleCandidateSlots({
           dayConfig: normalizedDayConfig,
-          durationMinutes: Number.isFinite(Number(input.durationMinutes)) ? Math.max(1, Math.round(Number(input.durationMinutes))) : 60,
-          intervalMinutes: Number.isFinite(Number(input.intervalMinutes)) ? Math.max(0, Math.round(Number(input.intervalMinutes))) : 0,
+          durationMinutes: Number.isFinite(Number(input.durationMinutes)) - Math.max(1, Math.round(Number(input.durationMinutes))) : 60,
+          intervalMinutes: Number.isFinite(Number(input.intervalMinutes)) - Math.max(0, Math.round(Number(input.intervalMinutes))) : 0,
         })
       : [];
-  const candidateTimes = allSuggestedTimes.length ? allSuggestedTimes : fallbackTimes;
+  const candidateTimes = allSuggestedTimes.length - allSuggestedTimes : fallbackTimes;
   if (!candidateTimes.length) {
     return null;
   }
 
   const afternoon = periods.find((period) => period.label === "tarde");
   const lunchMatch = String(input.previousCompanyBody || "").match(/(\d{2}:\d{2})\s+e\s+(\d{2}:\d{2})/);
-  const lunchEndMinutes = lunchMatch ? timeToMinutes(lunchMatch[2]) : null;
-  const afternoonStartMinutes = timeToMinutes(afternoon?.startTime || null) ?? lunchEndMinutes ?? 13 * 60;
+  const lunchEndMinutes = lunchMatch - timeToMinutes(lunchMatch[2]) : null;
+  const afternoonStartMinutes = timeToMinutes(afternoon?.startTime || null)  lunchEndMinutes  13 * 60;
 
   const asksForAfterLunch =
     text.includes("primeiro horario da tarde") ||
@@ -2479,21 +2285,6 @@ export function __inferScheduleTimeFromNaturalSelectionForTests(input: {
   intervalMinutes?: number | null;
 }) {
   return inferScheduleTimeFromNaturalSelection(input);
-}
-
-export function __resolveAgentSuggestedScheduleFromPreviousMessageForTests(input: {
-  previousCompanyBody?: string | null;
-  awaitingScheduleConfirmation?: boolean;
-  customerDirectConfirmation?: boolean;
-}) {
-  const active = Boolean(input.awaitingScheduleConfirmation) && Boolean(input.customerDirectConfirmation);
-  const previousBody = String(input.previousCompanyBody || "").trim();
-  const date = active ? resolveRelativeScheduleDate(null, previousBody) : null;
-  const times = active ? extractScheduleTimesFromText(previousBody) : [];
-  return {
-    scheduledDate: date,
-    scheduledTime: times.length ? times[times.length - 1] : null,
-  };
 }
 
 function hasScheduleConflictAtTime(
@@ -2553,17 +2344,17 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
     findSchedulableServiceInConversationText(input.catalog, referenceText);
   if (!service) {
     if (!schedulableServices.length) {
-      return "No momento eu n\u00e3o tenho servi\u00e7os com agendamento configurados por aqui. Se quiser, posso te falar dos produtos e servi\u00e7os dispon\u00edveis.";
+      return "No momento eu n�o tenho servi�os com agendamento configurados por aqui. Se quiser, posso te falar dos produtos e servi�os dispon�veis.";
     }
 
     const uniqueServiceNames = Array.from(
       new Set(schedulableServices.map((item) => String(item.name || "").trim()).filter(Boolean)),
     );
     return [
-      "Hoje eu consigo agendar estes servi\u00e7os:",
+      "Hoje eu consigo agendar estes servi�os:",
       ...uniqueServiceNames.map((name) => `- ${name}`),
       "",
-      "Me fala qual deles voc\u00ea quer e eu j\u00e1 te passo os hor\u00e1rios dispon\u00edveis.",
+      "Me fala qual deles voc� quer e eu j� te passo os hor�rios dispon�veis.",
     ]
       .filter(Boolean)
       .join("\n");
@@ -2572,11 +2363,11 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   const parsedSettings = parseScheduleSettings(input.settings);
   const enabledDays = parsedSettings.workingDays.filter((item: any) => item.enabled);
   if (!enabledDays.length) {
-    return "No momento a agenda desse servi\u00e7o n\u00e3o est\u00e1 configurada. Se quiser, me diga o servi\u00e7o e eu posso seguir com um agente humano.";
+    return "No momento a agenda desse servi�o n�o est� configurada. Se quiser, me diga o servi�o e eu posso seguir com um agente humano.";
   }
 
   if (asksForNextWeekWithoutDay(input.body, input.quotedBody)) {
-    return `Para ${service.name}, me fala o dia da pr\u00f3xima semana que voc\u00ea prefere ou a data em dd/mm/aa (ex.: 24/03/26) que eu verifico os hor\u00e1rios certinhos.`;
+    return `Para ${service.name}, me fala o dia da pr�xima semana que voc� prefere ou a data em dd/mm/aa (ex.: 24/03/26) que eu verifico os hor�rios certinhos.`;
   }
 
   const targetDate =
@@ -2593,7 +2384,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   }
 
   const durationMinutes = Number.isFinite(Number(service.service_duration_minutes))
-    ? Math.max(1, Math.round(Number(service.service_duration_minutes)))
+    - Math.max(1, Math.round(Number(service.service_duration_minutes)))
     : 60;
   const intervalMinutes = parsedSettings.intervalMinutes;
   const rawSlots = buildScheduleCandidateSlots({
@@ -2602,7 +2393,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
     intervalMinutes,
   });
 
-  const monthSchedules = input.accountId ? await listAiSchedulesForDate(input.accountId, targetDate).catch(() => []) : [];
+  const monthSchedules = input.accountId - await listAiSchedulesForDate(input.accountId, targetDate).catch(() => []) : [];
   let validSlots = rawSlots.filter((slot) => {
     const withinHours = validateScheduleWithinWorkingHours({
       settings: input.settings,
@@ -2618,21 +2409,21 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
 
   const periods = buildSchedulePeriods(dayConfig);
   const automaticLunchBreak = getAutomaticLunchBreak(dayConfig);
-  const durationLabel = intervalMinutes > 0 ? `${durationMinutes} min + intervalo de ${intervalMinutes} min` : `${durationMinutes} min`;
+  const durationLabel = intervalMinutes > 0 - `${durationMinutes} min + intervalo de ${intervalMinutes} min` : `${durationMinutes} min`;
   const dateLabel = formatShortBrDate(targetDate);
   const weekdayLabel = formatWeekdayBr(targetDate);
   const requestedPeriod = detectRequestedSchedulePeriod(input.body, input.quotedBody);
   const filteredPeriods =
     requestedPeriod === "manha"
-      ? periods.filter((period) => period.label === "manhã")
+      - periods.filter((period) => period.label === "manh�")
       : requestedPeriod === "tarde"
-        ? periods.filter((period) => period.label === "tarde")
+        - periods.filter((period) => period.label === "tarde")
         : requestedPeriod === "noite"
-          ? periods.filter((period) => period.label === "noite")
+          - periods.filter((period) => period.label === "noite")
           : periods;
-  const windowLabel = formatPeriodWindow(filteredPeriods.length ? filteredPeriods : periods);
+  const windowLabel = formatPeriodWindow(filteredPeriods.length - filteredPeriods : periods);
   const lunchLabel = automaticLunchBreak
-    ? ` O almoço fica entre ${automaticLunchBreak.startTime} e ${automaticLunchBreak.endTime}.`
+    - ` O almo�o fica entre ${automaticLunchBreak.startTime} e ${automaticLunchBreak.endTime}.`
     : "";
 
   if (filteredPeriods.length && requestedPeriod) {
@@ -2647,19 +2438,19 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   }
 
   if (requestedPeriod && !filteredPeriods.length) {
-    return `Nesse dia eu não tenho horário disponível na ${requestedPeriod === "manha" ? "manhã" : requestedPeriod}. Consigo te atender em ${formatPeriodWindow(periods)}. Se quiser, me fala outro horário dentro desses períodos.`;
+    return `Nesse dia eu n�o tenho hor�rio dispon�vel na ${requestedPeriod === "manha" - "manh�" : requestedPeriod}. Consigo te atender em ${formatPeriodWindow(periods)}. Se quiser, me fala outro hor�rio dentro desses per�odos.`;
   }
 
   if (!validSlots.length) {
-    return `Para ${service.name}, atendo em ${windowLabel || "horários configurados na agenda"}.${lunchLabel} No momento não tenho horário livre em ${weekdayLabel}, ${dateLabel}. Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana.`;
+    return `Para ${service.name}, atendo em ${windowLabel || "hor�rios configurados na agenda"}.${lunchLabel} No momento n�o tenho hor�rio livre em ${weekdayLabel}, ${dateLabel}. Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana.`;
   }
 
   return [
-    `Para ${service.name} (${durationLabel}), em ${weekdayLabel}, ${dateLabel}, atendo em ${windowLabel || "horários configurados na agenda"}.${lunchLabel}`,
-    "Horários disponíveis:",
+    `Para ${service.name} (${durationLabel}), em ${weekdayLabel}, ${dateLabel}, atendo em ${windowLabel || "hor�rios configurados na agenda"}.${lunchLabel}`,
+    "Hor�rios dispon�veis:",
     ...validSlots.map((slot) => `- ${slot}`),
     "",
-    "Qual dia você prefere? Pode falar o dia (ex.: terça) ou a data (ex.: 24/03/26).",
+    "Qual dia voc� prefere? Pode falar o dia (ex.: ter�a) ou a data (ex.: 24/03/26).",
   ]
     .filter(Boolean)
     .join("\n");
@@ -2708,14 +2499,14 @@ async function buildDeterministicCustomerRescheduleReply(input: {
   const requestedDate =
     resolveRelativeScheduleDate(null, referenceText, baseDate) ||
     (String(input.targetSchedule.scheduled_date || "").trim() >= getCurrentCuiabaDateIso(baseDate)
-      ? String(input.targetSchedule.scheduled_date || "").trim()
+      - String(input.targetSchedule.scheduled_date || "").trim()
       : findNextEnabledScheduleDate(input.settings, baseDate));
   if (!requestedDate) {
-    return "No momento eu não consegui localizar um dia disponível para esse reagendamento. Me fala a data em dd/mm/aa ou o dia da semana que você prefere.";
+    return "No momento eu n�o consegui localizar um dia dispon�vel para esse reagendamento. Me fala a data em dd/mm/aa ou o dia da semana que voc� prefere.";
   }
 
   const durationMinutes = Number.isFinite(Number(input.targetSchedule.duration_minutes))
-    ? Math.max(1, Math.round(Number(input.targetSchedule.duration_minutes)))
+    - Math.max(1, Math.round(Number(input.targetSchedule.duration_minutes)))
     : 60;
   const slotsData = await buildAvailableSlotsForDate({
     settings: input.settings,
@@ -2741,13 +2532,13 @@ async function buildDeterministicCustomerRescheduleReply(input: {
   if (requestedPeriod) {
     const filteredPeriods = slotsData.periods.filter((period) =>
       requestedPeriod === "manha"
-        ? period.label === "manhã"
+        - period.label === "manh�"
         : requestedPeriod === "tarde"
-          ? period.label === "tarde"
+          - period.label === "tarde"
           : period.label === "noite",
     );
     if (!filteredPeriods.length) {
-      return `Para ${String(input.targetSchedule.service_name || "esse atendimento").trim()}, eu consigo remarcar em ${formatPeriodWindow(slotsData.periods)}. Me fala um horário dentro desses períodos ou outro dia.`;
+      return `Para ${String(input.targetSchedule.service_name || "esse atendimento").trim()}, eu consigo remarcar em ${formatPeriodWindow(slotsData.periods)}. Me fala um hor�rio dentro desses per�odos ou outro dia.`;
     }
     validSlots = validSlots.filter((slot) => {
       const slotMinutes = timeToMinutes(slot);
@@ -2762,25 +2553,25 @@ async function buildDeterministicCustomerRescheduleReply(input: {
   const dateLabel = formatShortBrDate(requestedDate);
   const weekdayLabel = formatWeekdayBr(requestedDate);
   const lunchLabel = slotsData.automaticLunchBreak
-    ? ` O almoço fica entre ${slotsData.automaticLunchBreak.startTime} e ${slotsData.automaticLunchBreak.endTime}.`
+    - ` O almo�o fica entre ${slotsData.automaticLunchBreak.startTime} e ${slotsData.automaticLunchBreak.endTime}.`
     : "";
-  const currentWhen = `${formatShortBrDate(input.targetSchedule.scheduled_date)} às ${String(input.targetSchedule.scheduled_time || "").trim()}`;
+  const currentWhen = `${formatShortBrDate(input.targetSchedule.scheduled_date)} �s ${String(input.targetSchedule.scheduled_time || "").trim()}`;
 
   if (!validSlots.length) {
     return [
       `Encontrei seu agendamento de ${String(input.targetSchedule.service_name || "atendimento").trim()} em ${currentWhen}.`,
       `Para remarcar, em ${weekdayLabel}, ${dateLabel}, atendo em ${formatPeriodWindow(slotsData.periods)}.${lunchLabel}`,
-      "No momento não tenho horário livre nesse dia.",
+      "No momento n�o tenho hor�rio livre nesse dia.",
       "Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana que eu verifico na hora.",
     ].join("\n");
   }
 
   return [
     `Encontrei seu agendamento de ${String(input.targetSchedule.service_name || "atendimento").trim()} em ${currentWhen}.`,
-    `Posso remarcar. Para ${weekdayLabel}, ${dateLabel}, estes horários estão livres:${lunchLabel}`,
+    `Posso remarcar. Para ${weekdayLabel}, ${dateLabel}, estes hor�rios est�o livres:${lunchLabel}`,
     ...validSlots.slice(0, 8).map((slot) => `- ${slot}`),
     "",
-    "Me fala qual horário você prefere. Se quiser outro dia, pode mandar a data em dd/mm/aa ou o dia da semana.",
+    "Me fala qual hor�rio voc� prefere. Se quiser outro dia, pode mandar a data em dd/mm/aa ou o dia da semana.",
   ].join("\n");
 }
 
@@ -2833,12 +2624,12 @@ function buildDeterministicStoreReply(input: {
 
   if (asksAddress && store.rawAddress) {
     const lines = [
-      store.name ? `Endere�o da ${store.name}:` : "Endere�o da loja:",
-      store.addressParts.city ? `Cidade: ${store.addressParts.city}` : "",
-      store.addressParts.street ? `Rua: ${store.addressParts.street}` : "",
-      store.addressParts.number ? `N�mero: ${store.addressParts.number}` : "",
-      store.addressParts.neighborhood ? `Bairro: ${store.addressParts.neighborhood}` : "",
-      store.addressParts.complement ? `Complemento: ${store.addressParts.complement}` : "",
+      store.name - `Endere�o da ${store.name}:` : "Endere�o da loja:",
+      store.addressParts.city - `Cidade: ${store.addressParts.city}` : "",
+      store.addressParts.street - `Rua: ${store.addressParts.street}` : "",
+      store.addressParts.number - `N�mero: ${store.addressParts.number}` : "",
+      store.addressParts.neighborhood - `Bairro: ${store.addressParts.neighborhood}` : "",
+      store.addressParts.complement - `Complemento: ${store.addressParts.complement}` : "",
     ].filter(Boolean);
     return lines.join("\n");
   }
@@ -2846,7 +2637,7 @@ function buildDeterministicStoreReply(input: {
   if (asksPaymentMethods && store.paymentMethods.length) {
     if (/\bdinheiro\b/.test(text)) {
       return store.paymentMethods.some((item: string) => normalizeText(item).includes("dinheiro"))
-        ? "Sim, aceitamos dinheiro."
+        - "Sim, aceitamos dinheiro."
         : "No momento, dinheiro n�o est� cadastrado como forma de pagamento.";
     }
     return `Aceitamos:\n- ${store.paymentMethods.join("\n- ")}`;
@@ -2871,22 +2662,22 @@ function buildDeterministicStoreReply(input: {
     const blocks = [
       store.name || "",
       store.description || "",
-      store.cnpj ? `CNPJ: ${store.cnpj}` : "",
+      store.cnpj - `CNPJ: ${store.cnpj}` : "",
       store.rawAddress
-        ? [
+        - [
             "Endere�o:",
-            store.addressParts.city ? `- Cidade: ${store.addressParts.city}` : "",
-            store.addressParts.street ? `- Rua: ${store.addressParts.street}` : "",
-            store.addressParts.number ? `- N�mero: ${store.addressParts.number}` : "",
-            store.addressParts.neighborhood ? `- Bairro: ${store.addressParts.neighborhood}` : "",
-            store.addressParts.complement ? `- Complemento: ${store.addressParts.complement}` : "",
+            store.addressParts.city - `- Cidade: ${store.addressParts.city}` : "",
+            store.addressParts.street - `- Rua: ${store.addressParts.street}` : "",
+            store.addressParts.number - `- N�mero: ${store.addressParts.number}` : "",
+            store.addressParts.neighborhood - `- Bairro: ${store.addressParts.neighborhood}` : "",
+            store.addressParts.complement - `- Complemento: ${store.addressParts.complement}` : "",
           ]
             .filter(Boolean)
             .join("\n")
         : "",
-      store.paymentMethods.length ? `Formas de pagamento:\n- ${store.paymentMethods.join("\n- ")}` : "",
+      store.paymentMethods.length - `Formas de pagamento:\n- ${store.paymentMethods.join("\n- ")}` : "",
       store.deliveryFees.length
-        ? `Pre�os de entrega:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`
+        - `Pre�os de entrega:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`
         : "",
     ].filter(Boolean);
     return blocks.join("\n\n");
@@ -3041,12 +2832,12 @@ function extractRequestedProductNames(input: {
         }
       }
 
-      return score > 0 ? { product, score } : null;
+      return score > 0 - { product, score } : null;
     })
     .filter(Boolean)
     .sort((a, b) => Number((b as any).score) - Number((a as any).score));
 
-  const bestScore = rankedMatches.length ? Number((rankedMatches[0] as any).score) : 0;
+  const bestScore = rankedMatches.length - Number((rankedMatches[0] as any).score) : 0;
   return rankedMatches
     .filter((entry) => Number((entry as any).score) === bestScore)
     .map((entry) => (entry as any).product);
@@ -3070,7 +2861,7 @@ export async function handleInboundAiAutomation(
   processingConversations.add(id);
   let stopTypingIndicator: (() => void) | null = null;
   try {
-    await wait(options.forceLatestCustomerMessage ? 180 : 550);
+    await wait(options.forceLatestCustomerMessage - 180 : 550);
 
     const context = await getConversationAiContext(id);
     if (!context) {
@@ -3095,7 +2886,7 @@ export async function handleInboundAiAutomation(
       active: true,
     }).catch(() => null);
 
-    const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
+    const accountSettings = context.account_id - await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
     const mood = getAgentMood(accountSettings?.mood);
 
     const messages = await listConversationMessagesForAi(id, 80);
@@ -3118,20 +2909,20 @@ export async function handleInboundAiAutomation(
       return { ok: true, replied: false, reason: "no_customer_message_after_queue" };
     }
 
-    const account = context.account_id ? await getWhatsAppAccountById(String(context.account_id || "").trim(), null).catch(() => null) : null;
+    const account = context.account_id - await getWhatsAppAccountById(String(context.account_id || "").trim(), null).catch(() => null) : null;
     const catalog = await listProductsForAgentDetailedContext(account?.company_id || null);
     const customerTurn = buildCustomerTurnContext(effectiveMessages);
     const lastMessage = customerTurn.turnMessages[customerTurn.turnMessages.length - 1] || effectiveMessages[effectiveMessages.length - 1];
     if (!lastMessage || lastMessage.from_me) {
       return { ok: true, replied: false, reason: "last_message_from_company" };
     }
-    const quotedBody = customerTurn.combinedQuotedBody || (typeof lastMessage.metadata?.quoted_body === "string" ? lastMessage.metadata.quoted_body : null);
+    const quotedBody = customerTurn.combinedQuotedBody || (typeof lastMessage.metadata?.quoted_body === "string" - lastMessage.metadata.quoted_body : null);
     const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
     const previousCompanyMessage = findLastCompanyMessageBeforeTurn(effectiveMessages, customerTurn.turnMessages);
     const previousCompanyBody = String(previousCompanyMessage?.body || "").trim() || null;
     const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
     const awaitingScheduleConfirmation = wasAwaitingScheduleConfirmation(effectiveMessages);
-    const customerRescheduleRequest = isScheduleRescheduleRequest(lastCustomerTurnBody, quotedBody);
+    const customerRescheduleRequest = isScheduleRescheduleRequest(lastCustomerTurnBody, quotedBody, previousCompanyBody);
     const customerScheduleCancellationRequest = isScheduleCancellationRequest(
       lastCustomerTurnBody,
       quotedBody,
@@ -3170,12 +2961,12 @@ export async function handleInboundAiAutomation(
     );
 
     const discountQuestion = isDiscountQuestion(lastCustomerTurnBody);
-    const allowedDiscountProducts = discountQuestion ? getDiscountAwareProducts(catalog, lastCustomerTurnBody) : [];
+    const allowedDiscountProducts = discountQuestion - getDiscountAwareProducts(catalog, lastCustomerTurnBody) : [];
     const discountAllowed = allowedDiscountProducts.length > 0;
 
     const activeSchedulesForConversation =
       customerRescheduleRequest || aiRescheduleActive || customerScheduleInquiry || customerScheduleCancellationRequest
-        ? await listActiveAiSchedulesForConversation(id, {
+        - await listActiveAiSchedulesForConversation(id, {
             limit: 6,
             includePast: false,
           }).catch(() => [])
@@ -3220,7 +3011,7 @@ export async function handleInboundAiAutomation(
           })),
           lastCustomerTurnBody,
           quotedBody,
-          aiRescheduleActive ? context.reschedule_target_schedule_id : null,
+          aiRescheduleActive - context.reschedule_target_schedule_id : null,
         );
 
         if (!targetSchedule) {
@@ -3255,7 +3046,7 @@ export async function handleInboundAiAutomation(
               service_name: targetSchedule.service_name,
               scheduled_date: targetSchedule.scheduled_date,
               scheduled_time: targetSchedule.scheduled_time,
-              duration_minutes: targetFullSchedule?.duration_minutes ?? null,
+              duration_minutes: targetFullSchedule?.duration_minutes  null,
             },
           });
           groundingNotes.push(
@@ -3267,7 +3058,7 @@ export async function handleInboundAiAutomation(
 
     if (customerScheduleInquiry && !aiRescheduleActive && !customerRescheduleRequest) {
       const activeSchedules = activeSchedulesForConversation.length
-        ? activeSchedulesForConversation
+        - activeSchedulesForConversation
         : await listActiveAiSchedulesForConversation(id, {
             limit: 5,
             includePast: false,
@@ -3339,8 +3130,7 @@ export async function handleInboundAiAutomation(
       groundingNotes.push(`O cliente perguntou sobre disponibilidade de agenda. Base factual para responder: ${formatIsoDatesInText(deterministicScheduleAvailabilityReply)}`);
     }
 
-    const [aiResult, transferIntentResult] = await Promise.all([
-      generateAiSalesReply({
+    const aiResult = await generateAiSalesReply({
       accountId: context.account_id || null,
       companyName: null,
       agentName: null,
@@ -3351,101 +3141,40 @@ export async function handleInboundAiAutomation(
       lastOrderSummary: context.open_order_summary || null,
       lastOrderStatus: context.open_order_status || null,
       lastScheduleSummary: !useRescheduleTargetConfirmedSchedule && context.open_schedule_id && context.open_schedule_service_name && context.open_schedule_date && context.open_schedule_time
-          ? buildScheduleSummary({
+          - buildScheduleSummary({
               serviceName: String(context.open_schedule_service_name || ""),
               scheduledDate: String(context.open_schedule_date || ""),
               scheduledTime: String(context.open_schedule_time || ""),
-              durationMinutes: context.open_schedule_duration_minutes != null ? Number(context.open_schedule_duration_minutes) : null,
+              durationMinutes: context.open_schedule_duration_minutes != null - Number(context.open_schedule_duration_minutes) : null,
             })
           : useConfirmedScheduleContext &&
               context.confirmed_schedule_service_name &&
               context.confirmed_schedule_date &&
               context.confirmed_schedule_time
-            ? buildScheduleSummary({
+            - buildScheduleSummary({
                 serviceName: String(context.confirmed_schedule_service_name || ""),
                 scheduledDate: String(context.confirmed_schedule_date || ""),
                 scheduledTime: String(context.confirmed_schedule_time || ""),
                 durationMinutes:
-                  context.confirmed_schedule_duration_minutes != null ? Number(context.confirmed_schedule_duration_minutes) : null,
+                  context.confirmed_schedule_duration_minutes != null - Number(context.confirmed_schedule_duration_minutes) : null,
               })
           : null,
       lastScheduleStatus: !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-        ? context.open_schedule_status || null
+        - context.open_schedule_status || null
         : useConfirmedScheduleContext
-          ? context.confirmed_schedule_status || null
+          - context.confirmed_schedule_status || null
           : null,
       groundingNotes,
       messages: effectiveMessages.map((item) => ({
         from_me: Boolean(item.from_me),
         body:
           item === lastMessage
-            ? buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody)
+            - buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody)
             : String(item.body || ""),
         sent_at: item.sent_at || item.created_at || null,
         message_type: item.message_type || null,
-        quoted_body: typeof item.metadata?.quoted_body === "string" ? item.metadata.quoted_body : null,
+        quoted_body: typeof item.metadata?.quoted_body === "string" - item.metadata.quoted_body : null,
       })),
-      }),
-      evaluateAiHumanTransferIntent({
-        accountId: context.account_id || null,
-        conversationName: context.display_name || null,
-        customerPhone: context.phone || null,
-        memorySummary: context.memory_summary || null,
-        customerProfile: context.customer_profile || null,
-        lastOrderSummary: context.open_order_summary || null,
-        lastScheduleSummary:
-          !useRescheduleTargetConfirmedSchedule && context.open_schedule_id && context.open_schedule_service_name && context.open_schedule_date && context.open_schedule_time
-            ? buildScheduleSummary({
-                serviceName: String(context.open_schedule_service_name || ""),
-                scheduledDate: String(context.open_schedule_date || ""),
-                scheduledTime: String(context.open_schedule_time || ""),
-                durationMinutes: context.open_schedule_duration_minutes != null ? Number(context.open_schedule_duration_minutes) : null,
-              })
-            : useConfirmedScheduleContext &&
-                context.confirmed_schedule_service_name &&
-                context.confirmed_schedule_date &&
-                context.confirmed_schedule_time
-              ? buildScheduleSummary({
-                  serviceName: String(context.confirmed_schedule_service_name || ""),
-                  scheduledDate: String(context.confirmed_schedule_date || ""),
-                  scheduledTime: String(context.confirmed_schedule_time || ""),
-                  durationMinutes:
-                    context.confirmed_schedule_duration_minutes != null ? Number(context.confirmed_schedule_duration_minutes) : null,
-                })
-              : null,
-        groundingNotes,
-        messages: effectiveMessages.map((item) => ({
-          from_me: Boolean(item.from_me),
-          body:
-            item === lastMessage
-              ? buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody)
-              : String(item.body || ""),
-          sent_at: item.sent_at || item.created_at || null,
-          message_type: item.message_type || null,
-          quoted_body: typeof item.metadata?.quoted_body === "string" ? item.metadata.quoted_body : null,
-        })),
-      }),
-    ]);
-
-    let shouldRequestHumanTransfer = shouldTriggerHumanTransfer({
-      evaluatedTransfer: Boolean(transferIntentResult?.shouldTransfer),
-      aiRequestedTransfer: Boolean(aiResult.handoff?.shouldTransfer) || Boolean(transferIntentResult?.shouldTransfer),
-      body: lastCustomerTurnBody,
-      quotedBody,
-      previousCompanyBody,
-      catalog: catalog as Array<{ name?: string | null; description?: string | null }>,
-      scheduleFlowRequested:
-        awaitingScheduleConfirmation ||
-        customerRescheduleRequest ||
-        aiRescheduleActive ||
-        customerExplicitScheduleIntent ||
-        customerDirectScheduleSelection,
-      customerScheduleInquiry,
-      customerScheduleCancellationRequest,
-      customerRescheduleRequest,
-      customerExplicitScheduleIntent,
-      customerDirectScheduleSelection,
-      awaitingScheduleConfirmation,
     });
 
     await upsertConversationAiMemory({
@@ -3455,7 +3184,7 @@ export async function handleInboundAiAutomation(
       lastOrderSummary: aiResult.order.summary,
       lastScheduleSummary:
         aiResult.schedule?.serviceName && aiResult.schedule?.scheduledDate && aiResult.schedule?.scheduledTime
-          ? buildScheduleSummary({
+          - buildScheduleSummary({
               serviceName: aiResult.schedule.serviceName,
               scheduledDate: aiResult.schedule.scheduledDate,
               scheduledTime: aiResult.schedule.scheduledTime,
@@ -3482,12 +3211,8 @@ export async function handleInboundAiAutomation(
       !customerExplicitScheduleIntent;
 
     if (shouldShortCircuitSimpleTurn) {
-      let simpleReply = String(aiResult.reply || '').trim() || (customerGreetingOnly || latestRawGreetingOnly ? buildGreetingReply(mood, context.display_name || null) : buildClosingReply(mood));
+      let simpleReply = String(aiResult.reply || '').trim() || (customerGreetingOnly || latestRawGreetingOnly - buildGreetingReply(mood, context.display_name || null) : buildClosingReply(mood));
       simpleReply = formatIsoDatesInText(simpleReply);
-      const shouldFinalizeAfterSimpleReply =
-        (customerClosingMessage || latestRawClosingMessage) &&
-        Boolean(context.ai_agent_enabled) &&
-        !String(context.assigned_user_id || "").trim();
 
       if (!aiResult.shouldReply || !simpleReply) {
         return { ok: true, replied: false, reason: 'simple_turn_no_reply' };
@@ -3522,24 +3247,18 @@ export async function handleInboundAiAutomation(
         await clearConversationAiRescheduleContext(id).catch(() => undefined);
       }
 
-      if (shouldFinalizeAfterSimpleReply) {
-        await finalizeAiConversation(id).catch(() => undefined);
-      } else {
-        await activateAiConversation(id).catch(() => undefined);
-      }
-
       return { ok: true, replied: true, reason: 'simple_turn_short_circuit' };
     }
 
-    const existingPendingItems = Array.isArray(context.open_order_items) ? context.open_order_items : [];
+    const existingPendingItems = Array.isArray(context.open_order_items) - context.open_order_items : [];
     const mergedOrder = {
       summary: pickFirstFilled(aiResult.order.summary, context.open_order_summary) || null,
-      items: aiResult.order.items.length ? aiResult.order.items : existingPendingItems,
+      items: aiResult.order.items.length - aiResult.order.items : existingPendingItems,
       totalEstimate:
         aiResult.order.totalEstimate !== null && aiResult.order.totalEstimate !== undefined
-          ? aiResult.order.totalEstimate
+          - aiResult.order.totalEstimate
           : context.open_order_total_estimate !== null && context.open_order_total_estimate !== undefined
-            ? Number(context.open_order_total_estimate)
+            - Number(context.open_order_total_estimate)
             : null,
       responsibleName: pickFirstFilled(aiResult.order.responsibleName, context.open_order_responsible_name),
       fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.open_order_fulfillment_type),
@@ -3573,68 +3292,58 @@ export async function handleInboundAiAutomation(
       customerDirectConfirmation;
 
     const schedulableService = scheduleFlowRequested
-      ? findSchedulableServiceMatch(
+      - findSchedulableServiceMatch(
       catalog as Array<any>,
       aiResult.schedule?.serviceName,
       buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
         )
       : null;
     const scheduleBaseServiceProductId = scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-      ? context.open_schedule_service_product_id
+      - context.open_schedule_service_product_id
       : scheduleFlowRequested && useConfirmedScheduleContext
-        ? context.confirmed_schedule_service_product_id
+        - context.confirmed_schedule_service_product_id
         : null;
     const scheduleBaseServiceName = scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-      ? context.open_schedule_service_name
+      - context.open_schedule_service_name
       : scheduleFlowRequested && useConfirmedScheduleContext
-        ? context.confirmed_schedule_service_name
+        - context.confirmed_schedule_service_name
         : null;
     const scheduleBaseDate =
       scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-        ? context.open_schedule_date
+        - context.open_schedule_date
         : scheduleFlowRequested && useConfirmedScheduleContext
-          ? context.confirmed_schedule_date
+          - context.confirmed_schedule_date
           : null;
     const scheduleBaseTime =
       scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-        ? context.open_schedule_time
+        - context.open_schedule_time
         : scheduleFlowRequested && useConfirmedScheduleContext
-          ? context.confirmed_schedule_time
+          - context.confirmed_schedule_time
           : null;
     const scheduleBaseCustomerName = scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-      ? context.open_schedule_customer_name
+      - context.open_schedule_customer_name
       : scheduleFlowRequested && useConfirmedScheduleContext
-        ? context.confirmed_schedule_customer_name
+        - context.confirmed_schedule_customer_name
         : null;
     const scheduleBaseNotes =
       scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-        ? context.open_schedule_notes
+        - context.open_schedule_notes
         : scheduleFlowRequested && useConfirmedScheduleContext
-          ? context.confirmed_schedule_notes
+          - context.confirmed_schedule_notes
           : null;
     const scheduleBaseDuration = scheduleFlowRequested && !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
-      ? context.open_schedule_duration_minutes
+      - context.open_schedule_duration_minutes
       : scheduleFlowRequested && useConfirmedScheduleContext
-        ? context.confirmed_schedule_duration_minutes
+        - context.confirmed_schedule_duration_minutes
         : null;
     const customerSuggestedScheduleDate =
       scheduleFlowRequested && (aiRescheduleActive || customerRescheduleRequest)
-        ? resolveRelativeScheduleDate(null, buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody))
+        - resolveRelativeScheduleDate(null, buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody))
         : null;
     const customerSuggestedScheduleTime =
       scheduleFlowRequested && (aiRescheduleActive || customerRescheduleRequest)
-        ? extractScheduleTimesFromText([lastCustomerTurnBody, quotedBody].filter(Boolean).join(" "))[0] || null
+        - extractScheduleTimesFromText([lastCustomerTurnBody, quotedBody].filter(Boolean).join(" "))[0] || null
         : null;
-    const agentSuggestedScheduleDate =
-      scheduleFlowRequested && awaitingScheduleConfirmation && customerDirectConfirmation
-        ? resolveRelativeScheduleDate(null, String(previousCompanyBody || "").trim())
-        : null;
-    const previousCompanySuggestedTimes =
-      scheduleFlowRequested && awaitingScheduleConfirmation && customerDirectConfirmation
-        ? extractScheduleTimesFromText(String(previousCompanyBody || "").trim())
-        : [];
-    const agentSuggestedScheduleTime =
-      previousCompanySuggestedTimes.length ? previousCompanySuggestedTimes[previousCompanySuggestedTimes.length - 1] : null;
     const hasCustomerSuggestedReschedule =
       Boolean(customerSuggestedScheduleDate) || Boolean(customerSuggestedScheduleTime) || customerDirectScheduleSelection;
     const canReopenConfirmedSchedule =
@@ -3643,7 +3352,7 @@ export async function handleInboundAiAutomation(
       (aiRescheduleActive || customerRescheduleRequest);
     const scheduleCancellationTarget =
       aiResult.schedule.shouldCancel || customerScheduleCancellationRequest
-        ? findRescheduleTargetSchedule(
+        - findRescheduleTargetSchedule(
             activeSchedulesForConversation.map((item) => ({
               id: String(item.id || "").trim(),
               service_name: item.service_name,
@@ -3664,39 +3373,22 @@ export async function handleInboundAiAutomation(
         pickFirstFilled(aiResult.schedule?.serviceName, schedulableService?.name, scheduleBaseServiceName) || null,
       scheduledDate:
         resolveRelativeScheduleDate(
-          pickFirstFilled(
-            aiResult.schedule?.scheduledDate,
-            customerSuggestedScheduleDate,
-            agentSuggestedScheduleDate,
-            scheduleBaseDate,
-          ) || null,
+          pickFirstFilled(aiResult.schedule?.scheduledDate, customerSuggestedScheduleDate, scheduleBaseDate) || null,
           buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
         ) || null,
-      scheduledTime:
-        pickFirstFilled(aiResult.schedule?.scheduledTime, customerSuggestedScheduleTime, agentSuggestedScheduleTime, scheduleBaseTime) ||
-        null,
+      scheduledTime: pickFirstFilled(aiResult.schedule?.scheduledTime, customerSuggestedScheduleTime, scheduleBaseTime) || null,
       customerName:
         pickFirstFilled(aiResult.schedule?.customerName, scheduleBaseCustomerName, context.display_name) || null,
       notes: pickFirstFilled(aiResult.schedule?.notes, scheduleBaseNotes) || null,
       durationMinutes:
         aiResult.schedule?.durationMinutes !== null && aiResult.schedule?.durationMinutes !== undefined
-          ? aiResult.schedule.durationMinutes
+          - aiResult.schedule.durationMinutes
           : schedulableService?.service_duration_minutes != null
-            ? Number(schedulableService.service_duration_minutes)
+            - Number(schedulableService.service_duration_minutes)
             : scheduleBaseDuration != null
-          ? Number(scheduleBaseDuration)
+              - Number(scheduleBaseDuration)
               : null,
     };
-    const normalizedMergedScheduleServiceName = normalizeText(String(mergedSchedule.serviceName || "").trim());
-    const normalizedOpenPendingScheduleServiceName = normalizeText(String(context.open_schedule_service_name || "").trim());
-    const shouldReuseOpenPendingSchedule =
-      Boolean(context.open_schedule_id) &&
-      (!normalizedMergedScheduleServiceName ||
-        !normalizedOpenPendingScheduleServiceName ||
-        normalizedMergedScheduleServiceName === normalizedOpenPendingScheduleServiceName ||
-        awaitingScheduleConfirmation ||
-        aiRescheduleActive ||
-        customerRescheduleRequest);
     const selectedSameAsCurrentSchedule =
       aiRescheduleActive &&
       String(context.reschedule_target_schedule_id || "").trim() &&
@@ -3708,7 +3400,7 @@ export async function handleInboundAiAutomation(
       const parsedScheduleSettings = parseScheduleSettings(accountSettings);
       const inferredScheduleDayConfig =
         mergedSchedule.scheduledDate && isValidScheduleDate(mergedSchedule.scheduledDate)
-          ? parsedScheduleSettings.workingDays.find((item: any) => {
+          - parsedScheduleSettings.workingDays.find((item: any) => {
               const date = new Date(`${String(mergedSchedule.scheduledDate).trim()}T12:00:00Z`);
               return !Number.isNaN(date.getTime()) && item.dayOfWeek === date.getUTCDay();
             }) || null
@@ -3795,7 +3487,7 @@ export async function handleInboundAiAutomation(
     let scheduleTooSoonOrPastFromRepository = false;
     const scheduleConflictExcludeId =
       String(context.open_schedule_id || "").trim() ||
-      (canReopenConfirmedSchedule ? String(context.confirmed_schedule_id || "").trim() : "") ||
+      (canReopenConfirmedSchedule - String(context.confirmed_schedule_id || "").trim() : "") ||
       null;
     if (hasCompleteScheduleProposal && scheduleWindowValidation.ok) {
       try {
@@ -3813,7 +3505,7 @@ export async function handleInboundAiAutomation(
     }
     if (hasRequiredScheduleData && !scheduleConflict) {
       try {
-        if (shouldReuseOpenPendingSchedule && String(context.open_schedule_id || "").trim()) {
+        if (String(context.open_schedule_id || "").trim()) {
           const updatedSchedule = await updatePendingAiSchedule({
             scheduleId: String(context.open_schedule_id || "").trim(),
             accountId: context.account_id || null,
@@ -3893,20 +3585,10 @@ export async function handleInboundAiAutomation(
       }
     }
 
-    const shouldKeepScheduleFlowWithAi =
-      Boolean(scheduleFlowRequested) &&
-      (Boolean(scheduleConflict) ||
-        (hasCompleteScheduleProposal &&
-          (!scheduleWindowValidation.ok || scheduleOutsideHoursFromRepository || scheduleTooSoonOrPastFromRepository)));
-
-    if (shouldKeepScheduleFlowWithAi) {
-      shouldRequestHumanTransfer = false;
-    }
-
     const fallbackReply =
       aiResult.schedule.shouldCancel && !scheduleCancellationTarget
-        ? activeSchedulesForConversation.length
-          ? buildScheduleCancellationDisambiguationReply({
+        - activeSchedulesForConversation.length
+          - buildScheduleCancellationDisambiguationReply({
               schedules: activeSchedulesForConversation.map((item) => ({
                 service_name: item.service_name,
                 scheduled_date: String(item.scheduled_date || "").trim(),
@@ -3916,18 +3598,18 @@ export async function handleInboundAiAutomation(
             })
           : "No momento eu n�o encontrei agendamentos seus em aberto por aqui."
         : aiResult.schedule.shouldCancel && cancelledScheduleId
-        ? ""
+        - ""
         :
       selectedSameAsCurrentSchedule
-        ? `Esse j� � o hor�rio atual do seu atendimento: ${formatShortBrDate(String(scheduleBaseDate || "").trim())} �s ${String(scheduleBaseTime || "").trim()}. Me passa outro hor�rio que eu sigo com o reagendamento.`
+        - `Esse j� � o hor�rio atual do seu atendimento: ${formatShortBrDate(String(scheduleBaseDate || "").trim())} �s ${String(scheduleBaseTime || "").trim()}. Me passa outro hor�rio que eu sigo com o reagendamento.`
         :
       scheduleConflict
-        ? buildScheduleConflictReply({
+        - buildScheduleConflictReply({
             mood,
             conflict: scheduleConflict,
           })
         : hasCompleteScheduleProposal && (!scheduleWindowValidation.ok || scheduleOutsideHoursFromRepository || scheduleTooSoonOrPastFromRepository)
-        ? buildScheduleOutsideWorkingHoursReply({
+        - buildScheduleOutsideWorkingHoursReply({
             mood,
             dayConfig: scheduleWindowValidation.dayConfig || null,
             dayUnavailable: scheduleWindowValidation.reason === "day_unavailable",
@@ -3936,43 +3618,25 @@ export async function handleInboundAiAutomation(
               scheduleWindowValidation.reason === "time_already_passed" || scheduleTooSoonOrPastFromRepository,
           })
         : hasRequiredScheduleData && createdScheduleId
-        ? buildScheduleFallbackReply({
+        - buildScheduleFallbackReply({
             mood,
             updatedPendingSchedule,
             reopenedConfirmedSchedule,
           })
         : hasCompleteScheduleProposal && scheduleWindowValidation.ok && !createdScheduleId
-        ? buildScheduleConfirmationPrompt({
+        - buildScheduleConfirmationPrompt({
             serviceName: mergedSchedule.serviceName,
             scheduledDate: mergedSchedule.scheduledDate,
             scheduledTime: mergedSchedule.scheduledTime,
             durationMinutes: mergedSchedule.durationMinutes,
           })
         : aiResult.order.shouldCreate && hasRequiredOrderData
-        ? buildOrderFallbackReply({
+        - buildOrderFallbackReply({
             mood,
             updatedPendingOrder,
           })
         : "";
-    let replyText =
-      String(aiResult.reply || "").trim() ||
-      String(transferIntentResult?.suggestedReply || "").trim() ||
-      fallbackReply ||
-      buildUnknownSalesReply(mood);
-    if (shouldRequestHumanTransfer && String(transferIntentResult?.suggestedReply || "").trim()) {
-      replyText = String(transferIntentResult?.suggestedReply || "").trim();
-    }
-    if (Boolean(aiResult.handoff?.shouldTransfer) && !shouldRequestHumanTransfer) {
-      replyText =
-        isBusinessRelevantTransferTopic({
-          body: lastCustomerTurnBody,
-          quotedBody,
-          previousCompanyBody,
-          catalog: catalog as Array<{ name?: string | null; description?: string | null }>,
-        })
-          ? buildUnknownNoTransferReply(mood)
-          : buildOffTopicReply(mood);
-    }
+    let replyText = String(aiResult.reply || "").trim() || fallbackReply || buildUnknownSalesReply(mood);
     if (reopenedConfirmedSchedule && createdScheduleId) {
       replyText = fallbackReply || replyText;
     }
@@ -4032,20 +3696,6 @@ export async function handleInboundAiAutomation(
     }
     if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);
-    }
-
-    if (shouldRequestHumanTransfer) {
-      const normalizedTransferReply = normalizeText(replyText);
-      const transferReplyLooksWrong =
-        !normalizedTransferReply.includes("encaminh") &&
-        !normalizedTransferReply.includes("transfer") &&
-        !normalizedTransferReply.includes("atendente") &&
-        !normalizedTransferReply.includes("financeiro") &&
-        !normalizedTransferReply.includes("equipe") &&
-        !normalizedTransferReply.includes("humano");
-      if (transferReplyLooksWrong && String(transferIntentResult?.suggestedReply || "").trim()) {
-        replyText = String(transferIntentResult?.suggestedReply || "").trim();
-      }
     }
 
     replyText = formatIsoDatesInText(replyText);
@@ -4135,16 +3785,6 @@ export async function handleInboundAiAutomation(
         },
       });
 
-    if (shouldRequestHumanTransfer) {
-      await markConversationForHumanTransfer({
-        conversationId: id,
-        reason: String(aiResult.handoff?.reason || "").trim() || "Atendimento encaminhado pelo agente para um atendente humano.",
-      }).catch(() => undefined);
-      await clearConversationAiRescheduleContext(id).catch(() => undefined);
-    } else {
-      await activateAiConversation(id).catch(() => undefined);
-    }
-
     const shouldClearRescheduleFlow =
       Boolean(createdScheduleId || cancelledScheduleId) &&
       (reopenedConfirmedSchedule ||
@@ -4164,7 +3804,7 @@ export async function handleInboundAiAutomation(
         const media = await loadMediaBufferFromUrl(String(product.image_url || "").trim());
         if (!media?.buffer) continue;
 
-        const caption = `${product.name}\nPre\u00e7o: R$${Number(product.price || 0).toFixed(2)}`;
+        const caption = `${product.name}\nPre�o: R$${Number(product.price || 0).toFixed(2)}`;
         const mediaResponse = await sendWhatsAppMedia({
           to: context.phone,
           mediaBuffer: media.buffer,
@@ -4204,7 +3844,7 @@ export async function handleInboundAiAutomation(
     return {
       ok: false,
       replied: false,
-      reason: error instanceof Error ? error.message : "ai_automation_failed",
+      reason: error instanceof Error - error.message : "ai_automation_failed",
     };
   } finally {
     if (stopTypingIndicator) {
@@ -4220,3 +3860,5 @@ export async function handleInboundAiAutomation(
     }
   }
 }
+
+

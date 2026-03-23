@@ -87,6 +87,9 @@
         <button id="mobileTopbarBack" type="button" class="mobile-topbar-back" hidden>
           <i class="bi bi-arrow-left"></i>
         </button>
+        <div id="mobileTopbarBrand" class="mobile-topbar-brand" hidden>
+          <img id="mobileTopbarBrandLogo" alt="Logo da empresa" hidden />
+        </div>
         <div class="mobile-topbar-copy">
           <strong id="mobileTopbarTitle">NS Chat</strong>
           <span id="mobileTopbarSubtitle">Conversas</span>
@@ -122,7 +125,15 @@
 
       <aside id="chatSidebar" class="sidebar">
         <div class="sidebar-header">
-          <h1>NS Chat</h1>
+          <div class="sidebar-brand">
+            <div id="sidebarBrandLogoWrap" class="sidebar-brand-logo-wrap" hidden>
+              <img id="sidebarBrandLogo" class="sidebar-brand-logo" alt="Logo da empresa" hidden />
+            </div>
+            <div class="sidebar-brand-copy">
+              <h1 id="sidebarBrandName">NS Chat</h1>
+              <span id="sidebarBrandSubtitle" class="sidebar-brand-subtitle">Conversas</span>
+            </div>
+          </div>
           <span id="waStatus" class="wa-status">Offline</span>
         </div>
 
@@ -435,6 +446,37 @@
                       Descrição da loja
                       <textarea id="storeDescriptionInput" rows="4" placeholder="Descreva a loja, o foco do atendimento e os principais diferenciais."></textarea>
                     </label>
+
+                    <div class="store-form-section">
+                      <div class="store-form-section-head">
+                        <strong>Identidade visual da empresa</strong>
+                        <span>Envie a logo para gerar 3 paletas de cor. A paleta escolhida muda apenas o sistema da sua empresa.</span>
+                      </div>
+                      <div class="company-branding-layout">
+                        <div class="company-branding-upload">
+                          <div id="companyLogoPreview" class="company-logo-preview">
+                            <span id="companyLogoPreviewEmpty">Sem logo</span>
+                            <img id="companyLogoPreviewImage" alt="Logo da empresa" hidden />
+                          </div>
+                          <div class="company-branding-actions">
+                            <input id="companyLogoInput" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" hidden />
+                            <button id="companyLogoSelectBtn" type="button" class="btn-secondary">
+                              <i class="bi bi-image"></i> Enviar logo
+                            </button>
+                            <button id="companyLogoClearBtn" type="button" class="btn-secondary" hidden>
+                              <i class="bi bi-trash3"></i> Remover logo
+                            </button>
+                          </div>
+                        </div>
+                        <div class="company-branding-palettes">
+                          <div class="store-form-section-head company-branding-palettes-head">
+                            <strong>Paletas geradas</strong>
+                            <span>Selecione a que melhor combina com a empresa.</span>
+                          </div>
+                          <div id="companyPaletteList" class="company-palette-list"></div>
+                        </div>
+                      </div>
+                    </div>
 
                     <div class="store-repeat-block">
                       <div class="store-repeat-head">

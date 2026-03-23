@@ -31,6 +31,7 @@
   settingsUsers: [],
   agents: [],
   companies: [],
+  companyBranding: null,
   currentUser: null,
   isAuthenticated: false,
   sessionToken: "",
@@ -63,6 +64,8 @@ const layoutEl = document.querySelector(".layout");
 const chatMainEl = document.querySelector(".chat-main");
 const mobileTopbarEl = document.getElementById("mobileTopbar");
 const mobileTopbarBackEl = document.getElementById("mobileTopbarBack");
+const mobileTopbarBrandEl = document.getElementById("mobileTopbarBrand");
+const mobileTopbarBrandLogoEl = document.getElementById("mobileTopbarBrandLogo");
 const mobileTopbarTitleEl = document.getElementById("mobileTopbarTitle");
 const mobileTopbarSubtitleEl = document.getElementById("mobileTopbarSubtitle");
 const mobileBottomNavEl = document.getElementById("mobileBottomNav");
@@ -72,6 +75,10 @@ const loginUsernameEl = document.getElementById("loginUsername");
 const loginPasswordEl = document.getElementById("loginPassword");
 const loginSubmitBtnEl = document.getElementById("loginSubmitBtn");
 const chatSidebarEl = document.getElementById("chatSidebar");
+const sidebarBrandLogoWrapEl = document.getElementById("sidebarBrandLogoWrap");
+const sidebarBrandLogoEl = document.getElementById("sidebarBrandLogo");
+const sidebarBrandNameEl = document.getElementById("sidebarBrandName");
+const sidebarBrandSubtitleEl = document.getElementById("sidebarBrandSubtitle");
 const conversationListEl = document.getElementById("conversationList");
 const messagesAreaEl = document.getElementById("messagesArea");
 const chatHeaderEl = document.getElementById("chatHeader");
@@ -305,6 +312,13 @@ const storeAddressNumberInputEl = document.getElementById("storeAddressNumberInp
 const storeAddressNeighborhoodInputEl = document.getElementById("storeAddressNeighborhoodInput");
 const storeAddressComplementInputEl = document.getElementById("storeAddressComplementInput");
 const storeDescriptionInputEl = document.getElementById("storeDescriptionInput");
+const companyLogoInputEl = document.getElementById("companyLogoInput");
+const companyLogoSelectBtnEl = document.getElementById("companyLogoSelectBtn");
+const companyLogoClearBtnEl = document.getElementById("companyLogoClearBtn");
+const companyLogoPreviewEl = document.getElementById("companyLogoPreview");
+const companyLogoPreviewImageEl = document.getElementById("companyLogoPreviewImage");
+const companyLogoPreviewEmptyEl = document.getElementById("companyLogoPreviewEmpty");
+const companyPaletteListEl = document.getElementById("companyPaletteList");
 const storePaymentMethodsListEl = document.getElementById("storePaymentMethodsList");
 const storeAddPaymentMethodBtnEl = document.getElementById("storeAddPaymentMethodBtn");
 const storeDeliveryFeesListEl = document.getElementById("storeDeliveryFeesList");
@@ -911,7 +925,7 @@ function getMobileTopbarCopy() {
       subtitle: formatPhone(state.selectedConversation.phone) || "Voltar para os chats",
     };
   }
-  return { title: "NS Chat", subtitle: "Conversas" };
+  return { title: getCompanyDisplayName(), subtitle: "Conversas" };
 }
 
 function renderMobileChrome() {
@@ -1044,6 +1058,422 @@ function renderAgentSettings() {
   }
   renderScheduleReminderRules(reminderRules);
   updateScheduleReminderState();
+  renderAppBranding();
+  renderCompanyBranding();
+}
+
+const DEFAULT_COMPANY_THEME = {
+  name: "Padrão",
+  bg: "#0b141a",
+  panel: "#111b21",
+  panel_2: "#202c33",
+  hover: "#2a3942",
+  text: "#e9edef",
+  muted: "#8696a0",
+  accent: "#00a884",
+  bubble_out: "#005c4b",
+  bubble_in: "#202c33",
+  line: "#2a3942",
+};
+
+function normalizeCompanyPalette(palette) {
+  if (!palette || typeof palette !== "object") return null;
+  const normalized = {
+    name: String(palette.name || "Paleta").trim() || "Paleta",
+    bg: String(palette.bg || "").trim(),
+    panel: String(palette.panel || "").trim(),
+    panel_2: String(palette.panel_2 || palette.panel2 || "").trim(),
+    hover: String(palette.hover || "").trim(),
+    text: String(palette.text || "").trim(),
+    muted: String(palette.muted || "").trim(),
+    accent: String(palette.accent || "").trim(),
+    bubble_out: String(palette.bubble_out || palette.bubbleOut || "").trim(),
+    bubble_in: String(palette.bubble_in || palette.bubbleIn || "").trim(),
+    line: String(palette.line || "").trim(),
+  };
+  return Object.values(normalized).every((item) => String(item || "").trim()) ? normalized : null;
+}
+
+function normalizeCompanyBranding(branding) {
+  const paletteOptions = Array.isArray(branding?.palette_options)
+    ? branding.palette_options.map((item) => normalizeCompanyPalette(item)).filter(Boolean)
+    : [];
+  const rawSelectedIndex = Number(branding?.selected_palette_index);
+  const selectedIndex = Number.isInteger(rawSelectedIndex)
+    ? rawSelectedIndex === -1
+      ? -1
+      : Math.max(0, Math.min(rawSelectedIndex, Math.max(0, paletteOptions.length - 1)))
+    : 0;
+  return {
+    company_id: String(branding?.company_id || "").trim() || null,
+    logo_data_url: String(branding?.logo_data_url || "").trim() || null,
+    palette_options: paletteOptions,
+    selected_palette_index: selectedIndex,
+    selected_palette:
+      normalizeCompanyPalette(branding?.selected_palette) || (selectedIndex >= 0 ? paletteOptions[selectedIndex] || null : null),
+  };
+}
+
+function getCompanyDisplayName() {
+  const brandingName = String(state.agentSettings?.store_name || "").trim();
+  const companyName = String(state.currentUser?.company_name || "").trim();
+  const agentCompanyName = String(state.agentSettings?.company_name || "").trim();
+  return brandingName || companyName || agentCompanyName || "NS Chat";
+}
+
+function renderAppBranding() {
+  const branding = normalizeCompanyBranding(state.companyBranding || {});
+  const logoUrl = String(branding.logo_data_url || "").trim();
+  const companyName = getCompanyDisplayName();
+  const isDefaultBrand = companyName === "NS Chat" && !logoUrl;
+
+  if (sidebarBrandNameEl) {
+    sidebarBrandNameEl.textContent = companyName;
+  }
+  if (sidebarBrandSubtitleEl) {
+    sidebarBrandSubtitleEl.textContent = isDefaultBrand ? "Conversas" : "Painel da empresa";
+  }
+  if (sidebarBrandLogoWrapEl) {
+    sidebarBrandLogoWrapEl.hidden = !logoUrl;
+  }
+  if (sidebarBrandLogoEl) {
+    sidebarBrandLogoEl.hidden = !logoUrl;
+    sidebarBrandLogoEl.src = logoUrl || "";
+  }
+
+  if (mobileTopbarBrandEl) {
+    mobileTopbarBrandEl.hidden = !logoUrl;
+  }
+  if (mobileTopbarBrandLogoEl) {
+    mobileTopbarBrandLogoEl.hidden = !logoUrl;
+    mobileTopbarBrandLogoEl.src = logoUrl || "";
+  }
+}
+
+function applyCompanyTheme(palette) {
+  const theme = normalizeCompanyPalette(palette) || DEFAULT_COMPANY_THEME;
+  const root = document.documentElement;
+  root.style.setProperty("--bg", theme.bg);
+  root.style.setProperty("--panel", theme.panel);
+  root.style.setProperty("--panel-2", theme.panel_2);
+  root.style.setProperty("--hover", theme.hover);
+  root.style.setProperty("--text", theme.text);
+  root.style.setProperty("--muted", theme.muted);
+  root.style.setProperty("--accent", theme.accent);
+  root.style.setProperty("--accent-strong", mixHex(theme.accent, "#ffffff", 0.12));
+  root.style.setProperty("--accent-soft", mixHex(theme.panel, theme.accent, 0.22));
+  root.style.setProperty("--accent-ghost", mixHex(theme.bg, theme.accent, 0.14));
+  root.style.setProperty("--accent-contrast", mixHex("#02110c", theme.accent, 0.18));
+  root.style.setProperty("--panel-elevated", mixHex(theme.panel, "#ffffff", 0.04));
+  root.style.setProperty("--panel-deep", mixHex(theme.bg, "#000000", 0.18));
+  root.style.setProperty("--line-soft", mixHex(theme.line, theme.text, 0.08));
+  root.style.setProperty("--bubble-out", theme.bubble_out);
+  root.style.setProperty("--bubble-in", theme.bubble_in);
+  root.style.setProperty("--line", theme.line);
+  document.body.style.background = theme.panel;
+}
+
+function resetCompanyTheme() {
+  applyCompanyTheme(DEFAULT_COMPANY_THEME);
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex) {
+  const raw = String(hex || "").trim().replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return null;
+  return {
+    r: parseInt(raw.slice(0, 2), 16),
+    g: parseInt(raw.slice(2, 4), 16),
+    b: parseInt(raw.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(rgb) {
+  const r = clamp(Math.round(Number(rgb?.r || 0)), 0, 255);
+  const g = clamp(Math.round(Number(rgb?.g || 0)), 0, 255);
+  const b = clamp(Math.round(Number(rgb?.b || 0)), 0, 255);
+  return `#${[r, g, b].map((item) => item.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixHex(colorA, colorB, weight = 0.5) {
+  const a = hexToRgb(colorA);
+  const b = hexToRgb(colorB);
+  if (!a || !b) return colorA || colorB || "#000000";
+  const ratio = clamp(Number(weight), 0, 1);
+  return rgbToHex({
+    r: a.r + (b.r - a.r) * ratio,
+    g: a.g + (b.g - a.g) * ratio,
+    b: a.b + (b.b - a.b) * ratio,
+  });
+}
+
+function rgbToHsl(rgb) {
+  const r = clamp(Number(rgb?.r || 0), 0, 255) / 255;
+  const g = clamp(Number(rgb?.g || 0), 0, 255) / 255;
+  const b = clamp(Number(rgb?.b || 0), 0, 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  switch (max) {
+    case r:
+      h = (g - b) / d + (g < b ? 6 : 0);
+      break;
+    case g:
+      h = (b - r) / d + 2;
+      break;
+    default:
+      h = (r - g) / d + 4;
+      break;
+  }
+  return { h: h / 6, s, l };
+}
+
+function hslToRgb(hsl) {
+  const h = ((Number(hsl?.h || 0) % 1) + 1) % 1;
+  const s = clamp(Number(hsl?.s || 0), 0, 1);
+  const l = clamp(Number(hsl?.l || 0), 0, 1);
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return { r: v, g: v, b: v };
+  }
+  const hue2rgb = (p, q, t) => {
+    let x = t;
+    if (x < 0) x += 1;
+    if (x > 1) x -= 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return {
+    r: Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+    g: Math.round(hue2rgb(p, q, h) * 255),
+    b: Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+  };
+}
+
+function adjustHex(color, { hueShift = 0, saturation = 0, lightness = 0 } = {}) {
+  const rgb = hexToRgb(color);
+  if (!rgb) return color;
+  const hsl = rgbToHsl(rgb);
+  return rgbToHex(
+    hslToRgb({
+      h: hsl.h + hueShift,
+      s: clamp(hsl.s + saturation, 0, 1),
+      l: clamp(hsl.l + lightness, 0, 1),
+    }),
+  );
+}
+
+function buildThemePaletteFromAccent(accent, name) {
+  const safeAccent = /^#[0-9a-f]{6}$/i.test(String(accent || "").trim()) ? accent : DEFAULT_COMPANY_THEME.accent;
+  return {
+    name,
+    bg: mixHex("#081318", safeAccent, 0.16),
+    panel: mixHex("#111b21", safeAccent, 0.18),
+    panel_2: mixHex("#202c33", safeAccent, 0.22),
+    hover: mixHex("#2a3942", safeAccent, 0.28),
+    text: "#e9edef",
+    muted: mixHex("#8696a0", safeAccent, 0.18),
+    accent: safeAccent,
+    bubble_out: mixHex("#005c4b", safeAccent, 0.56),
+    bubble_in: mixHex("#202c33", safeAccent, 0.12),
+    line: mixHex("#2a3942", safeAccent, 0.2),
+  };
+}
+
+async function resizeImageToDataUrl(file, maxSize = 320) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Falha ao ler a imagem."));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Falha ao abrir a imagem."));
+    img.src = dataUrl;
+  });
+  const ratio = Math.min(1, maxSize / Math.max(image.width || 1, image.height || 1));
+  const width = Math.max(1, Math.round(image.width * ratio));
+  const height = Math.max(1, Math.round(image.height * ratio));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL("image/png", 0.92);
+}
+
+async function extractDominantColorsFromLogo(dataUrl) {
+  const image = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Falha ao processar a logo."));
+    img.src = dataUrl;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = 48;
+  canvas.height = 48;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0, 48, 48);
+  const { data } = ctx.getImageData(0, 0, 48, 48);
+  const counts = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3];
+    if (alpha < 180) continue;
+    const r = Math.round(data[i] / 24) * 24;
+    const g = Math.round(data[i + 1] / 24) * 24;
+    const b = Math.round(data[i + 2] / 24) * 24;
+    const brightness = (r + g + b) / 3;
+    if (brightness < 18 || brightness > 245) continue;
+    const key = `${clamp(r, 0, 255)},${clamp(g, 0, 255)},${clamp(b, 0, 255)}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const colors = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([key]) => {
+      const [r, g, b] = key.split(",").map(Number);
+      return rgbToHex({ r, g, b });
+    });
+  const unique = Array.from(new Set(colors));
+  return unique.slice(0, 3);
+}
+
+async function generateThemePalettesFromLogo(dataUrl) {
+  const dominant = await extractDominantColorsFromLogo(dataUrl);
+  const base = dominant[0] || DEFAULT_COMPANY_THEME.accent;
+  const secondary = dominant[1] || adjustHex(base, { saturation: -0.08, lightness: 0.08 });
+  const tertiary = dominant[2] || adjustHex(base, { hueShift: 0.08, saturation: -0.04, lightness: -0.02 });
+  return [
+    buildThemePaletteFromAccent(base, "Paleta 1"),
+    buildThemePaletteFromAccent(adjustHex(secondary, { saturation: 0.04, lightness: 0.02 }), "Paleta 2"),
+    buildThemePaletteFromAccent(adjustHex(tertiary, { saturation: 0.02, lightness: -0.01 }), "Paleta 3"),
+  ];
+}
+
+function renderCompanyBranding() {
+  const branding = normalizeCompanyBranding(state.companyBranding || {});
+  state.companyBranding = branding;
+  const logoUrl = String(branding.logo_data_url || "").trim();
+  if (companyLogoPreviewImageEl) {
+    companyLogoPreviewImageEl.hidden = !logoUrl;
+    companyLogoPreviewImageEl.src = logoUrl || "";
+  }
+  if (companyLogoPreviewEmptyEl) {
+    companyLogoPreviewEmptyEl.hidden = Boolean(logoUrl);
+  }
+  if (companyLogoClearBtnEl) {
+    companyLogoClearBtnEl.hidden = !logoUrl;
+  }
+  renderAppBranding();
+  if (!companyPaletteListEl) return;
+  companyPaletteListEl.innerHTML = "";
+  const defaultButton = document.createElement("button");
+  defaultButton.type = "button";
+  defaultButton.className = `company-palette-card ${branding.selected_palette_index === -1 ? "active" : ""}`;
+  defaultButton.innerHTML = `
+    <div class="company-palette-card-head">
+      <strong>Padrão</strong>
+      ${branding.selected_palette_index === -1 ? '<span class="company-palette-active">Ativa</span>' : ""}
+    </div>
+    <div class="company-palette-swatches">
+      <span style="background:${DEFAULT_COMPANY_THEME.accent}"></span>
+      <span style="background:${DEFAULT_COMPANY_THEME.panel}"></span>
+      <span style="background:${DEFAULT_COMPANY_THEME.panel_2}"></span>
+      <span style="background:${DEFAULT_COMPANY_THEME.bubble_out}"></span>
+    </div>
+  `;
+  defaultButton.addEventListener("click", () => {
+    state.companyBranding = {
+      ...branding,
+      selected_palette_index: -1,
+      selected_palette: null,
+    };
+    applyCompanyTheme(DEFAULT_COMPANY_THEME);
+    renderCompanyBranding();
+  });
+  companyPaletteListEl.appendChild(defaultButton);
+
+  if (!branding.palette_options.length) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "empty-state";
+    emptyState.textContent = "Envie uma logo para gerar as paletas.";
+    companyPaletteListEl.appendChild(emptyState);
+    return;
+  }
+  branding.palette_options.forEach((palette, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `company-palette-card ${index === branding.selected_palette_index ? "active" : ""}`;
+    button.dataset.paletteIndex = String(index);
+    button.innerHTML = `
+      <div class="company-palette-card-head">
+        <strong>${palette.name}</strong>
+        ${index === branding.selected_palette_index ? '<span class="company-palette-active">Ativa</span>' : ""}
+      </div>
+      <div class="company-palette-swatches">
+        <span style="background:${palette.accent}"></span>
+        <span style="background:${palette.panel}"></span>
+        <span style="background:${palette.panel_2}"></span>
+        <span style="background:${palette.bubble_out}"></span>
+      </div>
+    `;
+    button.addEventListener("click", () => {
+      state.companyBranding = {
+        ...branding,
+        selected_palette_index: index,
+        selected_palette: branding.palette_options[index] || null,
+      };
+      applyCompanyTheme(branding.palette_options[index] || DEFAULT_COMPANY_THEME);
+      renderCompanyBranding();
+    });
+    companyPaletteListEl.appendChild(button);
+  });
+}
+
+async function loadCompanyBranding() {
+  if (!state.isAuthenticated) {
+    state.companyBranding = null;
+    resetCompanyTheme();
+    renderCompanyBranding();
+    return;
+  }
+  try {
+    const result = await api("/auth/company-branding");
+    state.companyBranding = normalizeCompanyBranding(result?.branding || {});
+    applyCompanyTheme(state.companyBranding.selected_palette || DEFAULT_COMPANY_THEME);
+    renderCompanyBranding();
+  } catch {
+    state.companyBranding = null;
+    resetCompanyTheme();
+    renderCompanyBranding();
+  }
+}
+
+async function saveCompanyBranding() {
+  const branding = normalizeCompanyBranding(state.companyBranding || {});
+  const result = await api("/auth/company-branding", {
+    method: "PUT",
+    body: JSON.stringify({
+      logo_data_url: branding.logo_data_url || null,
+      palette_options: branding.palette_options,
+      selected_palette_index: branding.selected_palette_index,
+    }),
+  });
+  state.companyBranding = normalizeCompanyBranding(result?.branding || {});
+  applyCompanyTheme(state.companyBranding.selected_palette || DEFAULT_COMPANY_THEME);
+  renderCompanyBranding();
 }
 
 function setProductsTab(tab) {
@@ -1977,14 +2407,18 @@ function renderSchedulesList() {
     const scheduleAccountLabel = formatScheduleAccountLabel(schedule);
     item.classList.toggle("expanded", isExpanded);
     item.innerHTML = `
-      <div class="schedule-list-main" data-action="toggle-schedule-details" data-schedule-id="${schedule.id}">
-        <div class="schedule-list-head">
-          <strong class="schedule-list-name">${escapeHtml(schedule.customer_name || schedule.conversation_name || schedule.customer_phone || "Agendamento sem cliente")}</strong>
-          <span class="schedule-list-status ${statusClass}">${escapeHtml(statusLabel)}</span>
-        </div>
-        <div class="schedule-list-meta">
-          <span><i class="bi bi-briefcase"></i> ${escapeHtml(schedule.service_name || "-")}</span>
-          <span><i class="bi bi-clock"></i> ${escapeHtml(schedule.scheduled_time || "-")}</span>
+      <div class="schedule-list-main">
+        <div class="schedule-list-summary">
+          <div class="schedule-list-summary-head">
+            <strong class="schedule-list-summary-name">${escapeHtml(
+              schedule.customer_name || schedule.conversation_name || schedule.customer_phone || "Agendamento sem cliente",
+            )}</strong>
+            <span class="schedule-list-status ${statusClass}">${escapeHtml(statusLabel)}</span>
+          </div>
+          <div class="schedule-list-summary-meta">
+            <span><i class="bi bi-briefcase"></i> ${escapeHtml(schedule.service_name || "-")}</span>
+            <span><i class="bi bi-clock"></i> ${escapeHtml(schedule.scheduled_time || "-")}</span>
+          </div>
         </div>
         <div class="schedule-list-details"${isExpanded ? "" : ' hidden'}>
           <span><i class="bi bi-calendar-event"></i> ${escapeHtml(formatCompactBrDate(schedule.scheduled_date || ""))}</span>
@@ -2029,6 +2463,18 @@ function renderSchedulesList() {
         </button>
       </div>
     `;
+    item.addEventListener("click", (event) => {
+      if (event.target.closest(".schedule-list-actions")) {
+        return;
+      }
+      const nextExpanded = !item.classList.contains("expanded");
+      state.expandedScheduleIds[String(schedule.id || "").trim()] = nextExpanded;
+      item.classList.toggle("expanded", nextExpanded);
+      const detailsEl = item.querySelector(".schedule-list-details");
+      if (detailsEl) {
+        detailsEl.hidden = !nextExpanded;
+      }
+    });
     schedulesListEl.appendChild(item);
   }
 }
@@ -3245,9 +3691,11 @@ async function loadCurrentUser() {
     state.currentUser = result.user;
     state.isAuthenticated = true;
     renderSettingsHeader();
+    renderAppBranding();
     settingsBtnEl.style.display = "";
     hideLoginScreen();
     applyResponsiveLayoutState();
+    await loadCompanyBranding();
     return true;
   } catch {
     state.currentUser = null;
@@ -3273,8 +3721,12 @@ async function performLogout() {
     // no-op
   }
   resetAppAfterLogout();
+  state.companyBranding = null;
   state.currentUser = null;
   state.isAuthenticated = false;
+  resetCompanyTheme();
+  renderAppBranding();
+  renderCompanyBranding();
   settingsBtnEl.style.display = "none";
   showLoginScreen();
 }
@@ -3523,6 +3975,8 @@ function getConversationRenderSignature(conv) {
     assignedUserId: String(conv.assigned_user_id || ""),
     assignedUserName: String(conv.assigned_user_name || ""),
     aiAgentEnabled: Boolean(conv.ai_agent_enabled),
+    aiTransferPending: Boolean(conv.ai_transfer_pending),
+    aiTransferReason: String(conv.ai_transfer_reason || ""),
   });
 }
 
@@ -3547,6 +4001,7 @@ function patchConversationNode(node, conv) {
   nameEl.textContent = displayName;
 
   const showBulkAlert = Boolean(conv.bulk_initiated) && String(conv.service_status || "") !== "in_progress";
+  const showAiTransferAlert = Boolean(conv.ai_transfer_pending) && String(conv.service_status || "") === "pending";
   if (showBulkAlert) {
     node.classList.add("bulk-chat");
     const icon = document.createElement("span");
@@ -3556,10 +4011,20 @@ function patchConversationNode(node, conv) {
   } else {
     node.classList.remove("bulk-chat");
   }
+  node.classList.toggle("ai-transfer-chat", showAiTransferAlert);
+  if (showAiTransferAlert) {
+    const icon = document.createElement("span");
+    icon.className = "bulk-alert-icon ai-transfer-icon";
+    icon.textContent = "!";
+    nameEl.prepend(icon);
+  }
 
   node.querySelector(".time").textContent = fmtDateShort(conv.last_message_at || conv.updated_at);
   const previewEl = node.querySelector(".preview");
   previewEl.textContent = conv.last_message_preview || "Sem mensagens";
+  if (showAiTransferAlert) {
+    previewEl.textContent = String(conv.ai_transfer_reason || "").trim() || previewEl.textContent;
+  }
 
   const oldAttendant = node.querySelector(".conversation-attendant");
   if (oldAttendant) oldAttendant.remove();
@@ -5250,6 +5715,7 @@ async function handleLoginSubmit(event) {
     settingsBtnEl.style.display = "";
     hideLoginScreen();
     applyResponsiveLayoutState();
+    await loadCompanyBranding();
     loginPasswordEl.value = "";
     await loadAgents();
     await refreshHealth();
@@ -5748,6 +6214,7 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
         store_delivery_fees: readStoreDeliveryFees(),
       }),
     });
+    await saveCompanyBranding();
     state.agentSettings = result.settings || null;
     renderAgentSettings();
     await showAlert("Informações da loja salvas com sucesso.");
@@ -5756,6 +6223,39 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
   } finally {
     storeInfoSaveBtnEl.disabled = false;
   }
+});
+companyLogoSelectBtnEl?.addEventListener("click", () => companyLogoInputEl?.click());
+companyLogoInputEl?.addEventListener("change", async (event) => {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  try {
+    const dataUrl = await resizeImageToDataUrl(file);
+    const palettes = await generateThemePalettesFromLogo(dataUrl);
+    state.companyBranding = normalizeCompanyBranding({
+      ...(state.companyBranding || {}),
+      logo_data_url: dataUrl,
+      palette_options: palettes,
+      selected_palette_index: 0,
+      selected_palette: palettes[0] || null,
+    });
+    applyCompanyTheme(state.companyBranding.selected_palette || DEFAULT_COMPANY_THEME);
+    renderCompanyBranding();
+  } catch (error) {
+    await showAlert(error.message || "Falha ao processar a logo.");
+  } finally {
+    if (companyLogoInputEl) companyLogoInputEl.value = "";
+  }
+});
+companyLogoClearBtnEl?.addEventListener("click", () => {
+  state.companyBranding = normalizeCompanyBranding({
+    company_id: state.currentUser?.company_id || null,
+    logo_data_url: null,
+    palette_options: [],
+    selected_palette_index: -1,
+    selected_palette: null,
+  });
+  resetCompanyTheme();
+  renderCompanyBranding();
 });
 scheduleSettingsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -6048,12 +6548,6 @@ schedulesListEl.addEventListener("click", async (event) => {
   const schedule = findScheduleById(scheduleId);
   if (!scheduleId || !schedule) return;
 
-  if (action === "toggle-schedule-details") {
-    state.expandedScheduleIds[scheduleId] = !state.expandedScheduleIds[scheduleId];
-    renderSelectedScheduleDay();
-    return;
-  }
-
   if (action === "open-schedule-chat") {
     await openConversationFromEntity(schedule.conversation_id);
     return;
@@ -6292,36 +6786,29 @@ conversationAIAgentToggleEl.addEventListener("change", async () => {
     const conv = state.conversations.find((item) => item.id === conversationId);
     if (conv) {
       conv.ai_agent_enabled = enabled;
-      if (enabled) {
-        conv.service_status = "in_progress";
-        conv.assigned_user_id = null;
-        conv.assigned_user_name = "Agente IA";
-      } else if (!String(conv.assigned_user_id || "").trim() && String(conv.service_status || "") === "in_progress") {
+      if (!enabled && !String(conv.assigned_user_id || "").trim() && String(conv.service_status || "") === "in_progress") {
         conv.service_status = "pending";
         conv.assigned_user_name = "";
       }
     }
     if (state.selectedConversationId === conversationId && state.selectedConversation) {
       state.selectedConversation.ai_agent_enabled = enabled;
-      if (enabled) {
-        state.selectedConversation.service_status = "in_progress";
-        state.selectedConversation.assigned_user_id = null;
-        state.selectedConversation.assigned_user_name = "Agente IA";
-      } else if (
+      if (!enabled && (
         !String(state.selectedConversation.assigned_user_id || "").trim() &&
         String(state.selectedConversation.service_status || "") === "in_progress"
-      ) {
+      )) {
         state.selectedConversation.service_status = "pending";
         state.selectedConversation.assigned_user_name = "";
       }
     }
-    if (enabled) {
+    if (enabled && result?.automation?.replied) {
       state.showAllChats = false;
       state.serviceTab = "in_progress";
     }
     renderConversations();
     renderHeader();
     renderServiceTabs();
+    await loadConversations();
     await loadConversationSummary({ force: true }).catch(() => undefined);
     if (enabled && result?.automation && !result.automation.replied) {
       const reason = String(result.automation.reason || "").trim();

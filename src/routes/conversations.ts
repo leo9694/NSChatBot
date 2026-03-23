@@ -129,6 +129,8 @@ router.get("/", async (req, res) => {
           AND COALESCE(bm.sent_at, bm.created_at) >= (c.metadata->>'bulk_started_at')::timestamptz
       ) AS bulk_has_reply,
       COALESCE((c.metadata->>'ai_agent_enabled')::boolean, false) AS ai_agent_enabled,
+      COALESCE((c.metadata->>'ai_transfer_pending')::boolean, false) AS ai_transfer_pending,
+      COALESCE(c.metadata->>'ai_transfer_reason', '') AS ai_transfer_reason,
       c.unread_count,
       c.created_at,
       c.updated_at,

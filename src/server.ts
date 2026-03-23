@@ -5,7 +5,7 @@ import { env } from "./config/env";
 import { pool } from "./db/pool";
 import { requireAuth } from "./middlewares/auth.middleware";
 import { ensureAuthSchema } from "./repositories/auth.repository";
-import { cleanupInvalidConversations } from "./repositories/conversations.repository";
+import { cleanupInvalidConversations, finalizeInactiveAiConversations } from "./repositories/conversations.repository";
 import authRoutes from "./routes/auth";
 import aiRoutes from "./routes/ai";
 import { processDueScheduleReminders } from "./routes/ai";
@@ -83,6 +83,11 @@ app.listen(env.port, async () => {
     setInterval(() => {
       void processDueScheduleReminders().catch((error) => {
         console.error("Falha ao processar lembretes de agendamento:", error);
+      });
+    }, 60_000);
+    setInterval(() => {
+      void finalizeInactiveAiConversations(24).catch((error) => {
+        console.error("Falha ao finalizar conversas inativas do agente:", error);
       });
     }, 60_000);
     syncLocalMediaDirectoryToDatabase()

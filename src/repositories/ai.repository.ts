@@ -1387,7 +1387,7 @@ export async function confirmAiSchedule(
 
 export async function cancelAiSchedule(
   scheduleId: string,
-  cancelledByUserId: string,
+  cancelledByUserId: string | null,
   reason: string,
 ): Promise<AiScheduleRow | null> {
   await ensureAiSchema();

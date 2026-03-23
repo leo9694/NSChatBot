@@ -3,11 +3,29 @@ import { pool } from "../db/pool";
 
 export type AppUserRole = "ceo" | "administrador" | "operador";
 
+export interface CompanyThemePalette {
+  name: string;
+  bg: string;
+  panel: string;
+  panel_2: string;
+  hover: string;
+  text: string;
+  muted: string;
+  accent: string;
+  bubble_out: string;
+  bubble_in: string;
+  line: string;
+}
+
 export interface AppCompany {
   id: string;
   name: string;
   cnpj: string | null;
   is_active: boolean;
+  logo_data_url?: string | null;
+  theme_palette_options?: CompanyThemePalette[] | null;
+  theme_selected_palette_index?: number | null;
+  theme_selected_palette?: CompanyThemePalette | null;
   created_at: string;
   updated_at: string;
 }
@@ -44,6 +62,33 @@ export interface SessionUser {
 }
 
 let ensureAuthSchemaPromise: Promise<void> | null = null;
+
+function normalizeThemePaletteCandidate(value: any): CompanyThemePalette | null {
+  const palette = {
+    name: String(value?.name || "").trim() || "Paleta",
+    bg: String(value?.bg || "").trim(),
+    panel: String(value?.panel || "").trim(),
+    panel_2: String(value?.panel_2 || value?.panel2 || "").trim(),
+    hover: String(value?.hover || "").trim(),
+    text: String(value?.text || "").trim(),
+    muted: String(value?.muted || "").trim(),
+    accent: String(value?.accent || "").trim(),
+    bubble_out: String(value?.bubble_out || value?.bubbleOut || "").trim(),
+    bubble_in: String(value?.bubble_in || value?.bubbleIn || "").trim(),
+    line: String(value?.line || "").trim(),
+  };
+
+  const looksComplete = Object.values(palette).every((item) => typeof item === "string" && item.trim());
+  if (!looksComplete) {
+    return null;
+  }
+  return palette;
+}
+
+function normalizeCompanyThemePalettes(value: unknown): CompanyThemePalette[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => normalizeThemePaletteCandidate(item)).filter((item): item is CompanyThemePalette => Boolean(item)).slice(0, 3);
+}
 
 async function getDefaultCompanyId(): Promise<string> {
   const result = await pool.query<{ id: string }>(
@@ -160,10 +205,17 @@ export async function ensureAuthSchema(): Promise<void> {
           name VARCHAR(180) NOT NULL,
           cnpj VARCHAR(40),
           is_active BOOLEAN NOT NULL DEFAULT true,
+          logo_data_url TEXT,
+          theme_palette_options JSONB NOT NULL DEFAULT '[]'::jsonb,
+          theme_selected_palette_index INTEGER NOT NULL DEFAULT 0,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+
+      await pool.query(`ALTER TABLE app_companies ADD COLUMN IF NOT EXISTS logo_data_url TEXT`);
+      await pool.query(`ALTER TABLE app_companies ADD COLUMN IF NOT EXISTS theme_palette_options JSONB NOT NULL DEFAULT '[]'::jsonb`);
+      await pool.query(`ALTER TABLE app_companies ADD COLUMN IF NOT EXISTS theme_selected_palette_index INTEGER NOT NULL DEFAULT 0`);
 
       await pool.query(`
         CREATE UNIQUE INDEX IF NOT EXISTS uq_app_companies_name ON app_companies(lower(name));
@@ -661,13 +713,136 @@ export async function listCompanies(): Promise<AppCompany[]> {
   await ensureAuthSchema();
   const result = await pool.query<AppCompany>(
     `
-    SELECT id, name, cnpj, is_active, created_at::text, updated_at::text
+    SELECT
+      id,
+      name,
+      cnpj,
+      is_active,
+      logo_data_url,
+      theme_palette_options,
+      theme_selected_palette_index,
+      created_at::text,
+      updated_at::text
     FROM app_companies
     WHERE is_active = true
     ORDER BY created_at DESC, name ASC
     `,
   );
-  return result.rows;
+  return result.rows.map((row) => {
+    const palettes = normalizeCompanyThemePalettes(row.theme_palette_options);
+    const rawSelectedIndex = Number(row.theme_selected_palette_index);
+    const selectedIndex = Number.isInteger(rawSelectedIndex)
+      ? rawSelectedIndex === -1
+        ? -1
+        : Math.max(0, Math.min(rawSelectedIndex, Math.max(0, palettes.length - 1)))
+      : 0;
+    return {
+      ...row,
+      theme_palette_options: palettes,
+      theme_selected_palette_index: selectedIndex,
+      theme_selected_palette: selectedIndex >= 0 ? palettes[selectedIndex] || null : null,
+    };
+  });
+}
+
+export async function getCompanyBranding(companyId: string): Promise<{
+  company_id: string;
+  logo_data_url: string | null;
+  palette_options: CompanyThemePalette[];
+  selected_palette_index: number;
+  selected_palette: CompanyThemePalette | null;
+} | null> {
+  await ensureAuthSchema();
+  const result = await pool.query<{
+    id: string;
+    logo_data_url: string | null;
+    theme_palette_options: unknown;
+    theme_selected_palette_index: number | null;
+  }>(
+    `
+    SELECT id, logo_data_url, theme_palette_options, theme_selected_palette_index
+    FROM app_companies
+    WHERE id = $1
+      AND is_active = true
+    LIMIT 1
+    `,
+    [companyId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const paletteOptions = normalizeCompanyThemePalettes(row.theme_palette_options);
+  const rawSelectedIndex = Number(row.theme_selected_palette_index);
+  const selectedIndex = Number.isInteger(rawSelectedIndex)
+    ? rawSelectedIndex === -1
+      ? -1
+      : Math.max(0, Math.min(rawSelectedIndex, Math.max(0, paletteOptions.length - 1)))
+    : 0;
+  return {
+    company_id: row.id,
+    logo_data_url: row.logo_data_url || null,
+    palette_options: paletteOptions,
+    selected_palette_index: selectedIndex,
+    selected_palette: selectedIndex >= 0 ? paletteOptions[selectedIndex] || null : null,
+  };
+}
+
+export async function updateCompanyBranding(input: {
+  companyId: string;
+  logoDataUrl?: string | null;
+  paletteOptions?: unknown;
+  selectedPaletteIndex?: number | null;
+}) {
+  await ensureAuthSchema();
+  const paletteOptions = normalizeCompanyThemePalettes(input.paletteOptions);
+  const rawSelectedIndex = Number(input.selectedPaletteIndex);
+  const selectedIndex = Number.isInteger(rawSelectedIndex)
+    ? rawSelectedIndex === -1
+      ? -1
+      : Math.max(0, Math.min(rawSelectedIndex, Math.max(0, paletteOptions.length - 1)))
+    : 0;
+  const logoDataUrl = String(input.logoDataUrl || "").trim() || null;
+
+  if (logoDataUrl && !/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(logoDataUrl)) {
+    throw new Error("INVALID_COMPANY_LOGO_DATA_URL");
+  }
+
+  const result = await pool.query<{
+    id: string;
+    logo_data_url: string | null;
+    theme_palette_options: unknown;
+    theme_selected_palette_index: number | null;
+  }>(
+    `
+    UPDATE app_companies
+    SET
+      logo_data_url = $2,
+      theme_palette_options = $3::jsonb,
+      theme_selected_palette_index = $4,
+      updated_at = NOW()
+    WHERE id = $1
+      AND is_active = true
+    RETURNING id, logo_data_url, theme_palette_options, theme_selected_palette_index
+    `,
+    [input.companyId, logoDataUrl, JSON.stringify(paletteOptions), selectedIndex],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  const normalizedPalettes = normalizeCompanyThemePalettes(row.theme_palette_options);
+  const rawNormalizedIndex = Number(row.theme_selected_palette_index);
+  const normalizedIndex = Number.isInteger(rawNormalizedIndex)
+    ? rawNormalizedIndex === -1
+      ? -1
+      : Math.max(0, Math.min(rawNormalizedIndex, Math.max(0, normalizedPalettes.length - 1)))
+    : 0;
+  return {
+    company_id: row.id,
+    logo_data_url: row.logo_data_url || null,
+    palette_options: normalizedPalettes,
+    selected_palette_index: normalizedIndex,
+    selected_palette: normalizedIndex >= 0 ? normalizedPalettes[normalizedIndex] || null : null,
+  };
 }
 
 export async function createCompanyWithAdmin(input: {

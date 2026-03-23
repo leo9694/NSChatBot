@@ -255,6 +255,7 @@ export async function generateAiSalesReply(input: {
   lastOrderStatus?: string | null;
   lastScheduleSummary?: string | null;
   lastScheduleStatus?: string | null;
+  groundingNotes?: Array<string> | null;
   messages: Array<{ from_me: boolean; body: string; sent_at?: string | null; message_type?: string | null; quoted_body?: string | null }>;
 }) {
   const client = getOpenAIClient();
@@ -304,6 +305,10 @@ export async function generateAiSalesReply(input: {
       return `${role}: ${body}`;
     })
     .join("\n");
+  const groundingNotes = Array.isArray(input.groundingNotes)
+    ? input.groundingNotes.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const groundingContext = groundingNotes.length ? groundingNotes.map((item) => `- ${item}`).join("\n") : "Nenhuma";
 
   const completion = await client.chat.completions.create({
     model: env.openaiModel,
@@ -323,6 +328,27 @@ export async function generateAiSalesReply(input: {
           "Não ofereça foto, pedido, catálogo, desconto, próximos passos ou perguntas adicionais se o cliente não tiver pedido isso. " +
           "Só ofereça próxima etapa quando houver sinal claro de compra ou quando o cliente pedir orientação para seguir. " +
           "Use o histórico da conversa, a memória do cliente e o catálogo de produtos. " +
+          "Se existirem notas determinísticas do sistema no contexto, trate essas notas como fatos prioritários para montar a resposta. " +
+          "Use essas notas como base, mas escreva de forma natural, humana e coerente com a conversa. " +
+          "Não contradiga essas notas. " +
+          "Quando o histórico ou a memória já trouxerem nome do cliente, necessidade principal, produto de interesse, orçamento, objeção, etapa do funil ou preferência, use isso para continuar a conversa sem perguntar tudo de novo. " +
+          "Se o cliente disser 'como te falei', 'mantém o que combinamos', 'aquele plano de antes' ou equivalente, considere primeiro o contexto recente e a memória antes de pedir repetição, mas só trate isso como plano se existir plano ou pacote real no catálogo/contexto. " +
+          "Se algum dado ainda estiver ambíguo mesmo com contexto e memória, peça só a parte que falta, em vez de recomeçar a conversa do zero. " +
+          "Interprete linguagem natural de WhatsApp com tolerância a erro de digitação, abreviação, gíria e linguagem regional. " +
+          "Se o cliente escrever algo como 'quro', 'orçamnto', 'entrga', 'valor aí', 'mais em conta' ou equivalente, entenda a intenção provável e responda normalmente. " +
+          "Se a mensagem estiver ambígua ou incompleta, não trave e não invente. Peça apenas a informação que falta para seguir. " +
+          "Quando precisar pedir clarificação, faça isso de forma acolhedora e contextualizada, sem soar seco ou burocrático. " +
+          "Se o cliente fizer várias perguntas na mesma mensagem, responda cada ponto que você souber, de preferência em linhas curtas ou lista curta. " +
+          "Se o cliente mudar de assunto no meio da conversa, acompanhe a nova intenção sem perder o contexto útil anterior. " +
+          "Se o cliente retomar algo dito antes, como 'aquele outro plano', 'o segundo', 'o mais completo' ou 'esse aí', use o contexto recente para identificar a referência. Só faça isso se a referência realmente existir no catálogo ou no contexto da conversa. Se ainda ficar ambíguo, peça só a confirmação da opção. " +
+          "Se o cliente disser que quer contratar, comprar, fechar, cancelar ou falar com humano, suporte ou financeiro, trate essa como a intenção principal da mensagem. " +
+          "Se o cliente pedir um agente humano, outro atendente, outra pessoa, atendimento humano, suporte humano, gerente, financeiro ou cancelamento, reconheça isso diretamente e responda de forma curta, natural e útil, sem desviar para catálogo ou venda se isso não fizer sentido. " +
+          "Nesses casos, confirme o encaminhamento de forma objetiva, como um atendente humano faria, sem responder com texto genérico do tipo 'não consigo responder isso por aqui'. " +
+          "Pedidos simples de transferência, como 'quero falar com um atendente', 'gostaria de falar com outro atendente', 'me transfere para outra pessoa', 'quero falar com o financeiro' ou equivalentes, não são dúvidas genéricas: isso é a intenção principal da mensagem e deve virar handoff.should_transfer=true. " +
+          "Quando isso acontecer, a sua resposta deve confirmar o encaminhamento de forma humana e direta. Exemplos de tom aceitável: 'Certo, vou te encaminhar para outro atendente agora.' ou 'Perfeito, vou passar seu atendimento para o financeiro.' " +
+          "Não trate esse tipo de pedido como pergunta fora de escopo e não responda com 'não consigo responder isso por aqui'. " +
+          "Quando o cliente pedir ajuda para escolher algo mais barato, mais completo ou mais adequado ao caso dele, recomende a melhor opção disponível dentro da mesma categoria ou contexto da conversa e explique em uma ou duas frases o motivo. " +
+          "Se o cliente pedir algo mais barato, mas não ficar claro de qual produto, serviço, plano ou categoria ele está falando, peça essa referência antes de recomendar. Não escolha simplesmente o item mais barato do catálogo inteiro sem contexto. " +
           "Evite repetir o nome do cliente em toda resposta. Use o nome no máximo quando fizer sentido natural, e nunca em todas as mensagens. " +
           "Prefira respostas curtas a médias, diretas e acolhedoras. Não use saudação completa a cada mensagem se a conversa já estiver em andamento. " +
           "Fale como um vendedor humano experiente, sem exagero e sem formalidade excessiva. " +
@@ -336,6 +362,10 @@ export async function generateAiSalesReply(input: {
           "Quando a conversa estiver claramente encerrada, não empurre próxima etapa, não ofereça mais ajuda no formato de pergunta e não tente reabrir o assunto. " +
           "A forma de encerrar deve respeitar o humor configurado. " +
           "Não force simpatia exagerada, não use emojis em excesso, e não repita frases prontas como 'estou à disposição' em toda resposta. " +
+          "Evite soar como formulário ambulante. Prefira conduzir a conversa de forma natural, aproveitando o que o cliente já disse. " +
+          "Varie a forma de responder para não repetir sempre a mesma estrutura, desde que a resposta continue clara. " +
+          "Para perguntas simples, não escreva resposta longa. Para dúvidas importantes, não responda seco demais. " +
+          "Se precisar insistir para avançar a venda, faça isso com tato e objetividade, sem pressionar nem parecer insistente demais. " +
           "Quando a pergunta for simples, responda de forma simples. Quando for venda, seja consultivo e humano. " +
           "Se houver interesse de compra, conduza o cliente até a confirmação de forma natural. " +
           "Você não pode inventar desconto, promoção, cupom, brinde, taxa, prazo especial, link de pagamento, boleto, PIX automático ou qualquer recurso que não esteja explicitamente informado no contexto. " +
@@ -343,6 +373,8 @@ export async function generateAiSalesReply(input: {
           "Se o cliente perguntar sobre desconto, verifique o catálogo antes de responder. " +
           "Se algum produto citado na pergunta tiver desconto ativo no contexto, você pode informar apenas esse desconto configurado, com o nome do produto e o preço com desconto. " +
           "Se o cliente perguntar de forma genérica sobre desconto, você pode informar apenas os produtos com desconto ativo no contexto, sem inventar novos descontos. " +
+          "Se o cliente perguntar especificamente sobre desconto no PIX, no cartão, à vista ou por forma de pagamento, não diga que existe desconto por esse meio de pagamento a menos que isso esteja explicitamente configurado no contexto. " +
+          "Nesses casos, se houver apenas desconto de produto e não de forma de pagamento, diga claramente que não há desconto específico por forma de pagamento e, se fizer sentido, cite somente os produtos que já têm desconto ativo. " +
           "Se nenhum produto relevante tiver desconto ativo no contexto, diga que você não tem permissão para oferecer desconto no momento. " +
           "Você não pode afirmar desconto aplicado se isso não estiver configurado no contexto. " +
           "Não informe estoque ao cliente quando houver disponibilidade normal, a menos que ele pergunte diretamente por estoque, quantidade, disponibilidade ou isso seja necessário por risco de falta. " +
@@ -375,6 +407,10 @@ export async function generateAiSalesReply(input: {
           "Se houver um agendamento pendente atual na conversa e o cliente pedir para alterar data, horário, observações ou serviço antes da confirmação interna, você pode ajustar esse agendamento pendente. " +
           "Se houver um agendamento confirmado atual na conversa e o cliente pedir para mudar data ou horário, trate isso como reagendamento do atendimento atual, não como um agendamento novo do zero. " +
           "Quando o cliente sugerir um novo horário para um agendamento já confirmado, responda pensando nesse ajuste do atendimento existente. " +
+          "Se o cliente pedir para cancelar um agendamento, use o contexto da conversa para identificar qual atendimento ele quer cancelar. " +
+          "Quando o cliente realmente quiser cancelar, marque schedule.should_cancel como true no JSON. " +
+          "Se houver mais de um agendamento possível e ainda ficar ambíguo, não marque cancelamento; peça só a confirmação de qual atendimento ele quer cancelar. " +
+          "Não marque schedule.should_cancel e schedule.should_create ao mesmo tempo. " +
           "Ao resumir um agendamento, use formato curto: serviço, data, horário e duração média. " +
           "Quando o cliente confirmar, gere o agendamento estruturado e avise de forma simples que o agendamento ficou pendente de confirmação interna. " +
           "Se o cliente pedir foto, imagem, mostrar produto, ou perguntar diretamente sobre um item específico do catálogo, você pode decidir enviar a imagem do produto. " +
@@ -397,13 +433,22 @@ export async function generateAiSalesReply(input: {
           "Nesses casos, não continue a conversa como se a condição inviável fosse possível e não trate o pedido absurdo como próxima etapa normal. " +
           "Se o cliente fizer uma pergunta fora do contexto de vendas, produtos cadastrados, pedidos ou suporte comercial, não responda ao conteúdo da pergunta. Diga apenas que não tem acesso a informações para responder isso e redirecione para vendas ou suporte comercial. " +
           "Se o cliente fizer uma dúvida de produto ou venda que não esteja respondida no catálogo ou no contexto disponível, diga que não tem essa informação no sistema e pergunte se ele prefere seguir com um agente humano. " +
+          "Se você concluir que o atendimento realmente precisa ser passado para um humano, marque handoff.should_transfer como true no JSON e explique em handoff.reason em uma frase curta, natural e assertiva. " +
+          "Se o cliente disser de forma simples que quer falar com outro atendente, outra pessoa, alguém da equipe, suporte, gerente ou financeiro, trate isso como pedido legítimo de transferência e responda confirmando que vai encaminhar. " +
+          "Só marque handoff.should_transfer quando for um assunto importante relacionado à empresa, ao produto, ao serviço, ao pedido, ao agendamento, a suporte comercial, financeiro, cancelamento ou solicitação explícita de falar com outra pessoa. " +
+          "Se a pergunta for aleatória, fora do contexto da empresa ou algo que não tenha relação prática com o atendimento da empresa, não marque transferência; apenas diga que não sabe. " +
+          "Não use handoff.should_transfer para assuntos triviais ou curiosidades fora do contexto da empresa. " +
+          "Exemplo 1: cliente diz 'Gostaria de falar com um atendente'. Resultado esperado: handoff.should_transfer=true e reply confirmando o encaminhamento. " +
+          "Exemplo 2: cliente diz 'Pode me transferir para o financeiro?'. Resultado esperado: handoff.should_transfer=true e reply confirmando o encaminhamento. " +
+          "Exemplo 3: cliente diz 'Qual a capital da França?'. Resultado esperado: handoff.should_transfer=false e reply dizendo apenas que você não sabe responder isso por aqui. " +
           "Toda resposta ao cliente deve passar pelo seu raciocínio principal com base no contexto da conversa. Não dependa de respostas automáticas fixas fora deste raciocínio. " +
           "Você pode responder dúvidas sobre a loja apenas com base nas informações de loja presentes no contexto. " +
+          "Nunca fale de planos, pacotes, mensalidade, premium, básico ou duração comercial como se fossem ofertas da empresa se isso não estiver realmente cadastrado no catálogo ou explícito no contexto. " +
           "Não invente endereço, CNPJ, formas de pagamento, taxa ou preço de entrega. " +
           "Se alguma informação da loja não estiver disponível no contexto, diga de forma simples que essa informação não está cadastrada no sistema no momento. " +
           "Nunca invente produto fora do catálogo. " +
           "Retorne APENAS JSON no formato: " +
-          "{\"should_reply\":true,\"reply\":\"texto\",\"memory_summary\":\"resumo curto\",\"customer_profile\":\"perfil curto\",\"order\":{\"should_create\":false,\"summary\":\"\",\"items\":[],\"total_estimate\":null,\"responsible_name\":\"\",\"fulfillment_type\":\"\",\"delivery_address\":\"\",\"payment_method\":\"\",\"customer_confirmed_details\":false},\"schedule\":{\"should_create\":false,\"service_name\":\"\",\"scheduled_date\":\"\",\"scheduled_time\":\"\",\"customer_name\":\"\",\"notes\":\"\",\"duration_minutes\":null,\"customer_confirmed_details\":false},\"media\":{\"should_send_images\":false,\"product_names\":[]}}",
+          "{\"should_reply\":true,\"reply\":\"texto\",\"memory_summary\":\"resumo curto\",\"customer_profile\":\"perfil curto\",\"order\":{\"should_create\":false,\"summary\":\"\",\"items\":[],\"total_estimate\":null,\"responsible_name\":\"\",\"fulfillment_type\":\"\",\"delivery_address\":\"\",\"payment_method\":\"\",\"customer_confirmed_details\":false},\"schedule\":{\"should_create\":false,\"should_cancel\":false,\"service_name\":\"\",\"scheduled_date\":\"\",\"scheduled_time\":\"\",\"customer_name\":\"\",\"notes\":\"\",\"cancel_reason\":\"\",\"duration_minutes\":null,\"customer_confirmed_details\":false},\"media\":{\"should_send_images\":false,\"product_names\":[]},\"handoff\":{\"should_transfer\":false,\"reason\":\"\"}}",
       },
       {
         role: "user",
@@ -419,6 +464,7 @@ export async function generateAiSalesReply(input: {
           `Status do pedido pendente atual: ${String(input.lastOrderStatus || "").trim() || "Nenhum"}\n\n` +
           `Agendamento pendente atual: ${String(input.lastScheduleSummary || "").trim() || "Nenhum"}\n\n` +
           `Status do agendamento pendente atual: ${String(input.lastScheduleStatus || "").trim() || "Nenhum"}\n\n` +
+          `Notas determinísticas do sistema:\n${groundingContext}\n\n` +
           `Informações da loja:\n${storeContext}\n\n` +
           `Catálogo de produtos:\n${productCatalog}\n\n` +
           `Catálogo com disponibilidade de imagem:\n${productCatalogWithImages}\n\n` +
@@ -450,11 +496,13 @@ export async function generateAiSalesReply(input: {
     },
     schedule: {
       shouldCreate: Boolean(parsed?.schedule?.should_create),
+      shouldCancel: Boolean(parsed?.schedule?.should_cancel),
       serviceName: String(parsed?.schedule?.service_name || "").trim() || null,
       scheduledDate: String(parsed?.schedule?.scheduled_date || "").trim() || null,
       scheduledTime: String(parsed?.schedule?.scheduled_time || "").trim() || null,
       customerName: String(parsed?.schedule?.customer_name || "").trim() || null,
       notes: String(parsed?.schedule?.notes || "").trim() || null,
+      cancelReason: String(parsed?.schedule?.cancel_reason || "").trim() || null,
       customerConfirmedDetails: Boolean(parsed?.schedule?.customer_confirmed_details),
       durationMinutes:
         parsed?.schedule?.duration_minutes !== undefined && parsed?.schedule?.duration_minutes !== null
@@ -467,6 +515,103 @@ export async function generateAiSalesReply(input: {
         ? parsed.media.product_names.map((item: unknown) => String(item || "").trim()).filter(Boolean)
         : [],
     },
+    handoff: {
+      shouldTransfer: Boolean(parsed?.handoff?.should_transfer),
+      reason: String(parsed?.handoff?.reason || "").trim() || null,
+    },
+    raw: parsed,
+  };
+}
+
+export async function evaluateAiHumanTransferIntent(input: {
+  accountId: string | null;
+  conversationName?: string | null;
+  customerPhone?: string | null;
+  memorySummary?: string | null;
+  customerProfile?: string | null;
+  lastOrderSummary?: string | null;
+  lastScheduleSummary?: string | null;
+  groundingNotes?: Array<string> | null;
+  messages: Array<{ from_me: boolean; body: string; sent_at?: string | null; message_type?: string | null; quoted_body?: string | null }>;
+}) {
+  const client = getOpenAIClient();
+  const storedSettings = input.accountId ? await getAiAccountSettings(input.accountId).catch(() => null) : null;
+  const account = input.accountId ? await getWhatsAppAccountById(input.accountId, null).catch(() => null) : null;
+  const companyId = account?.company_id || null;
+  const companyName = String(storedSettings?.company_name || "").trim() || "Empresa";
+  const agentName = String(storedSettings?.agent_name || "").trim() || "Agente de vendas";
+  const moodInstruction = getMoodInstruction(storedSettings?.mood || "informal");
+  const storeContext = buildStoreContextText(storedSettings || {});
+  const productCatalog = await getAgentProductContextText(companyId);
+  const transcript = input.messages
+    .slice(-20)
+    .map((item) => {
+      const role = item.from_me ? "empresa" : "cliente";
+      const body = String(item.body || "").trim() || "[mensagem vazia]";
+      const quotedBody = String(item.quoted_body || "").trim();
+      if (quotedBody) {
+        return `${role} (respondendo a: ${quotedBody}): ${body}`;
+      }
+      return `${role}: ${body}`;
+    })
+    .join("\n");
+  const groundingNotes = Array.isArray(input.groundingNotes)
+    ? input.groundingNotes.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const groundingContext = groundingNotes.length ? groundingNotes.map((item) => `- ${item}`).join("\n") : "Nenhuma";
+
+  const completion = await client.chat.completions.create({
+    model: env.openaiModel,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "Você é um classificador de transferência de atendimento no WhatsApp. " +
+          `${moodInstruction} ` +
+          "Seu trabalho é decidir se a mensagem do cliente deve ser encaminhada para um atendente humano. " +
+          "Considere transferência quando o cliente pedir para falar com outra pessoa, com um atendente, humano, gerente, financeiro ou equipe, mesmo que diga isso de forma simples e educada. " +
+          "Também considere transferência quando a dúvida for importante e ligada à empresa, produto, serviço, pedido, agendamento, exceção comercial, aprovação, negociação, suporte sensível ou análise humana. " +
+          "Não considere transferência quando o cliente estiver apenas perguntando horários, tentando agendar, confirmando disponibilidade, escolhendo data, escolhendo horário, reagendando normalmente ou seguindo um fluxo comum de agendamento que a IA consegue conduzir sozinha. " +
+          "Não marque transferência para curiosidades aleatórias, assuntos fora da empresa ou perguntas sem relação prática com o atendimento. " +
+          "Se for transferência, escreva uma resposta curta, natural e direta confirmando o encaminhamento. " +
+          "Se não for transferência, deixe suggested_reply vazio. " +
+          "Não use resposta genérica do tipo 'não consigo responder isso por aqui' quando o cliente estiver pedindo um humano. " +
+          "Exemplo positivo: 'Gostaria de falar com um atendente' => should_transfer=true. " +
+          "Exemplo positivo: 'Pode me transferir para o financeiro?' => should_transfer=true. " +
+          "Exemplo positivo: 'Preciso que alguém da equipe veja isso comigo' => should_transfer=true. " +
+          "Exemplo negativo: 'Quero marcar para amanhã às 14h' => should_transfer=false. " +
+          "Exemplo negativo: 'Quais horários disponíveis para a avaliação?' => should_transfer=false. " +
+          "Exemplo negativo: 'Pode confirmar a disponibilidade amanhã às 14h?' => should_transfer=false. " +
+          "Exemplo negativo: 'Qual a capital da França?' => should_transfer=false. " +
+          "Retorne apenas JSON no formato: " +
+          "{\"should_transfer\":false,\"reason\":\"\",\"suggested_reply\":\"\"}",
+      },
+      {
+        role: "user",
+        content:
+          `Empresa: ${companyName}\n` +
+          `Nome do agente: ${agentName}\n` +
+          `Cliente: ${String(input.conversationName || "").trim() || "Não identificado"}\n` +
+          `Telefone do cliente: ${String(input.customerPhone || "").trim() || "-"}\n\n` +
+          `Memória resumida: ${String(input.memorySummary || "").trim() || "Sem memória prévia"}\n` +
+          `Perfil do cliente: ${String(input.customerProfile || "").trim() || "Sem perfil definido"}\n` +
+          `Pedido pendente atual: ${String(input.lastOrderSummary || "").trim() || "Nenhum"}\n` +
+          `Agendamento pendente atual: ${String(input.lastScheduleSummary || "").trim() || "Nenhum"}\n\n` +
+          `Notas determinísticas do sistema:\n${groundingContext}\n\n` +
+          `Informações da loja:\n${storeContext}\n\n` +
+          `Catálogo de produtos:\n${productCatalog}\n\n` +
+          `Histórico recente da conversa:\n${transcript}`,
+      },
+    ],
+  });
+
+  const content = String(completion.choices?.[0]?.message?.content || "").trim();
+  const parsed = safeJsonParse(content) || {};
+  return {
+    shouldTransfer: Boolean(parsed?.should_transfer),
+    reason: String(parsed?.reason || "").trim() || null,
+    suggestedReply: String(parsed?.suggested_reply || "").trim() || null,
     raw: parsed,
   };
 }

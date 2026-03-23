@@ -278,6 +278,10 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
           true
         ),
         service_status = CASE
+          WHEN assigned_user_id IS NULL
+            AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
+            AND service_status = 'in_progress'
+            THEN 'in_progress'
           WHEN assigned_user_id IS NULL THEN 'pending'
           ELSE service_status
         END,
