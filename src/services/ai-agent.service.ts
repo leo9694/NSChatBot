@@ -197,7 +197,7 @@ function buildProductImageCaption(
   const name = String(product.name || "").trim();
   const description = String(product.description || "").trim();
   const numericPrice = Number(product.price || 0);
-  const formattedPrice = Number.isFinite(numericPrice) ? `PreÃ§o: R$${numericPrice.toFixed(2)}` : "";
+  const formattedPrice = Number.isFinite(numericPrice) ? `Preço: R$${numericPrice.toFixed(2)}` : "";
   const hasNumericStock = Number.isFinite(Number(product.stock));
   const formattedStock = hasNumericStock ? `Estoque: ${Math.max(0, Math.round(Number(product.stock)))}` : "";
 
@@ -243,7 +243,7 @@ function buildProductImageCaption(
       lines.push(formattedPrice);
     }
     if (explicitDescriptionRule && description) {
-      lines.push(`DescriÃ§Ã£o: ${description}`);
+      lines.push(`Descrição: ${description}`);
     }
     if (explicitStockRule && formattedStock) {
       lines.push(formattedStock);
