@@ -5806,12 +5806,20 @@ async function handleLoginSubmit(event) {
     settingsBtnEl.style.display = "";
     hideLoginScreen();
     applyResponsiveLayoutState();
-    await loadCompanyBranding();
     loginPasswordEl.value = "";
-    await loadAgents();
-    await refreshHealth();
-    await loadConversations();
-    await loadUsersForSettings();
+    const postLoginTasks = [
+      loadCompanyBranding(),
+      loadAgents(),
+      refreshHealth(),
+      loadConversations(),
+      loadUsersForSettings(),
+    ];
+    void Promise.allSettled(postLoginTasks).then((results) => {
+      const rejected = results.filter((item) => item.status === "rejected");
+      if (rejected.length > 0) {
+        console.error("Falhas em tarefas pós-login:", rejected.map((item) => item.reason));
+      }
+    });
   } catch (error) {
     await showAlert(error.message || "Falha no login.");
   } finally {
