@@ -274,6 +274,9 @@ const agentSettingsFormEl = document.getElementById("agentSettingsForm");
 const agentMoodInputEl = document.getElementById("agentMoodInput");
 const agentNameInputEl = document.getElementById("agentNameInput");
 const companyNameInputEl = document.getElementById("companyNameInput");
+const agentGuidelinesInputEl = document.getElementById("agentGuidelinesInput");
+const agentGuidelinesAddBtnEl = document.getElementById("agentGuidelinesAddBtn");
+const agentGuidelinesListEl = document.getElementById("agentGuidelinesList");
 const agentSettingsSaveBtnEl = document.getElementById("agentSettingsSaveBtn");
 const productsFormEl = document.getElementById("productsForm");
 const productIdEl = document.getElementById("productId");
@@ -1028,6 +1031,10 @@ function renderAgentSettings() {
   agentMoodInputEl.value = String(settings.mood || "informal");
   agentNameInputEl.value = String(settings.agent_name || "");
   companyNameInputEl.value = String(settings.company_name || "");
+  if (agentGuidelinesInputEl) {
+    agentGuidelinesInputEl.value = "";
+  }
+  renderAgentGuidelinesList(Array.isArray(settings.agent_guidelines) ? settings.agent_guidelines : []);
   if (storeNameInputEl) storeNameInputEl.value = String(settings.store_name || "");
   if (storeCnpjInputEl) storeCnpjInputEl.value = String(settings.store_cnpj || "");
   const parsedStoreAddress = parseStoreAddressParts(String(settings.store_address || ""));
@@ -1060,6 +1067,86 @@ function renderAgentSettings() {
   updateScheduleReminderState();
   renderAppBranding();
   renderCompanyBranding();
+}
+
+function normalizeAgentGuidelineLine(value) {
+  return String(value || "").replace(/^\s*[-*•]\s*/, "").replace(/\s+/g, " ").trim();
+}
+
+function renderAgentGuidelinesList(guidelines = []) {
+  if (!agentGuidelinesListEl) return;
+  const normalized = Array.isArray(guidelines) ? guidelines.map((item) => normalizeAgentGuidelineLine(item)).filter(Boolean) : [];
+  agentGuidelinesListEl.innerHTML = "";
+
+  if (!normalized.length) {
+    const empty = document.createElement("div");
+    empty.className = "agent-guidelines-empty";
+    empty.textContent = "Nenhuma diretriz adicionada ainda.";
+    agentGuidelinesListEl.appendChild(empty);
+    return;
+  }
+
+  normalized.forEach((guideline, index) => {
+    const item = document.createElement("div");
+    item.className = "agent-guideline-item";
+
+    const text = document.createElement("div");
+    text.className = "agent-guideline-text";
+    text.textContent = guideline;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn-secondary agent-guideline-remove-btn";
+    removeBtn.setAttribute("aria-label", "Excluir diretriz");
+    removeBtn.innerHTML = '<i class="bi bi-trash"></i>';
+    removeBtn.addEventListener("click", () => {
+      const nextGuidelines = normalized.filter((_, itemIndex) => itemIndex !== index);
+      if (!state.agentSettings) state.agentSettings = {};
+      state.agentSettings.agent_guidelines = nextGuidelines;
+      renderAgentGuidelinesList(nextGuidelines);
+    });
+
+    item.appendChild(text);
+    item.appendChild(removeBtn);
+    agentGuidelinesListEl.appendChild(item);
+  });
+}
+
+function addAgentGuideline() {
+  const nextGuideline = normalizeAgentGuidelineLine(agentGuidelinesInputEl?.value || "");
+  if (!nextGuideline) return;
+  const current = Array.isArray(state.agentSettings?.agent_guidelines) ? state.agentSettings.agent_guidelines : [];
+  if (current.some((item) => normalizeAgentGuidelineLine(item) === nextGuideline)) {
+    if (agentGuidelinesInputEl) agentGuidelinesInputEl.value = "";
+    return;
+  }
+  const nextGuidelines = [...current, nextGuideline];
+  if (!state.agentSettings) state.agentSettings = {};
+  state.agentSettings.agent_guidelines = nextGuidelines;
+  if (agentGuidelinesInputEl) {
+    agentGuidelinesInputEl.value = "";
+    agentGuidelinesInputEl.focus();
+  }
+  renderAgentGuidelinesList(nextGuidelines);
+}
+
+function collectAgentGuidelines() {
+  const inputValue = normalizeAgentGuidelineLine(agentGuidelinesInputEl?.value || "");
+  const current = Array.isArray(state.agentSettings?.agent_guidelines) ? state.agentSettings.agent_guidelines : [];
+  return inputValue ? [...current, inputValue] : [...current];
+}
+
+if (agentGuidelinesAddBtnEl) {
+  agentGuidelinesAddBtnEl.addEventListener("click", addAgentGuideline);
+}
+
+if (agentGuidelinesInputEl) {
+  agentGuidelinesInputEl.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      addAgentGuideline();
+    }
+  });
 }
 
 const DEFAULT_COMPANY_THEME = {
@@ -2172,7 +2259,10 @@ async function loadAgentStatus() {
     return;
   }
   const settings = await api(`/ai/settings?account_id=${encodeURIComponent(accountId)}`, { cache: "no-store" });
-  state.agentSettings = settings;
+  state.agentSettings = {
+    ...settings,
+    agent_guidelines: Array.isArray(settings.agent_guidelines) ? settings.agent_guidelines : [],
+  };
   renderAgentSettings();
 }
 
@@ -2267,6 +2357,7 @@ function renderOrders() {
         <span>${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
         <span>${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
         <span>${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
+        ${order.notes ? `<span>Observação: ${escapeHtml(order.notes)}</span>` : ""}
         ${order.ready_time_minutes ? `<span>Tempo mínimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
         ${order.confirmation_note ? `<span>Observação da confirmação: ${escapeHtml(order.confirmation_note)}</span>` : ""}
         ${order.cancel_reason ? `<span>Motivo do cancelamento: ${escapeHtml(order.cancel_reason)}</span>` : ""}
@@ -6172,6 +6263,7 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
         mood: String(agentMoodInputEl.value || "informal").trim(),
         agent_name: String(agentNameInputEl.value || "").trim(),
         company_name: String(companyNameInputEl.value || "").trim(),
+        agent_guidelines: collectAgentGuidelines(),
         store_name: String(storeNameInputEl?.value || state.agentSettings?.store_name || "").trim(),
         store_cnpj: String(storeCnpjInputEl?.value || state.agentSettings?.store_cnpj || "").trim(),
         store_address: buildStoreAddressText() || String(state.agentSettings?.store_address || "").trim(),
@@ -6206,6 +6298,7 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
         mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
         agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
         company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),
+        agent_guidelines: collectAgentGuidelines(),
         store_name: String(storeNameInputEl.value || "").trim(),
         store_cnpj: String(storeCnpjInputEl.value || "").trim(),
         store_address: buildStoreAddressText(),
@@ -6308,6 +6401,7 @@ scheduleSettingsFormEl.addEventListener("submit", async (event) => {
         mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
         agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
         company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),
+        agent_guidelines: collectAgentGuidelines(),
         store_name: String(storeNameInputEl?.value || state.agentSettings?.store_name || "").trim(),
         store_cnpj: String(storeCnpjInputEl?.value || state.agentSettings?.store_cnpj || "").trim(),
         store_address: buildStoreAddressText() || String(state.agentSettings?.store_address || "").trim(),

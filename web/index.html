@@ -314,22 +314,40 @@
                   </div>
 
                   <form id="agentSettingsForm" class="new-chat-form agent-settings-form">
-                    <label>
-                      Humor
-                      <select id="agentMoodInput">
-                        <option value="amigavel">Amigável</option>
-                        <option value="informal">Informal</option>
-                        <option value="formal">Formal</option>
-                      </select>
-                    </label>
-                    <label>
-                      Nome do agente
-                      <input id="agentNameInput" type="text" placeholder="Ex.: Zenaide" />
-                    </label>
-                    <label>
-                      Nome da empresa
-                      <input id="companyNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
-                    </label>
+                    <div class="agent-settings-grid">
+                      <label>
+                        Humor
+                        <select id="agentMoodInput">
+                          <option value="amigavel">Amigável</option>
+                          <option value="informal">Informal</option>
+                          <option value="formal">Formal</option>
+                        </select>
+                      </label>
+                      <label>
+                        Nome do agente
+                        <input id="agentNameInput" type="text" placeholder="Ex.: Zenaide" />
+                      </label>
+                      <label>
+                        Nome da empresa
+                        <input id="companyNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
+                      </label>
+                    </div>
+
+                    <div class="agent-guidelines-field">
+                      <span class="agent-guidelines-title">Diretrizes da empresa</span>
+                      <span class="agent-guidelines-help">Adicione uma diretriz por vez. O agente vai seguir essas orientações nesta empresa.</span>
+                      <div class="agent-guidelines-input-row">
+                        <textarea
+                          id="agentGuidelinesInput"
+                          rows="3"
+                          placeholder="Ex.: As fotos devem ser enviadas com descrição."
+                        ></textarea>
+                        <button id="agentGuidelinesAddBtn" type="button" class="btn-secondary agent-guidelines-add-btn" aria-label="Adicionar diretriz">
+                          <i class="bi bi-plus-lg"></i>
+                        </button>
+                      </div>
+                      <div id="agentGuidelinesList" class="agent-guidelines-list"></div>
+                    </div>
                     <button id="agentSettingsSaveBtn" type="submit" class="btn-primary">Salvar configurações do agente</button>
                   </form>
                 </div>

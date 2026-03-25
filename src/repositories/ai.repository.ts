@@ -5,6 +5,7 @@ export interface AiAccountSettingsRow {
   agent_name: string | null;
   company_name: string | null;
   mood: string | null;
+  agent_guidelines: Array<string>;
   store_name: string | null;
   store_description: string | null;
   store_cnpj: string | null;
@@ -41,6 +42,7 @@ export interface AiOrderRow {
   fulfillment_type: string | null;
   delivery_address: string | null;
   payment_method: string | null;
+  notes: string | null;
   status: string;
   customer_confirmed_at: string | null;
   confirmed_at: string | null;
@@ -131,6 +133,10 @@ export async function ensureAiSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE ai_account_settings
         ADD COLUMN IF NOT EXISTS mood VARCHAR(20)
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS agent_guidelines JSONB NOT NULL DEFAULT '[]'::jsonb
       `);
       await pool.query(`
         ALTER TABLE ai_account_settings
@@ -257,6 +263,10 @@ export async function ensureAiSchema(): Promise<void> {
         ALTER TABLE ai_orders
         ADD COLUMN IF NOT EXISTS confirmation_note TEXT
       `);
+      await pool.query(`
+        ALTER TABLE ai_orders
+        ADD COLUMN IF NOT EXISTS notes TEXT
+      `);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS ai_service_schedules (
@@ -327,6 +337,7 @@ export async function getAiAccountSettings(accountId: string): Promise<AiAccount
       agent_name,
       company_name,
       mood,
+      COALESCE(agent_guidelines, '[]'::jsonb) AS agent_guidelines,
       store_name,
       store_description,
       store_cnpj,
@@ -555,6 +566,7 @@ export async function upsertAiAccountSettings(input: {
   agentName?: string | null;
   companyName?: string | null;
   mood?: string | null;
+  agentGuidelines?: Array<string>;
   storeName?: string | null;
   storeDescription?: string | null;
   storeCnpj?: string | null;
@@ -575,6 +587,7 @@ export async function upsertAiAccountSettings(input: {
       agent_name,
       company_name,
       mood,
+      agent_guidelines,
       store_name,
       store_description,
       store_cnpj,
@@ -587,11 +600,12 @@ export async function upsertAiAccountSettings(input: {
       schedule_reminder_minutes,
       schedule_reminder_rules
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $14, $15::jsonb)
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16::jsonb)
     ON CONFLICT (account_id) DO UPDATE
       SET agent_name = EXCLUDED.agent_name,
           company_name = EXCLUDED.company_name,
           mood = EXCLUDED.mood,
+          agent_guidelines = EXCLUDED.agent_guidelines,
           store_name = EXCLUDED.store_name,
           store_description = EXCLUDED.store_description,
           store_cnpj = EXCLUDED.store_cnpj,
@@ -609,6 +623,7 @@ export async function upsertAiAccountSettings(input: {
       agent_name,
       company_name,
       mood,
+      COALESCE(agent_guidelines, '[]'::jsonb) AS agent_guidelines,
       store_name,
       store_description,
       store_cnpj,
@@ -628,6 +643,7 @@ export async function upsertAiAccountSettings(input: {
       input.agentName || null,
       input.companyName || null,
       input.mood || null,
+      JSON.stringify(Array.isArray(input.agentGuidelines) ? input.agentGuidelines : []),
       input.storeName || null,
       input.storeDescription || null,
       input.storeCnpj || null,
@@ -690,6 +706,7 @@ export async function getConversationAiContext(conversationId: string): Promise<
       latest_open_order.fulfillment_type AS open_order_fulfillment_type,
       latest_open_order.delivery_address AS open_order_delivery_address,
       latest_open_order.payment_method AS open_order_payment_method,
+      latest_open_order.notes AS open_order_notes,
       latest_open_schedule.id AS open_schedule_id,
       latest_open_schedule.status AS open_schedule_status,
       latest_open_schedule.service_product_id AS open_schedule_service_product_id,
@@ -727,7 +744,8 @@ export async function getConversationAiContext(conversationId: string): Promise<
         ao.responsible_name,
         ao.fulfillment_type,
         ao.delivery_address,
-        ao.payment_method
+        ao.payment_method,
+        ao.notes
       FROM ai_orders ao
       WHERE ao.conversation_id = c.id
         AND ao.status = 'pending_confirmation'
@@ -792,6 +810,7 @@ export async function updatePendingAiOrder(input: {
   fulfillmentType?: string | null;
   deliveryAddress?: string | null;
   paymentMethod?: string | null;
+  notes?: string | null;
 }): Promise<AiOrderRow | null> {
   await ensureAiSchema();
   const result = await pool.query<AiOrderRow>(
@@ -805,6 +824,7 @@ export async function updatePendingAiOrder(input: {
       fulfillment_type = $6,
       delivery_address = $7,
       payment_method = $8,
+      notes = $9,
       customer_confirmed_at = NOW(),
       updated_at = NOW()
     WHERE id = $1
@@ -821,6 +841,7 @@ export async function updatePendingAiOrder(input: {
       fulfillment_type,
       delivery_address,
       payment_method,
+      notes,
       status,
       customer_confirmed_at::text,
       confirmed_at::text,
@@ -842,6 +863,7 @@ export async function updatePendingAiOrder(input: {
       input.fulfillmentType || null,
       input.deliveryAddress || null,
       input.paymentMethod || null,
+      input.notes || null,
     ],
   );
 
@@ -1745,6 +1767,7 @@ export async function createAiOrder(input: {
   fulfillmentType?: string | null;
   deliveryAddress?: string | null;
   paymentMethod?: string | null;
+  notes?: string | null;
 }): Promise<AiOrderRow> {
   await ensureAiSchema();
   const existing = await pool.query<AiOrderRow>(
@@ -1761,6 +1784,7 @@ export async function createAiOrder(input: {
       fulfillment_type,
       delivery_address,
       payment_method,
+      notes,
       status,
       customer_confirmed_at::text,
       confirmed_at::text,
@@ -1798,10 +1822,11 @@ export async function createAiOrder(input: {
       fulfillment_type,
       delivery_address,
       payment_method,
+      notes,
       status,
       customer_confirmed_at
     )
-    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, 'pending_confirmation', NOW())
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, 'pending_confirmation', NOW())
     RETURNING
       id,
       account_id,
@@ -1814,6 +1839,7 @@ export async function createAiOrder(input: {
       fulfillment_type,
       delivery_address,
       payment_method,
+      notes,
       status,
       customer_confirmed_at::text,
       confirmed_at::text,
@@ -1837,6 +1863,7 @@ export async function createAiOrder(input: {
       input.fulfillmentType || null,
       input.deliveryAddress || null,
       input.paymentMethod || null,
+      input.notes || null,
     ],
   );
   return result.rows[0];
@@ -1858,6 +1885,7 @@ export async function listAiOrders(accountId?: string | null, companyId?: string
       o.fulfillment_type,
       o.delivery_address,
       o.payment_method,
+      o.notes,
       o.status,
       o.customer_confirmed_at::text,
       o.confirmed_at::text,
@@ -1903,6 +1931,7 @@ export async function getAiOrderById(orderId: string): Promise<AiOrderRow | null
       o.fulfillment_type,
       o.delivery_address,
       o.payment_method,
+      o.notes,
       o.status,
       o.customer_confirmed_at::text,
       o.confirmed_at::text,
@@ -1964,6 +1993,7 @@ export async function confirmAiOrder(
       fulfillment_type,
       delivery_address,
       payment_method,
+      notes,
       status,
       customer_confirmed_at::text,
       confirmed_at::text,
@@ -2008,6 +2038,11 @@ export async function cancelAiOrder(orderId: string, cancelledByUserId: string, 
       summary,
       items,
       total_estimate::text,
+      responsible_name,
+      fulfillment_type,
+      delivery_address,
+      payment_method,
+      notes,
       status,
       customer_confirmed_at::text,
       confirmed_at::text,

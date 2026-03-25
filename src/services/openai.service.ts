@@ -146,6 +146,7 @@ function getMoodInstruction(mood: string | null | undefined): string {
 }
 
 function buildStoreContextText(settings: {
+  agent_guidelines?: Array<string> | null;
   store_name?: string | null;
   store_description?: string | null;
   store_cnpj?: string | null;
@@ -221,8 +222,12 @@ function buildStoreContextText(settings: {
         })
         .filter(Boolean)
     : [];
+  const agentGuidelines = Array.isArray(settings.agent_guidelines)
+    ? settings.agent_guidelines.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
 
   return [
+    `Diretrizes da empresa: ${agentGuidelines.length ? agentGuidelines.map((item) => `- ${item}`).join(" | ") : "Nenhuma diretriz adicional cadastrada"}`,
     `Nome da loja: ${String(settings.store_name || "").trim() || "Não informado"}`,
     `Descrição da loja: ${String(settings.store_description || "").trim() || "Não informada"}`,
     `CNPJ: ${String(settings.store_cnpj || "").trim() || "Não informado"}`,
@@ -241,6 +246,23 @@ function buildStoreContextText(settings: {
           : "Desativado"
     }`,
   ].join("\n");
+}
+
+export function __buildStoreContextTextForTests(settings: {
+  agent_guidelines?: Array<string> | null;
+  store_name?: string | null;
+  store_description?: string | null;
+  store_cnpj?: string | null;
+  store_address?: string | null;
+  store_payment_methods?: Array<string> | null;
+  store_delivery_fees?: Array<Record<string, unknown>> | null;
+  schedule_working_days?: Array<Record<string, unknown>> | null;
+  schedule_interval_minutes?: number | null;
+  schedule_reminder_enabled?: boolean | null;
+  schedule_reminder_minutes?: number | null;
+  schedule_reminder_rules?: Array<Record<string, unknown>> | null;
+}) {
+  return buildStoreContextText(settings);
 }
 
 export async function generateAiSalesReply(input: {
@@ -385,6 +407,8 @@ export async function generateAiSalesReply(input: {
           "Não diga que ajustou ou editou o pedido se você não tiver dados suficientes para isso. " +
           "Não edite pedido já confirmado. Se o cliente quiser mudar algo de um pedido já fechado, diga que será preciso abrir um novo pedido ou nova solicitação. " +
           "Para criar pedido, antes você precisa confirmar com o cliente estas informações: nome do responsável, entrega ou retirada na loja, endereço de entrega se for entrega, e forma de pagamento. " +
+          "Quando fizer sentido para o tipo de pedido, você pode perguntar se há alguma observação para adicionar ao pedido, como bilhete, dedicatória, assinatura, recado, instrução especial de entrega ou mensagem para acompanhar o item. " +
+          "Essa observação é opcional. Se o cliente não quiser adicionar nada, siga o fluxo normalmente sem insistir. " +
           "Se for entrega, o endereço precisa ter cidade, rua, bairro e ponto de referência. O número pode ser informado normalmente, ou o cliente pode dizer sem número, s/n ou equivalente. Se faltar qualquer uma dessas informações obrigatórias, peça somente o que estiver faltando e não gere o pedido ainda. Nunca invente número de endereço, bairro, cidade, rua, complemento ou ponto de referência. Se o cliente não informou algum dado de entrega, diga apenas que está faltando esse dado. " +
           "Sempre que você pedir os dados de endereço para entrega, envie um formulário simples e claro neste formato: Cidade:, Rua:, Número: (se não tiver, informe sem número), Bairro:, Ponto de referência:. " +
           "Você só pode criar pedido quando primeiro perguntar se o cliente quer confirmar o pedido e depois receber uma confirmação direta do cliente, como sim, pode confirmar, pode gerar ou equivalente. " +
@@ -443,12 +467,14 @@ export async function generateAiSalesReply(input: {
           "Exemplo 3: cliente diz 'Qual a capital da França?'. Resultado esperado: handoff.should_transfer=false e reply dizendo apenas que você não sabe responder isso por aqui. " +
           "Toda resposta ao cliente deve passar pelo seu raciocínio principal com base no contexto da conversa. Não dependa de respostas automáticas fixas fora deste raciocínio. " +
           "Você pode responder dúvidas sobre a loja apenas com base nas informações de loja presentes no contexto. " +
+          "Se houver diretrizes da empresa no contexto, trate essas diretrizes como regras ativas desta loja e siga essas instruções durante o atendimento, desde que não entrem em conflito com fatos do sistema ou com segurança operacional. " +
+          "Quando houver uma diretriz operacional da loja, como exigir observação no pedido, enviar foto com descrição, pedir ponto de referência ou seguir um padrão comercial específico, respeite essa diretriz no atendimento desta empresa. " +
           "Nunca fale de planos, pacotes, mensalidade, premium, básico ou duração comercial como se fossem ofertas da empresa se isso não estiver realmente cadastrado no catálogo ou explícito no contexto. " +
           "Não invente endereço, CNPJ, formas de pagamento, taxa ou preço de entrega. " +
           "Se alguma informação da loja não estiver disponível no contexto, diga de forma simples que essa informação não está cadastrada no sistema no momento. " +
           "Nunca invente produto fora do catálogo. " +
           "Retorne APENAS JSON no formato: " +
-          "{\"should_reply\":true,\"reply\":\"texto\",\"memory_summary\":\"resumo curto\",\"customer_profile\":\"perfil curto\",\"order\":{\"should_create\":false,\"summary\":\"\",\"items\":[],\"total_estimate\":null,\"responsible_name\":\"\",\"fulfillment_type\":\"\",\"delivery_address\":\"\",\"payment_method\":\"\",\"customer_confirmed_details\":false},\"schedule\":{\"should_create\":false,\"should_cancel\":false,\"service_name\":\"\",\"scheduled_date\":\"\",\"scheduled_time\":\"\",\"customer_name\":\"\",\"notes\":\"\",\"cancel_reason\":\"\",\"duration_minutes\":null,\"customer_confirmed_details\":false},\"media\":{\"should_send_images\":false,\"product_names\":[]},\"handoff\":{\"should_transfer\":false,\"reason\":\"\"}}",
+          "{\"should_reply\":true,\"reply\":\"texto\",\"memory_summary\":\"resumo curto\",\"customer_profile\":\"perfil curto\",\"order\":{\"should_create\":false,\"summary\":\"\",\"items\":[],\"total_estimate\":null,\"responsible_name\":\"\",\"fulfillment_type\":\"\",\"delivery_address\":\"\",\"payment_method\":\"\",\"notes\":\"\",\"customer_confirmed_details\":false},\"schedule\":{\"should_create\":false,\"should_cancel\":false,\"service_name\":\"\",\"scheduled_date\":\"\",\"scheduled_time\":\"\",\"customer_name\":\"\",\"notes\":\"\",\"cancel_reason\":\"\",\"duration_minutes\":null,\"customer_confirmed_details\":false},\"media\":{\"should_send_images\":false,\"product_names\":[]},\"handoff\":{\"should_transfer\":false,\"reason\":\"\"}}",
       },
       {
         role: "user",
@@ -488,6 +514,7 @@ export async function generateAiSalesReply(input: {
       fulfillmentType: String(parsed?.order?.fulfillment_type || "").trim() || null,
       deliveryAddress: String(parsed?.order?.delivery_address || "").trim() || null,
       paymentMethod: String(parsed?.order?.payment_method || "").trim() || null,
+      notes: String(parsed?.order?.notes || "").trim() || null,
       customerConfirmedDetails: Boolean(parsed?.order?.customer_confirmed_details),
       totalEstimate:
         parsed?.order?.total_estimate !== undefined && parsed?.order?.total_estimate !== null

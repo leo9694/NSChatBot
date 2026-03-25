@@ -172,6 +172,112 @@ function normalizeText(value: string): string {
     .trim();
 }
 
+function getNormalizedAgentGuidelines(guidelines?: Array<string> | null): string[] {
+  return Array.isArray(guidelines)
+    ? guidelines.map((item) => normalizeText(String(item || ""))).filter(Boolean)
+    : [];
+}
+
+function buildProductImageCaption(
+  product: {
+    name: string;
+    description: string | null;
+    price: string;
+    stock?: number | null;
+  },
+  agentGuidelines?: Array<string> | null,
+): string {
+  const guidelines = getNormalizedAgentGuidelines(agentGuidelines);
+  const imageRules = guidelines.filter((item) =>
+    /\b(foto|fotos|imagem|imagens|legenda|descricao|descricao da foto|descricao da imagem|mostrar produto)\b/.test(item),
+  );
+
+  const name = String(product.name || "").trim();
+  const description = String(product.description || "").trim();
+  const numericPrice = Number(product.price || 0);
+  const formattedPrice = Number.isFinite(numericPrice) ? `Preço: R$${numericPrice.toFixed(2)}` : "";
+  const hasNumericStock = Number.isFinite(Number(product.stock));
+  const formattedStock = hasNumericStock ? `Estoque: ${Math.max(0, Math.round(Number(product.stock)))}` : "";
+
+  const onlyNameRule = imageRules.some((item) =>
+    /\b(somente|apenas|so)\b.*\bnome\b/.test(item) ||
+    /\bnome\b.*\b(somente|apenas|so)\b/.test(item) ||
+    /\bmostrar\b.*\bsomente\b.*\bnome\b/.test(item),
+  );
+  if (onlyNameRule) {
+    return name;
+  }
+
+  const descriptionRule = imageRules.some((item) =>
+    /\b(descricao|descricao|descrever)\b/.test(item) &&
+    !/\bsem descricao\b|\bsem descricao\b/.test(item),
+  );
+  const priceForbiddenRule = imageRules.some((item) =>
+    /\b(sem preco|sem valor|nao mostrar preco|nao mostrar valor|sem o preco|sem o valor)\b/.test(item),
+  );
+  const priceRequiredRule = imageRules.some((item) =>
+    /\b(com preco|com valor|mostrar preco|mostrar valor|informar preco|informar valor)\b/.test(item),
+  );
+  const explicitNameRule = imageRules.some((item) => /\bnome\b/.test(item));
+  const explicitPriceRule = imageRules.some((item) => /\b(preco|valor)\b/.test(item));
+  const explicitDescriptionRule = imageRules.some((item) => /\b(descricao|descrever)\b/.test(item));
+  const explicitStockRule = imageRules.some((item) => /\b(estoque|disponibilidade)\b/.test(item));
+  const hasExplicitFieldList = explicitNameRule || explicitPriceRule || explicitDescriptionRule || explicitStockRule;
+
+  if (hasExplicitFieldList) {
+    const lines: string[] = [];
+    const onlyNameRequested = explicitNameRule && !explicitPriceRule && !explicitDescriptionRule && !explicitStockRule;
+
+    if (onlyNameRequested) {
+      return name;
+    }
+
+    if (explicitNameRule) {
+      lines.push(`Nome: ${name}`);
+    } else {
+      lines.push(name);
+    }
+    if (explicitPriceRule && formattedPrice) {
+      lines.push(formattedPrice);
+    }
+    if (explicitDescriptionRule && description) {
+      lines.push(`Descrição: ${description}`);
+    }
+    if (explicitStockRule && formattedStock) {
+      lines.push(formattedStock);
+    }
+
+    if (lines.length) {
+      return lines.join("\n");
+    }
+  }
+
+  const lines = [name];
+
+  if (descriptionRule && description) {
+    lines.push(description);
+  }
+
+  const shouldIncludePrice = priceRequiredRule || (!descriptionRule && !priceForbiddenRule);
+  if (shouldIncludePrice && formattedPrice) {
+    lines.push(formattedPrice);
+  }
+
+  return lines.filter(Boolean).join("\n");
+}
+
+export function __buildProductImageCaptionForTests(
+  product: {
+    name: string;
+    description: string | null;
+    price: string;
+    stock?: number | null;
+  },
+  agentGuidelines?: Array<string> | null,
+): string {
+  return buildProductImageCaption(product, agentGuidelines);
+}
+
 function getSignificantNameParts(value: string): string[] {
   return normalizeName(value)
     .split(/\s+/)
@@ -858,22 +964,81 @@ function getCustomerFirstName(displayName?: string | null): string | null {
   return parts.length ? parts[0] : null;
 }
 
+function getCurrentGreetingPeriod(
+  now = new Date(),
+  timeZone = "America/Cuiaba",
+): "morning" | "afternoon" | "night" {
+  const hourString = new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    hourCycle: "h23",
+    timeZone,
+  }).format(now);
+  const hour = Number.parseInt(hourString, 10);
+  if (Number.isNaN(hour)) {
+    return "morning";
+  }
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "night";
+}
+
+function getPeriodGreetingLabel(period: "morning" | "afternoon" | "night"): string {
+  if (period === "afternoon") return "Boa tarde";
+  if (period === "night") return "Boa noite";
+  return "Bom dia";
+}
+
+function inferGreetingTone(body?: string | null): "neutral" | "casual" {
+  const text = normalizeText(String(body || ""));
+  if (!text) return "neutral";
+  if (
+    /\b(opa|e ai|e a[ií]|fala|blz|beleza|tudo bem|td bem|bom diaa|boa tardee|boa noitee)\b/.test(text)
+  ) {
+    return "casual";
+  }
+  return "neutral";
+}
+
 function buildGreetingReply(
   mood: "amigavel" | "informal" | "formal",
   customerDisplayName?: string | null,
+  customerBody?: string | null,
+  now = new Date(),
 ): string {
   const firstName = getCustomerFirstName(customerDisplayName);
+  const period = getCurrentGreetingPeriod(now);
+  const greeting = getPeriodGreetingLabel(period);
+  const tone = inferGreetingTone(customerBody);
   if (mood === "formal") {
     return firstName
-      ? `Bom dia, ${firstName}. Como posso ajudar?`
-      : "Bom dia. Como posso ajudar?";
+      ? `${greeting}, ${firstName}. Como posso ajudar?`
+      : `${greeting}. Como posso ajudar?`;
   }
   if (mood === "amigavel") {
+    if (tone === "casual") {
+      return firstName
+        ? `${greeting}, ${firstName}. Tudo bem? Como posso te ajudar?`
+        : `${greeting}. Tudo bem? Como posso te ajudar?`;
+    }
     return firstName
-      ? `Bom dia, ${firstName}. Como posso te ajudar? `
-      : "Bom dia. Como posso te ajudar? ";
+      ? `${greeting}, ${firstName}. Como posso te ajudar?`
+      : `${greeting}. Como posso te ajudar?`;
   }
-  return firstName ? `Bom dia, ${firstName}. Como posso ajudar?` : "Bom dia. Como posso ajudar?";
+  if (tone === "casual") {
+    return firstName
+      ? `${greeting}, ${firstName}. Tudo certo? Como posso te ajudar?`
+      : `${greeting}. Tudo certo? Como posso te ajudar?`;
+  }
+  return firstName ? `${greeting}, ${firstName}. Como posso ajudar?` : `${greeting}. Como posso ajudar?`;
+}
+
+export function __buildGreetingReplyForTests(
+  mood: "amigavel" | "informal" | "formal",
+  customerDisplayName?: string | null,
+  customerBody?: string | null,
+  now?: Date,
+): string {
+  return buildGreetingReply(mood, customerDisplayName, customerBody, now || new Date());
 }
 
 function isDiscountQuestion(body: string): boolean {
@@ -1570,6 +1735,23 @@ export function __shouldReuseOpenPendingScheduleForTests(input: {
       Boolean(input.awaitingScheduleConfirmation) ||
       Boolean(input.aiRescheduleActive) ||
       Boolean(input.customerRescheduleRequest))
+  );
+}
+
+export function __orderReplyClaimsCreationForTests(replyText: string): boolean {
+  const normalizedReplyText = normalizeText(replyText);
+  return (
+    normalizedReplyText.includes("pedido ficou pendente de confirmacao interna") ||
+    normalizedReplyText.includes("pedido ficou pendente de confirma") ||
+    normalizedReplyText.includes("pedido pendente") ||
+    normalizedReplyText.includes("registrei seu pedido") ||
+    normalizedReplyText.includes("seu pedido foi registrado") ||
+    normalizedReplyText.includes("ajustei seu pedido") ||
+    normalizedReplyText.includes("pedido ajustado") ||
+    normalizedReplyText.includes("pedido atualizado") ||
+    normalizedReplyText.includes("gerei o pedido") ||
+    normalizedReplyText.includes("pedido foi confirmado") ||
+    normalizedReplyText.includes("pedido confirmado")
   );
 }
 
@@ -3193,7 +3375,7 @@ export async function handleInboundAiAutomation(
       !customerScheduleInquiry &&
       !customerPlanInquiry
     ) {
-      groundingNotes.push(`A mensagem atual do cliente � s� uma sauda��o simples. Base de resposta: ${buildGreetingReply(mood, context.display_name || null)}`);
+      groundingNotes.push(`A mensagem atual do cliente � s� uma sauda��o simples. Base de resposta: ${buildGreetingReply(mood, context.display_name || null, lastCustomerTurnBody)}`);
     }
     if (
       customerClosingMessage &&
@@ -3482,7 +3664,11 @@ export async function handleInboundAiAutomation(
       !customerExplicitScheduleIntent;
 
     if (shouldShortCircuitSimpleTurn) {
-      let simpleReply = String(aiResult.reply || '').trim() || (customerGreetingOnly || latestRawGreetingOnly ? buildGreetingReply(mood, context.display_name || null) : buildClosingReply(mood));
+      let simpleReply =
+        String(aiResult.reply || '').trim() ||
+        (customerGreetingOnly || latestRawGreetingOnly
+          ? buildGreetingReply(mood, context.display_name || null, latestRawCustomerBody || lastCustomerTurnBody)
+          : buildClosingReply(mood));
       simpleReply = formatIsoDatesInText(simpleReply);
       const shouldFinalizeAfterSimpleReply =
         (customerClosingMessage || latestRawClosingMessage) &&
@@ -3545,6 +3731,7 @@ export async function handleInboundAiAutomation(
       fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.open_order_fulfillment_type),
       deliveryAddress: pickFirstFilled(aiResult.order.deliveryAddress, context.open_order_delivery_address),
       paymentMethod: pickFirstFilled(aiResult.order.paymentMethod, context.open_order_payment_method),
+      notes: pickFirstFilled(aiResult.order.notes, context.open_order_notes),
     };
 
     const normalizedFulfillment = normalizeName(String(mergedOrder.fulfillmentType || ""));
@@ -3761,6 +3948,7 @@ export async function handleInboundAiAutomation(
           fulfillmentType: mergedOrder.fulfillmentType,
           deliveryAddress: mergedOrder.deliveryAddress,
           paymentMethod: mergedOrder.paymentMethod,
+          notes: mergedOrder.notes,
         });
 
         if (updatedOrder?.id) {
@@ -3781,6 +3969,7 @@ export async function handleInboundAiAutomation(
           fulfillmentType: mergedOrder.fulfillmentType,
           deliveryAddress: mergedOrder.deliveryAddress,
           paymentMethod: mergedOrder.paymentMethod,
+          notes: mergedOrder.notes,
         });
         createdOrderId = String(createdOrder.id || "").trim() || null;
       }
@@ -4008,6 +4197,18 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("seu agendamento foi cancelado") ||
       normalizedReplyText.includes("cancelei seu atendimento") ||
       normalizedReplyText.includes("atendimento cancelado");
+    const orderClaimedAsCreated =
+      normalizedReplyText.includes("pedido ficou pendente de confirmacao interna") ||
+      normalizedReplyText.includes("pedido ficou pendente de confirma") ||
+      normalizedReplyText.includes("pedido pendente") ||
+      normalizedReplyText.includes("registrei seu pedido") ||
+      normalizedReplyText.includes("seu pedido foi registrado") ||
+      normalizedReplyText.includes("ajustei seu pedido") ||
+      normalizedReplyText.includes("pedido ajustado") ||
+      normalizedReplyText.includes("pedido atualizado") ||
+      normalizedReplyText.includes("gerei o pedido") ||
+      normalizedReplyText.includes("pedido foi confirmado") ||
+      normalizedReplyText.includes("pedido confirmado");
     if (hasCompleteScheduleProposal && !createdScheduleId && !scheduleConflict && scheduleWindowValidation.ok && scheduleClaimedAsCreated) {
       replyText =
         fallbackReply ||
@@ -4029,6 +4230,16 @@ export async function handleInboundAiAutomation(
           scheduledDate: scheduleCancellationTarget?.scheduled_date || aiResult.schedule.scheduledDate,
           scheduledTime: scheduleCancellationTarget?.scheduled_time || aiResult.schedule.scheduledTime,
         }) || replyText;
+    }
+    if (hasRequiredOrderData && !createdOrderId && orderClaimedAsCreated) {
+      replyText =
+        buildOrderConfirmationPrompt({
+          items: Array.isArray(mergedOrder.items) ? mergedOrder.items : [],
+          summary: mergedOrder.summary,
+          totalEstimate: mergedOrder.totalEstimate,
+          fulfillmentType: mergedOrder.fulfillmentType,
+          paymentMethod: mergedOrder.paymentMethod,
+        }) || buildUnknownSalesReply(mood);
     }
     if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);
@@ -4164,7 +4375,15 @@ export async function handleInboundAiAutomation(
         const media = await loadMediaBufferFromUrl(String(product.image_url || "").trim());
         if (!media?.buffer) continue;
 
-        const caption = `${product.name}\nPre\u00e7o: R$${Number(product.price || 0).toFixed(2)}`;
+        const caption = buildProductImageCaption(
+          {
+            name: product.name,
+            description: product.description,
+            price: product.price,
+            stock: product.stock,
+          },
+          accountSettings?.agent_guidelines,
+        );
         const mediaResponse = await sendWhatsAppMedia({
           to: context.phone,
           mediaBuffer: media.buffer,

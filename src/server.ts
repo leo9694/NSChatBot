@@ -2,7 +2,7 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { env } from "./config/env";
-import { pool } from "./db/pool";
+import { describeActiveDatabaseTarget, pool } from "./db/pool";
 import { requireAuth } from "./middlewares/auth.middleware";
 import { ensureAuthSchema } from "./repositories/auth.repository";
 import { cleanupInvalidConversations, finalizeInactiveAiConversations } from "./repositories/conversations.repository";
@@ -101,6 +101,7 @@ app.listen(env.port, async () => {
       });
     console.log(`API running on port ${env.port}`);
     console.log("Database connection: OK");
+    console.log(`Database target: ${describeActiveDatabaseTarget()}`);
     if (cleanup.conversations > 0 || cleanup.messages > 0) {
       console.log(`Cleanup invalid conversations: ${cleanup.conversations} conversa(s), ${cleanup.messages} mensagem(ns).`);
     }

@@ -93,12 +93,14 @@ function formatCustomerOrderMessage(input: {
   summary?: string;
   readyTimeMinutes?: number | null;
   note?: string | null;
+  orderNotes?: string | null;
   cancelReason?: string | null;
 }) {
   const parts = [
     input.greeting?.trim() || "",
     input.statusLine.trim(),
     input.summary?.trim() ? `Resumo:\n${input.summary.trim()}` : "",
+    input.orderNotes?.trim() ? `Observação do pedido:\n${input.orderNotes.trim()}` : "",
     Number.isFinite(input.readyTimeMinutes)
       ? `Tempo estimado:\n${Math.round(Number(input.readyTimeMinutes))} minuto(s)`
       : "",
@@ -251,6 +253,22 @@ function normalizeScheduleReminderRules(
   });
 }
 
+function normalizeAgentGuidelines(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .slice(0, 30);
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/)
+    .map((line) => String(line || "").replace(/^\s*[-*•]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 30);
+}
+
 router.get("/status", (req, res) => {
   const authReq = req as AuthRequest;
   void (async () => {
@@ -296,6 +314,7 @@ router.get("/settings", async (req, res) => {
       agent_name: settings?.agent_name || "",
       company_name: settings?.company_name || "",
       mood: settings?.mood || "informal",
+      agent_guidelines: Array.isArray(settings?.agent_guidelines) ? settings.agent_guidelines : [],
       store_name: settings?.store_name || "",
       store_description: settings?.store_description || "",
       store_cnpj: settings?.store_cnpj || "",
@@ -328,6 +347,7 @@ router.put("/settings", async (req, res) => {
   const companyName = String(req.body?.company_name || "").trim();
   const rawMood = String(req.body?.mood || "").trim().toLowerCase();
   const mood = ["amigavel", "informal", "formal"].includes(rawMood) ? rawMood : "informal";
+  const agentGuidelines = normalizeAgentGuidelines(req.body?.agent_guidelines);
   const storeName = String(req.body?.store_name || "").trim();
   const storeDescription = String(req.body?.store_description || "").trim();
   const storeCnpj = String(req.body?.store_cnpj || "").trim();
@@ -371,6 +391,7 @@ router.put("/settings", async (req, res) => {
       agentName,
       companyName,
       mood,
+      agentGuidelines,
       storeName,
       storeDescription,
       storeCnpj,
@@ -489,6 +510,7 @@ router.post("/orders/:orderId/confirm", async (req, res) => {
         greeting,
         statusLine,
         summary: orderSummary || "",
+        orderNotes: order.notes || null,
         readyTimeMinutes: Math.round(readyTimeMinutes),
         note: confirmationNote || null,
       });
@@ -570,6 +592,7 @@ router.post("/orders/:orderId/cancel", async (req, res) => {
         greeting: customerName ? `${customerName},` : "",
         statusLine: "seu pedido foi cancelado.",
         summary: orderSummary || "",
+        orderNotes: order.notes || null,
         cancelReason: reason,
       });
 
