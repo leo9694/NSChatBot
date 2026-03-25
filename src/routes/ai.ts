@@ -1,4 +1,5 @@
-﻿import { Router } from "express";
+﻿import { Router, type Response } from "express";
+import PDFDocument = require("pdfkit");
 import { getOpenAIStatus, testOpenAIConnection } from "../services/openai.service";
 import {
   cancelAiOrder,
@@ -109,6 +110,279 @@ function formatCustomerOrderMessage(input: {
   ].filter(Boolean);
 
   return parts.join("\n\n");
+}
+
+function formatCurrencyBr(value?: string | number | null): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return numeric.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function buildOrderItemLines(items: Array<Record<string, unknown>>): string[] {
+  if (!Array.isArray(items) || !items.length) {
+    return ["Sem itens detalhados"];
+  }
+  return items.map((entry) => {
+    const qty = String(entry?.quantity || entry?.qty || "1").trim();
+    const name = String(entry?.name || entry?.product || "Item").trim();
+    const unitPriceRaw = entry?.unit_price ?? entry?.price ?? null;
+    const unitPrice = unitPriceRaw != null && String(unitPriceRaw).trim() !== "" ? formatCurrencyBr(unitPriceRaw as string | number) : "";
+    return unitPrice ? `${qty} x ${name}  |  ${unitPrice}` : `${qty} x ${name}`;
+  });
+}
+
+function writePdfField(doc: InstanceType<typeof PDFDocument>, label: string, value: string): void {
+  if (!value || value === "-") return;
+  doc.font("Helvetica-Bold").fontSize(10).text(`${label}: `, { continued: true });
+  doc.font("Helvetica").text(value);
+  doc.moveDown(0.35);
+}
+
+function writePdfSectionTitle(doc: InstanceType<typeof PDFDocument>, title: string): void {
+  doc.moveDown(0.2);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#183244").text(title);
+  doc
+    .moveTo(40, doc.y + 4)
+    .lineTo(555, doc.y + 4)
+    .lineWidth(1)
+    .strokeColor("#d7e0e7")
+    .stroke();
+  doc.moveDown(0.55);
+}
+
+function writePdfGridRow(
+  doc: InstanceType<typeof PDFDocument>,
+  leftLabel: string,
+  leftValue: string,
+  rightLabel?: string,
+  rightValue?: string,
+): void {
+  const startY = doc.y;
+  const leftX = 40;
+  const rightX = 305;
+  const colWidth = 230;
+
+  const drawCell = (x: number, label: string, value: string) => {
+    if (!label || !value || value === "-") return 0;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#5a7181").text(label.toUpperCase(), x, startY, { width: colWidth });
+    doc.font("Helvetica").fontSize(10).fillColor("#10212c").text(value, x, startY + 12, {
+      width: colWidth,
+      lineGap: 1,
+    });
+    return doc.heightOfString(value, { width: colWidth, lineGap: 1 }) + 12;
+  };
+
+  const leftHeight = drawCell(leftX, leftLabel, leftValue);
+  const rightHeight = rightLabel && rightValue ? drawCell(rightX, rightLabel, rightValue) : 0;
+  doc.y = startY + Math.max(leftHeight, rightHeight, 18) + 10;
+}
+
+function ensurePdfSpace(doc: InstanceType<typeof PDFDocument>, requiredHeight: number): void {
+  if (doc.y + requiredHeight <= doc.page.height - 45) return;
+  doc.addPage();
+}
+
+function formatOrderSummaryForPdf(summary?: string | null): string {
+  const raw = String(summary || "").trim();
+  if (!raw) return "";
+
+  const normalized = raw.replace(/\.\s+/g, ".\n");
+  const segments = normalized
+    .split(/\n|\s+—\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const lines: string[] = [];
+
+  for (const segment of segments) {
+    const itemChunks = segment
+      .split(/\s*;\s*|\s*,\s*(?=\d+x?\s|\d+\s*x\s|[0-9]+\s*-\s*)/i)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (itemChunks.length > 1) {
+      lines.push(...itemChunks);
+      continue;
+    }
+
+    const semicolonChunks = segment
+      .split(/\s*;\s*/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (semicolonChunks.length > 1) {
+      lines.push(...semicolonChunks);
+      continue;
+    }
+
+    lines.push(segment);
+  }
+
+  return lines.join("\n");
+}
+
+function streamOrderPdf(
+  res: Response,
+  input: {
+    order: Awaited<ReturnType<typeof getAiOrderById>>;
+    companyName?: string | null;
+    companyCnpj?: string | null;
+    companyAddress?: string | null;
+  },
+) {
+  const order = input.order;
+  const fileName = `pedido-${String(order?.id || "pedido").slice(0, 8)}.pdf`;
+  const doc = new PDFDocument({ margin: 40, size: "A4" });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  doc.pipe(res);
+
+  const receiptX = 44;
+  const receiptWidth = 330;
+
+  if (input.companyName || input.companyCnpj || input.companyAddress) {
+    doc.font("Helvetica-Bold").fontSize(17).fillColor("#10212c").text(input.companyName || "Empresa", receiptX, 42, {
+      width: receiptWidth,
+    });
+    doc.font("Helvetica").fontSize(9).fillColor("#3d4f5c");
+    if (input.companyCnpj) doc.text(`CNPJ: ${input.companyCnpj}`, receiptX, doc.y + 1, { width: receiptWidth });
+    if (input.companyAddress) doc.text(input.companyAddress, receiptX, doc.y + 1, { width: receiptWidth, lineGap: 1 });
+    doc.moveDown(0.65);
+  }
+
+  doc
+    .moveTo(receiptX, doc.y)
+    .lineTo(receiptX + receiptWidth, doc.y)
+    .lineWidth(1)
+    .strokeColor("#d4dde4")
+    .stroke();
+  doc.moveDown(0.45);
+
+  const topY = doc.y;
+  doc.fillColor("#10212c").font("Helvetica-Bold").fontSize(13).text("Pedido do agente", receiptX, topY, {
+    width: receiptWidth,
+  });
+  doc.font("Helvetica")
+    .fontSize(9)
+    .fillColor("#3d4f5c")
+    .text(`Pedido: ${String(order?.id || "").slice(0, 8).toUpperCase()}`, receiptX, topY + 18, { width: receiptWidth })
+    .text(`Emitido em: ${new Date().toLocaleString("pt-BR")}`, receiptX, topY + 31, { width: receiptWidth });
+  doc.y = topY + 48;
+  doc.moveDown(0.35);
+
+  const orderStatus = String(order?.status || "").trim();
+  const statusLabel = orderStatus === "confirmed" ? "Confirmado" : orderStatus === "cancelled" ? "Cancelado" : "Pendente";
+
+  const writeReceiptField = (label: string, value: string) => {
+    if (!value || value === "-") return;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#10212c").text(`${label}:`, receiptX, doc.y, {
+      width: receiptWidth,
+    });
+    doc.font("Helvetica").fontSize(10).fillColor("#10212c").text(value, receiptX, doc.y + 2, {
+      width: receiptWidth,
+      lineGap: 1,
+    });
+    doc.moveDown(0.35);
+  };
+
+  writeReceiptField("Cliente", String(order?.conversation_name || order?.customer_phone || "-"));
+  writeReceiptField("Status", statusLabel);
+  writeReceiptField("Total estimado", formatCurrencyBr(order?.total_estimate));
+  writeReceiptField("Responsável", String(order?.responsible_name || "-"));
+  writeReceiptField("Entrega/retirada", String(order?.fulfillment_type || "-"));
+  writeReceiptField("Endereço/retirada", String(order?.delivery_address || "-"));
+  writeReceiptField("Pagamento", String(order?.payment_method || "-"));
+  writeReceiptField("Observação", String(order?.notes || "-"));
+  writeReceiptField("Tempo mínimo", order?.ready_time_minutes ? `${order.ready_time_minutes} minuto(s)` : "-");
+  writeReceiptField("Observação da confirmação", String(order?.confirmation_note || "-"));
+  writeReceiptField("Motivo do cancelamento", String(order?.cancel_reason || "-"));
+
+  doc.moveDown(0.3);
+  doc
+    .moveTo(receiptX, doc.y)
+    .lineTo(receiptX + receiptWidth, doc.y)
+    .lineWidth(1)
+    .strokeColor("#d4dde4")
+    .stroke();
+  doc.moveDown(0.45);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#10212c").text("Itens do pedido", receiptX, doc.y, {
+    width: receiptWidth,
+  });
+  doc.moveDown(0.4);
+  ensurePdfSpace(doc, 120);
+  const tableX = receiptX;
+  const tableTopY = doc.y;
+  const qtyX = tableX + 8;
+  const itemX = tableX + 48;
+  const unitX = tableX + 230;
+  const totalX = tableX + 282;
+
+  doc.rect(tableX, tableTopY, receiptWidth, 22).fill("#163140");
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#ffffff");
+  doc.text("QTD", qtyX, tableTopY + 7, { width: 28 });
+  doc.text("ITEM", itemX, tableTopY + 7, { width: 172 });
+  doc.text("UN.", unitX, tableTopY + 7, { width: 42, align: "right" });
+  doc.text("TOTAL", totalX, tableTopY + 7, { width: 40, align: "right" });
+
+  let rowY = tableTopY + 22;
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length) {
+    doc.rect(tableX, rowY, receiptWidth, 24).fill("#f8fafc");
+    doc.font("Helvetica").fontSize(9).fillColor("#10212c").text("Sem itens detalhados", tableX + 8, rowY + 8, {
+      width: receiptWidth - 16,
+    });
+    rowY += 24;
+  } else {
+    items.forEach((entry, index) => {
+      const quantity = Number(entry?.quantity || entry?.qty || 1);
+      const itemName = String(entry?.name || entry?.product || "Item").trim();
+      const unitPrice = Number(entry?.unit_price ?? entry?.price ?? 0);
+      const totalPrice = Number.isFinite(unitPrice) ? unitPrice * (Number.isFinite(quantity) ? quantity : 1) : 0;
+      const bg = index % 2 === 0 ? "#f8fafc" : "#eef3f7";
+      const rowHeight = Math.max(
+        24,
+        doc.heightOfString(itemName, { width: 172, lineGap: 1 }) + 10,
+      );
+      ensurePdfSpace(doc, rowHeight + 20);
+      if (doc.y > rowY) {
+        rowY = doc.y;
+      }
+      doc.rect(tableX, rowY, receiptWidth, rowHeight).fill(bg);
+      doc.font("Helvetica").fontSize(9).fillColor("#10212c");
+      doc.text(String(Number.isFinite(quantity) ? quantity : 1), qtyX, rowY + 7, { width: 28 });
+      doc.text(itemName, itemX, rowY + 7, { width: 172, lineGap: 1 });
+      doc.text(formatCurrencyBr(unitPrice), unitX, rowY + 7, { width: 42, align: "right" });
+      doc.text(formatCurrencyBr(totalPrice), totalX, rowY + 7, { width: 40, align: "right" });
+      rowY += rowHeight;
+    });
+  }
+
+  doc.rect(tableX, rowY, receiptWidth, 24).fill("#dfe8ee");
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#10212c");
+  doc.text("TOTAL DO PEDIDO", tableX + 8, rowY + 8, { width: 190 });
+  doc.text(formatCurrencyBr(order?.total_estimate), totalX, rowY + 8, { width: 40, align: "right" });
+  doc.y = rowY + 32;
+
+  if (order?.summary) {
+    doc.moveDown(0.2);
+    doc
+      .moveTo(receiptX, doc.y)
+      .lineTo(receiptX + receiptWidth, doc.y)
+      .lineWidth(1)
+      .strokeColor("#d4dde4")
+      .stroke();
+    doc.moveDown(0.45);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#10212c").text("Resumo interno", receiptX, doc.y, {
+      width: receiptWidth,
+    });
+    doc.font("Helvetica").fontSize(9).fillColor("#10212c").text(formatOrderSummaryForPdf(order.summary), receiptX, doc.y + 2, {
+      width: receiptWidth,
+      lineGap: 2,
+    });
+  }
+
+  doc.end();
 }
 
 function formatCustomerScheduleMessage(input: {
@@ -434,6 +708,42 @@ router.get("/orders", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Falha ao carregar pedidos do agente.",
+    });
+  }
+});
+
+router.get("/orders/:orderId/pdf", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const orderId = String(req.params.orderId || "").trim();
+
+  if (!authReq.authUser?.id) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+  if (!orderId) {
+    return res.status(400).json({ error: "Pedido invalido." });
+  }
+
+  try {
+    const order = await getAiOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({ error: "Pedido não encontrado." });
+    }
+    if (order.account_id) {
+      const account = await getWhatsAppAccountById(order.account_id, authReq.authUser?.company_id || null);
+      if (!account) {
+        return res.status(404).json({ error: "Pedido nao pertence a esta empresa." });
+      }
+    }
+    const settings = order.account_id ? await getAiAccountSettings(order.account_id).catch(() => null) : null;
+    streamOrderPdf(res, {
+      order,
+      companyName: settings?.store_name || settings?.company_name || authReq.authUser?.name || "Empresa",
+      companyCnpj: settings?.store_cnpj || null,
+      companyAddress: settings?.store_address || null,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Falha ao gerar PDF do pedido.",
     });
   }
 });
@@ -1050,3 +1360,7 @@ router.delete("/schedules/:scheduleId", async (req, res) => {
 });
 
 export default router;
+
+
+
+

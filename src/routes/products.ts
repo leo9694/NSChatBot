@@ -3,7 +3,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import multer from "multer";
 import { Router } from "express";
-import { createProduct, ensureProductsSchema, listProducts, updateProduct } from "../repositories/products.repository";
+import { createProduct, deleteProduct, ensureProductsSchema, listProducts, setProductActiveStatus, updateProduct } from "../repositories/products.repository";
 
 const router = Router();
 const mediaDir = path.resolve(process.cwd(), "storage", "media");
@@ -99,6 +99,8 @@ router.post("/", upload.single("image"), async (req, res) => {
     await ensureProductsSchema();
 
     const name = String(req.body?.name || "").trim();
+    const groupName = String(req.body?.group_name || "").trim();
+    const isActive = String(req.body?.is_active ?? "true").trim() !== "false";
     const type = String(req.body?.type || "product").trim() === "service" ? "service" : "product";
     const description = String(req.body?.description || "").trim();
     const price = Number(req.body?.price || 0);
@@ -125,6 +127,8 @@ router.post("/", upload.single("image"), async (req, res) => {
     const product = await createProduct({
       companyId: authReq.authUser.company_id,
       name,
+      groupName,
+      isActive,
       type,
       description,
       price,
@@ -152,6 +156,8 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
     await ensureProductsSchema();
 
     const name = String(req.body?.name || "").trim();
+    const groupName = String(req.body?.group_name || "").trim();
+    const isActive = String(req.body?.is_active ?? "true").trim() !== "false";
     const type = String(req.body?.type || "product").trim() === "service" ? "service" : "product";
     const description = String(req.body?.description || "").trim();
     const price = Number(req.body?.price || 0);
@@ -180,6 +186,8 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
       id: productId,
       companyId: authReq.authUser.company_id,
       name,
+      groupName,
+      isActive,
       type,
       description,
       price,
@@ -199,6 +207,65 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
   } catch (error) {
     return res.status(400).json({
       error: error instanceof Error ? error.message : "Falha ao atualizar produto.",
+    });
+  }
+});
+
+router.patch("/:productId/active", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const productId = String(req.params.productId || "").trim();
+  const isActive = String(req.body?.is_active ?? "").trim();
+
+  if (!authReq.authUser?.company_id) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+  if (!productId) {
+    return res.status(400).json({ error: "Produto inválido." });
+  }
+  if (!["true", "false"].includes(isActive)) {
+    return res.status(400).json({ error: "Informe um status válido para o produto." });
+  }
+
+  try {
+    const product = await setProductActiveStatus({
+      id: productId,
+      companyId: authReq.authUser.company_id,
+      isActive: isActive === "true",
+    });
+    if (!product) {
+      return res.status(404).json({ error: "Produto não encontrado." });
+    }
+    return res.status(200).json({ status: "ok", product });
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : "Falha ao atualizar status do produto.",
+    });
+  }
+});
+
+router.delete("/:productId", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const productId = String(req.params.productId || "").trim();
+
+  if (!authReq.authUser?.company_id) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+  if (!productId) {
+    return res.status(400).json({ error: "Produto inválido." });
+  }
+
+  try {
+    const deleted = await deleteProduct({
+      id: productId,
+      companyId: authReq.authUser.company_id,
+    });
+    if (!deleted) {
+      return res.status(404).json({ error: "Produto não encontrado." });
+    }
+    return res.status(200).json({ status: "ok" });
+  } catch (error) {
+    return res.status(400).json({
+      error: error instanceof Error ? error.message : "Falha ao excluir produto.",
     });
   }
 });

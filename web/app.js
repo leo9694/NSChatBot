@@ -54,6 +54,7 @@
   loadingOlderMessages: false,
   typingConversations: {},
   expandedScheduleIds: {},
+  expandedOrderIds: {},
 };
 const SESSION_TOKEN_KEY = "nschat_session_token";
 const CONVERSATION_CACHE_TTL_MS = 12_000;
@@ -280,7 +281,11 @@ const agentGuidelinesListEl = document.getElementById("agentGuidelinesList");
 const agentSettingsSaveBtnEl = document.getElementById("agentSettingsSaveBtn");
 const productsFormEl = document.getElementById("productsForm");
 const productIdEl = document.getElementById("productId");
+const productActiveEl = document.getElementById("productActive");
 const productNameEl = document.getElementById("productName");
+const productGroupEl = document.getElementById("productGroup");
+const productGroupOptionsEl = document.getElementById("productGroupOptions");
+const productGroupSuggestionsEl = document.getElementById("productGroupSuggestions");
 const productTypeEl = document.getElementById("productType");
 const productPriceEl = document.getElementById("productPrice");
 const productDiscountEnabledEl = document.getElementById("productDiscountEnabled");
@@ -294,6 +299,7 @@ const productScheduleDurationFieldEl = document.getElementById("productScheduleD
 const productServiceDurationEl = document.getElementById("productServiceDuration");
 const productDescriptionEl = document.getElementById("productDescription");
 const productImageEl = document.getElementById("productImage");
+const productImageSelectBtnEl = document.getElementById("productImageSelectBtn");
 const productSubmitBtnEl = document.getElementById("productSubmitBtn");
 const productCancelEditBtnEl = document.getElementById("productCancelEditBtn");
 const productFormHeadingEl = document.getElementById("productFormHeading");
@@ -2057,10 +2063,45 @@ function buildStoreAddressText() {
   return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
 }
 
+function normalizeProductGroupName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function getAvailableProductGroups() {
+  const seen = new Map();
+  for (const product of Array.isArray(state.products) ? state.products : []) {
+    const rawGroup = normalizeProductGroupName(product?.group_name || "");
+    if (!rawGroup) continue;
+    const normalizedKey = rawGroup.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (!seen.has(normalizedKey)) {
+      seen.set(normalizedKey, rawGroup);
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+function renderProductGroupOptions() {
+  if (!productGroupOptionsEl || !productGroupSuggestionsEl) return;
+  const groups = getAvailableProductGroups();
+  productGroupOptionsEl.innerHTML = groups.map((group) => `<option value="${escapeHtml(group)}"></option>`).join("");
+  productGroupSuggestionsEl.innerHTML = "";
+  productGroupSuggestionsEl.hidden = groups.length === 0;
+  for (const group of groups) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "product-group-chip";
+    button.textContent = group;
+    button.dataset.groupName = group;
+    productGroupSuggestionsEl.appendChild(button);
+  }
+}
+
 function resetProductForm() {
   state.editingProductId = "";
   productIdEl.value = "";
   productsFormEl.reset();
+  productActiveEl.checked = true;
+  productGroupEl.value = "";
   productTypeEl.value = "product";
   productDiscountEnabledEl.checked = false;
   productScheduleEnabledEl.checked = false;
@@ -2081,13 +2122,16 @@ function resetProductForm() {
   if (productFormDescriptionEl) {
     productFormDescriptionEl.textContent = "Cadastre itens para o agente consultar e sugerir durante o atendimento.";
   }
+  renderProductGroupOptions();
   updateProductPreview();
 }
 
 function fillProductForm(product) {
   state.editingProductId = String(product?.id || "").trim();
   productIdEl.value = state.editingProductId;
+  productActiveEl.checked = product?.is_active !== false;
   productNameEl.value = String(product?.name || "");
+  productGroupEl.value = String(product?.group_name || "");
   productTypeEl.value = String(product?.type || "product");
   productPriceEl.value = String(product?.price || "");
   productDiscountEnabledEl.checked = Boolean(product?.discount_enabled);
@@ -2106,6 +2150,7 @@ function fillProductForm(product) {
   if (productFormDescriptionEl) {
     productFormDescriptionEl.textContent = "Atualize as informações do item e mantenha o catálogo do agente sempre correto.";
   }
+  renderProductGroupOptions();
   updateProductPreview(product);
   setProductsTab("create");
 }
@@ -2113,6 +2158,7 @@ function fillProductForm(product) {
 function updateProductPreview(product = null) {
   const currentProduct = product || findProductById(state.editingProductId) || null;
   const typedName = String(productNameEl?.value || "").trim();
+  const typedGroup = normalizeProductGroupName(productGroupEl?.value || "");
   const typedType = String(productTypeEl?.value || "").trim();
   const typedPrice = String(productPriceEl?.value || "").trim();
   const typedDiscountPrice = String(productDiscountPriceEl?.value || "").trim();
@@ -2125,6 +2171,7 @@ function updateProductPreview(product = null) {
   const durationValue = String(productServiceDurationEl?.value || currentProduct?.service_duration_minutes || "").trim();
 
   const name = typedName || String(currentProduct?.name || "").trim() || "Novo produto";
+  const groupName = typedGroup || normalizeProductGroupName(currentProduct?.group_name || "");
   const priceValue = typedPrice || String(currentProduct?.price || "").trim();
   const discountValue = typedDiscountPrice || String(currentProduct?.discount_price || "").trim();
   const stockValue = typedStock || String(currentProduct?.stock || "").trim();
@@ -2159,7 +2206,7 @@ function updateProductPreview(product = null) {
       : stockValue
         ? `Estoque: ${stockValue}`
         : "Estoque ainda não informado";
-  productPreviewStockEl.textContent = stockLabel;
+  productPreviewStockEl.textContent = groupName ? `Grupo: ${groupName} | ${stockLabel}` : stockLabel;
 
   const imageUrl = file ? URL.createObjectURL(file) : String(currentProduct?.image_url || "").trim();
   if (imageUrl) {
@@ -2273,9 +2320,20 @@ function renderProducts() {
     return;
   }
 
+  let currentGroupHeading = "";
   for (const product of state.products) {
+    const groupLabel = normalizeProductGroupName(product.group_name || "") || "Sem grupo";
+    if (groupLabel !== currentGroupHeading) {
+      currentGroupHeading = groupLabel;
+      const heading = document.createElement("div");
+      heading.className = "products-group-heading";
+      heading.textContent = currentGroupHeading;
+      productsListEl.appendChild(heading);
+    }
+
     const row = document.createElement("div");
     row.className = "product-item";
+    row.classList.toggle("inactive", product.is_active === false);
     const price = Number(product.price || 0);
     const priceText = Number.isFinite(price)
       ? price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
@@ -2292,6 +2350,7 @@ function renderProducts() {
       </div>
       <div class="product-item-main">
         <strong>${escapeHtml(product.name || "-")}</strong>
+        <span>Status: ${product.is_active === false ? "Inativo" : "Ativo"}</span>
         <span>Tipo: ${escapeHtml(product.type === "service" ? "Serviço" : "Produto")}</span>
         <span>Preço: ${priceText}</span>
         ${product.discount_enabled && product.discount_price ? `<span>Desconto: ${Number(product.discount_price).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</span>` : ""}
@@ -2300,8 +2359,14 @@ function renderProducts() {
         ${product.description ? `<span>${escapeHtml(product.description)}</span>` : ""}
       </div>
       <div class="product-item-actions">
+        <button type="button" class="${product.is_active === false ? "btn-secondary" : "btn-primary"} product-active-btn" data-action="toggle-product-active" data-product-id="${product.id}">
+          <i class="bi ${product.is_active === false ? "bi-toggle-off" : "bi-toggle-on"}"></i> ${product.is_active === false ? "Off" : "On"}
+        </button>
         <button type="button" class="btn-secondary" data-action="edit-product" data-product-id="${product.id}">
           <i class="bi bi-pencil-fill"></i> Editar
+        </button>
+        <button type="button" class="btn-danger" data-action="delete-product" data-product-id="${product.id}">
+          <i class="bi bi-trash3-fill"></i> Apagar
         </button>
       </div>
     `;
@@ -2337,32 +2402,46 @@ function renderOrders() {
           ? "cancelled"
           : "pending";
     item.classList.add("order-card-compact", orderCardClass);
+    const isExpanded = Boolean(state.expandedOrderIds[String(order.id || "").trim()]);
+    item.classList.toggle("expanded", isExpanded);
     const itemsPreview = Array.isArray(order.items) && order.items.length
       ? order.items
           .map((entry) => {
             const name = String(entry.name || entry.product || "item").trim();
             const qty = String(entry.quantity || entry.qty || "1").trim();
-            return `${name} (${qty})`;
+            return `${qty} - ${name}`;
           })
-          .join(", ")
+          .join("\n")
       : "Sem itens detalhados";
     item.innerHTML = `
-      <div class="product-item-main">
-        <strong>${escapeHtml(order.conversation_name || order.customer_phone || "Pedido sem cliente")}</strong>
-        <span>Status: ${escapeHtml(statusLabel)}</span>
-        <span>Resumo: ${escapeHtml(order.summary || "-")}</span>
-        <span>Itens: ${escapeHtml(itemsPreview)}</span>
-        <span>Total estimado: ${escapeHtml(totalText)}</span>
-        <span>Responsável: ${escapeHtml(order.responsible_name || "-")}</span>
-        <span>${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
-        <span>${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
-        <span>${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
-        ${order.notes ? `<span>Observação: ${escapeHtml(order.notes)}</span>` : ""}
-        ${order.ready_time_minutes ? `<span>Tempo mínimo: ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
-        ${order.confirmation_note ? `<span>Observação da confirmação: ${escapeHtml(order.confirmation_note)}</span>` : ""}
-        ${order.cancel_reason ? `<span>Motivo do cancelamento: ${escapeHtml(order.cancel_reason)}</span>` : ""}
+      <div class="schedule-list-main">
+        <div class="schedule-list-summary">
+          <div class="schedule-list-summary-head">
+            <div class="order-summary-head-inline">
+              <strong class="schedule-list-summary-name">${escapeHtml(order.conversation_name || order.customer_phone || "Pedido sem cliente")}</strong>
+              <span class="schedule-list-status ${orderCardClass}">${escapeHtml(statusLabel)}</span>
+            </div>
+          </div>
+          <div class="schedule-list-summary-meta">
+            <span><i class="bi bi-cash-stack"></i> ${escapeHtml(totalText)}</span>
+          </div>
+        </div>
+        <div class="order-list-details"${isExpanded ? "" : ' hidden'}>
+          <span><i class="bi bi-box-seam"></i> ${escapeHtml(itemsPreview).replace(/\n/g, "<br />")}</span>
+          <span><i class="bi bi-person"></i> ${escapeHtml(order.responsible_name || "-")}</span>
+          <span><i class="bi bi-truck"></i> ${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
+          <span><i class="bi bi-geo-alt"></i> ${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
+          <span><i class="bi bi-wallet2"></i> ${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
+          ${order.notes ? `<span><i class="bi bi-card-text"></i> ${escapeHtml(order.notes)}</span>` : ""}
+          ${order.ready_time_minutes ? `<span><i class="bi bi-hourglass-split"></i> ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
+          ${order.confirmation_note ? `<span><i class="bi bi-patch-check"></i> ${escapeHtml(order.confirmation_note)}</span>` : ""}
+          ${order.cancel_reason ? `<span><i class="bi bi-x-octagon"></i> ${escapeHtml(order.cancel_reason)}</span>` : ""}
+        </div>
       </div>
-      <div class="product-item-actions">
+      <div class="schedule-list-actions">
+        <button type="button" class="schedule-icon-btn pdf" data-action="open-order-pdf" data-order-id="${order.id}" title="Abrir PDF do pedido" aria-label="Abrir PDF do pedido">
+          <i class="bi bi-file-earmark-pdf"></i>
+        </button>
         ${
           order.conversation_id
             ? `<button type="button" class="schedule-icon-btn goto" data-action="open-order-chat" data-order-id="${order.id}" title="Ir para a conversa" aria-label="Ir para a conversa">
@@ -2376,8 +2455,12 @@ function renderOrders() {
                 <i class="bi bi-check2-circle"></i>
               </button>`
             : orderStatus === "confirmed"
-              ? `<span class="service-status-tag in_progress order-status-pill">Confirmado</span>`
-              : `<span class="service-status-tag finalized order-status-pill">Cancelado</span>`
+              ? `<span class="schedule-icon-btn confirm order-status-icon" title="Confirmado" aria-label="Confirmado">
+                  <i class="bi bi-check2-circle"></i>
+                </span>`
+              : `<span class="schedule-icon-btn cancel order-status-icon" title="Cancelado" aria-label="Cancelado">
+                  <i class="bi bi-x-circle"></i>
+                </span>`
         }
         ${
           orderStatus !== "cancelled"
@@ -2391,6 +2474,18 @@ function renderOrders() {
         </button>
       </div>
     `;
+    item.addEventListener("click", (event) => {
+      if (event.target.closest(".schedule-list-actions")) {
+        return;
+      }
+      const nextExpanded = !item.classList.contains("expanded");
+      state.expandedOrderIds[String(order.id || "").trim()] = nextExpanded;
+      item.classList.toggle("expanded", nextExpanded);
+      const detailsEl = item.querySelector(".order-list-details");
+      if (detailsEl) {
+        detailsEl.hidden = !nextExpanded;
+      }
+    });
     ordersListEl.appendChild(item);
   }
 }
@@ -2573,12 +2668,14 @@ function renderSchedulesList() {
 async function loadProducts() {
   const result = await api("/products");
   state.products = Array.isArray(result?.items) ? result.items : [];
+  renderProductGroupOptions();
   renderProducts();
 }
 
 async function loadAiOrders() {
   const result = await api("/ai/orders");
   state.productOrders = Array.isArray(result?.items) ? result.items : [];
+  state.expandedOrderIds = {};
   renderOrders();
 }
 
@@ -6506,6 +6603,7 @@ productCancelEditBtnEl.addEventListener("click", () => {
   setProductsTab("list");
 });
 productNameEl.addEventListener("input", () => updateProductPreview());
+productGroupEl.addEventListener("input", () => updateProductPreview());
 productTypeEl.addEventListener("change", () => updateProductTypeState());
 productPriceEl.addEventListener("input", () => updateProductPreview());
 productDiscountEnabledEl.addEventListener("change", () => updateProductDiscountState());
@@ -6514,6 +6612,7 @@ productDiscountPriceEl.addEventListener("input", () => updateProductPreview());
 productStockEl.addEventListener("input", () => updateProductPreview());
 productServiceDurationEl.addEventListener("input", () => updateProductPreview());
 productDescriptionEl.addEventListener("input", () => updateProductPreview());
+productImageSelectBtnEl?.addEventListener("click", () => productImageEl?.click());
 productImageEl.addEventListener("change", async () => {
   const file = productImageEl.files?.[0] || null;
   if (file && !ALLOWED_PRODUCT_IMAGE_TYPES.has(String(file.type || "").toLowerCase())) {
@@ -6524,15 +6623,75 @@ productImageEl.addEventListener("change", async () => {
   }
   updateProductPreview();
 });
+productGroupSuggestionsEl?.addEventListener("click", (event) => {
+  const button = event.target.closest(".product-group-chip");
+  if (!button) return;
+  productGroupEl.value = String(button.dataset.groupName || "");
+  updateProductPreview();
+});
 updateProductPreview();
 updateProductDiscountState();
 updateProductScheduleState();
 productsListEl.addEventListener("click", (event) => {
-  const target = event.target.closest("[data-action='edit-product']");
+  const target = event.target.closest("[data-action]");
   if (!target) return;
+  const action = String(target.getAttribute("data-action") || "").trim();
   const product = findProductById(target.getAttribute("data-product-id"));
   if (!product) return;
-  fillProductForm(product);
+  if (action === "edit-product") {
+    fillProductForm(product);
+    return;
+  }
+
+  if (action === "toggle-product-active") {
+    void (async () => {
+      const nextActive = product.is_active === false;
+      const confirmed = await showConfirm(
+        nextActive
+          ? `Ativar ${product.name || "este produto"} para o agente voltar a recomendar?`
+          : `Desativar ${product.name || "este produto"} para o agente parar de recomendar?`,
+        nextActive ? "Ativar produto" : "Desativar produto",
+        nextActive ? "Ativar" : "Desativar",
+        "Cancelar",
+      );
+      if (!confirmed) return;
+      try {
+        await api(`/products/${encodeURIComponent(product.id)}/active`, {
+          method: "PATCH",
+          body: JSON.stringify({ is_active: nextActive ? "true" : "false" }),
+        });
+        await loadProducts();
+        await loadAgentStatus().catch(() => undefined);
+      } catch (error) {
+        await showAlert(error.message || "Falha ao atualizar o status do produto.");
+      }
+    })();
+    return;
+  }
+
+  if (action === "delete-product") {
+    void (async () => {
+      const confirmed = await showConfirm(
+        `Apagar ${product.name || "este produto"} do catálogo?`,
+        "Apagar produto",
+        "Apagar",
+        "Cancelar",
+      );
+      if (!confirmed) return;
+      try {
+        await api(`/products/${encodeURIComponent(product.id)}`, {
+          method: "DELETE",
+        });
+        if (String(state.editingProductId || "") === String(product.id || "")) {
+          resetProductForm();
+        }
+        await loadProducts();
+        await loadAgentStatus().catch(() => undefined);
+      } catch (error) {
+        await showAlert(error.message || "Falha ao apagar produto.");
+      }
+    })();
+  }
 });
 ordersListEl.addEventListener("click", async (event) => {
   const actionTarget = event.target.closest("[data-action]");
@@ -6544,6 +6703,12 @@ ordersListEl.addEventListener("click", async (event) => {
 
   if (action === "open-order-chat") {
     await openConversationFromEntity(order.conversation_id);
+    return;
+  }
+
+  if (action === "open-order-pdf") {
+    const pdfUrl = `/ai/orders/${encodeURIComponent(orderId)}/pdf`;
+    window.open(pdfUrl, "_blank", "noopener,noreferrer");
     return;
   }
 
@@ -6804,7 +6969,9 @@ scheduleNextMonthBtnEl.addEventListener("click", () => {
 productsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const productId = String(productIdEl.value || state.editingProductId || "").trim();
+  const isActive = Boolean(productActiveEl.checked);
   const name = String(productNameEl.value || "").trim();
+  const groupName = normalizeProductGroupName(productGroupEl.value || "");
   const type = String(productTypeEl.value || "product").trim() === "service" ? "service" : "product";
   const price = String(productPriceEl.value || "").trim();
   const discountEnabled = Boolean(productDiscountEnabledEl.checked);
@@ -6845,6 +7012,8 @@ productsFormEl.addEventListener("submit", async (event) => {
   try {
     const form = new FormData();
     form.append("name", name);
+    form.append("is_active", isActive ? "true" : "false");
+    form.append("group_name", groupName);
     form.append("type", type);
     form.append("description", description);
     form.append("price", price || "0");

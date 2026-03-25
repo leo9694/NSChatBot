@@ -4,6 +4,7 @@ export interface ProductRow {
   id: string;
   company_id?: string | null;
   name: string;
+  group_name: string | null;
   type: "product" | "service";
   description: string | null;
   price: string;
@@ -28,6 +29,7 @@ export async function ensureProductsSchema(): Promise<void> {
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE,
           name VARCHAR(180) NOT NULL,
+          group_name VARCHAR(120),
           type VARCHAR(20) NOT NULL DEFAULT 'product',
           description TEXT,
           price NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -46,6 +48,10 @@ export async function ensureProductsSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE products
         ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE
+      `);
+      await pool.query(`
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS group_name VARCHAR(120)
       `);
       await pool.query(`
         ALTER TABLE products
@@ -97,6 +103,8 @@ export async function ensureProductsSchema(): Promise<void> {
 export async function createProduct(input: {
   companyId: string;
   name: string;
+  groupName?: string | null;
+  isActive?: boolean;
   type: "product" | "service";
   description?: string | null;
   price: number;
@@ -114,6 +122,8 @@ export async function createProduct(input: {
     INSERT INTO products (
       company_id,
       name,
+      group_name,
+      is_active,
       type,
       description,
       price,
@@ -125,11 +135,12 @@ export async function createProduct(input: {
       image_url,
       created_by
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING
       id,
       company_id,
       name,
+      group_name,
       type,
       description,
       price::text,
@@ -146,6 +157,8 @@ export async function createProduct(input: {
     [
       input.companyId,
       input.name,
+      input.groupName || null,
+      input.isActive !== false,
       input.type,
       input.description || null,
       input.price,
@@ -166,6 +179,8 @@ export async function updateProduct(input: {
   id: string;
   companyId: string;
   name: string;
+  groupName?: string | null;
+  isActive?: boolean;
   type: "product" | "service";
   description?: string | null;
   price: number;
@@ -182,22 +197,25 @@ export async function updateProduct(input: {
     UPDATE products
     SET
       name = $2,
-      type = $3,
-      description = $4,
-      price = $5,
-      discount_enabled = $6,
-      discount_price = $7,
-      schedule_enabled = $8,
-      service_duration_minutes = $9,
-      stock = $10,
-      image_url = COALESCE($11, image_url),
+      group_name = $3,
+      is_active = $4,
+      type = $5,
+      description = $6,
+      price = $7,
+      discount_enabled = $8,
+      discount_price = $9,
+      schedule_enabled = $10,
+      service_duration_minutes = $11,
+      stock = $12,
+      image_url = COALESCE($13, image_url),
       updated_at = NOW()
     WHERE id = $1
-      AND company_id = $12
+      AND company_id = $14
     RETURNING
       id,
       company_id,
       name,
+      group_name,
       type,
       description,
       price::text,
@@ -214,6 +232,8 @@ export async function updateProduct(input: {
     [
       input.id,
       input.name,
+      input.groupName || null,
+      input.isActive !== false,
       input.type,
       input.description || null,
       input.price,
@@ -238,6 +258,7 @@ export async function listProducts(companyId?: string | null): Promise<ProductRo
       id,
       company_id,
       name,
+      group_name,
       type,
       description,
       price::text,
@@ -251,9 +272,8 @@ export async function listProducts(companyId?: string | null): Promise<ProductRo
       created_at::text,
       updated_at::text
     FROM products
-    WHERE is_active = true
-      AND ($1::uuid IS NULL OR company_id = $1)
-    ORDER BY created_at DESC, name ASC
+    WHERE ($1::uuid IS NULL OR company_id = $1)
+    ORDER BY group_name ASC NULLS LAST, created_at DESC, name ASC
     `,
     [companyId || null],
   );
@@ -261,8 +281,64 @@ export async function listProducts(companyId?: string | null): Promise<ProductRo
   return result.rows;
 }
 
+export async function setProductActiveStatus(input: {
+  id: string;
+  companyId: string;
+  isActive: boolean;
+}): Promise<ProductRow | null> {
+  await ensureProductsSchema();
+  const result = await pool.query<ProductRow>(
+    `
+    UPDATE products
+    SET
+      is_active = $3,
+      updated_at = NOW()
+    WHERE id = $1
+      AND company_id = $2
+    RETURNING
+      id,
+      company_id,
+      name,
+      group_name,
+      type,
+      description,
+      price::text,
+      discount_enabled,
+      discount_price::text,
+      schedule_enabled,
+      service_duration_minutes,
+      stock,
+      image_url,
+      is_active,
+      created_at::text,
+      updated_at::text
+    `,
+    [input.id, input.companyId, input.isActive],
+  );
+
+  return result.rows[0] || null;
+}
+
+export async function deleteProduct(input: {
+  id: string;
+  companyId: string;
+}): Promise<boolean> {
+  await ensureProductsSchema();
+  const result = await pool.query(
+    `
+    DELETE FROM products
+    WHERE id = $1
+      AND company_id = $2
+    `,
+    [input.id, input.companyId],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
 export async function listProductsForAgentContext(companyId?: string | null): Promise<Array<{
   name: string;
+  group_name: string | null;
   type: string;
   description: string | null;
   price: string;
@@ -276,11 +352,11 @@ export async function listProductsForAgentContext(companyId?: string | null): Pr
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
+    SELECT name, group_name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
     FROM products
     WHERE is_active = true
       AND ($1::uuid IS NULL OR company_id = $1)
-    ORDER BY name ASC
+    ORDER BY group_name ASC NULLS LAST, name ASC
     `,
     [companyId || null],
   );
@@ -292,6 +368,7 @@ export async function listProductsForAgentDetailedContext(companyId?: string | n
   id: string;
   company_id?: string | null;
   name: string;
+  group_name: string | null;
   type: string;
   description: string | null;
   price: string;
@@ -305,11 +382,11 @@ export async function listProductsForAgentDetailedContext(companyId?: string | n
   await ensureProductsSchema();
   const result = await pool.query(
     `
-    SELECT id, company_id, name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
+    SELECT id, company_id, name, group_name, type, description, price::text, discount_enabled, discount_price::text, schedule_enabled, service_duration_minutes, stock, image_url
     FROM products
     WHERE is_active = true
       AND ($1::uuid IS NULL OR company_id = $1)
-    ORDER BY name ASC
+    ORDER BY group_name ASC NULLS LAST, name ASC
     `,
     [companyId || null],
   );

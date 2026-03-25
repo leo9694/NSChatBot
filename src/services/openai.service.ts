@@ -83,6 +83,7 @@ export async function getAgentProductContextText(companyId?: string | null): Pro
   return products
     .map((item) => {
       const typeLabel = item.type === "service" ? "serviço" : "produto";
+      const groupLabel = item.group_name ? ` | grupo: ${item.group_name}` : "";
       const stockLabel = item.type === "service" ? "estoque: não se aplica" : `estoque: ${item.stock}`;
       const scheduleLabel =
         item.type === "service"
@@ -91,7 +92,7 @@ export async function getAgentProductContextText(companyId?: string | null): Pro
             }`
           : "";
       const descriptionLabel = item.description ? ` | descrição: ${item.description}` : "";
-      return `- ${item.name} | tipo: ${typeLabel} | preço: ${item.price}${buildProductDiscountLabel(item)} | ${stockLabel}${scheduleLabel}${descriptionLabel}`;
+      return `- ${item.name}${groupLabel} | tipo: ${typeLabel} | preço: ${item.price}${buildProductDiscountLabel(item)} | ${stockLabel}${scheduleLabel}${descriptionLabel}`;
     })
     .join("\n");
 }
@@ -301,6 +302,7 @@ export async function generateAiSalesReply(input: {
       ? detailedProducts
           .map((item) => {
             const typeLabel = item.type === "service" ? "serviço" : "produto";
+            const groupLabel = item.group_name ? ` | grupo: ${item.group_name}` : "";
             const stockLabel = item.type === "service" ? "estoque: não se aplica" : `estoque: ${item.stock}`;
             const descriptionLabel = item.description ? ` | descrição: ${item.description}` : "";
             const scheduleLabel =
@@ -311,7 +313,7 @@ export async function generateAiSalesReply(input: {
                       : ""
                   }`
                 : "";
-            return `- ${item.name} | tipo: ${typeLabel} | preço: ${item.price}${buildProductDiscountLabel(item)} | ${stockLabel}${scheduleLabel} | imagem: ${item.image_url ? "sim" : "não"}${descriptionLabel}`;
+            return `- ${item.name}${groupLabel} | tipo: ${typeLabel} | preço: ${item.price}${buildProductDiscountLabel(item)} | ${stockLabel}${scheduleLabel} | imagem: ${item.image_url ? "sim" : "não"}${descriptionLabel}`;
           })
           .join("\n")
       : "Nenhum produto cadastrado.";
@@ -376,6 +378,7 @@ export async function generateAiSalesReply(input: {
           "Fale como um vendedor humano experiente, sem exagero e sem formalidade excessiva. " +
           "Organize a resposta visualmente. Quando houver mais de um item ou mais de um detalhe, use quebras de linha e listas curtas, em vez de bloco único longo. " +
           "Se o cliente pedir produtos disponíveis, catálogo, opções, valores ou comparação, responda com uma lista curta e clara, uma linha por item. " +
+          "Se o cliente pedir itens de um grupo, categoria ou coleção específica, use o campo grupo do catálogo para filtrar a resposta e não misture itens de outros grupos quando o grupo estiver claro. " +
           "Não transforme tudo em texto longo. Prefira blocos curtos e fáceis de ler no WhatsApp. " +
           "Escreva pensando em tela de celular: frases curtas, parágrafos curtos, listas pequenas e sem linhas muito compridas. " +
           "Evite parênteses longos, observações extensas na mesma frase e excesso de informação em uma única mensagem. " +
@@ -451,6 +454,10 @@ export async function generateAiSalesReply(input: {
           "Se o cliente usar expressões como 'quero esse', 'quero dois desses', 'pode colocar esse', 'inclui esse' ou equivalentes junto de uma mensagem citada, interprete que ele quer adicionar o item citado ao pedido ou iniciar um pedido com esse item. " +
           "Expressões curtas como 'esse mesmo' ou 'mais desse' em resposta a uma mensagem citada também devem ser entendidas como seleção do item citado para o pedido. " +
           "Nesses casos, não responda só repetindo preço. Avance no fluxo de pedido usando o item citado como referência principal. " +
+          "O catálogo atual enviado no contexto é a fonte de verdade da empresa neste momento. " +
+          "Se um produto não estiver no catálogo atual, trate esse produto como indisponível ou não cadastrado, mesmo que ele apareça no histórico da conversa, em memória antiga ou em mensagens anteriores. " +
+          "Nunca recupere item antigo do histórico para listar como disponível se ele não estiver no catálogo atual. " +
+          "Quando o cliente pedir uma categoria, grupo ou tipo de item, liste somente os itens que existirem no catálogo atual e combinem com esse pedido. " +
           "Se o cliente mandar duas ou mais mensagens seguidas muito próximas, trate o bloco dessas mensagens como um único turno de intenção. Mensagens curtas como 'por favor', 'isso', 'sim', 'esse', 'desses', 'quero esse' ou 'e também' devem ser interpretadas junto da mensagem imediatamente anterior do mesmo cliente. " +
           "Se o cliente responder apenas com 'sim', 'isso', 'isso mesmo', 'ok', 'pode', 'quero', 'tenho interesse' ou equivalente, interprete essa resposta com base na última mensagem da empresa e na mensagem citada antes de concluir que o contexto está incompleto. " +
           "Se o cliente pedir algo inviável ou não suportado, como quantidade absurdamente acima do disponível, frete grátis não configurado ou destino que você não consegue validar, seja firme e natural: diga apenas o que não é possível e convide o cliente a ajustar para uma opção viável. " +

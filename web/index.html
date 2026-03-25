@@ -417,54 +417,7 @@
                     </div>
                   </div>
 
-                  <form id="storeInfoForm" class="new-chat-form products-form store-info-form">
-                    <div class="store-form-section store-form-section-primary">
-                      <div class="store-form-grid">
-                        <label>
-                          Nome da loja
-                          <input id="storeNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
-                        </label>
-                        <label>
-                          CNPJ
-                          <input id="storeCnpjInput" type="text" placeholder="00.000.000/0000-00" />
-                        </label>
-                      </div>
-                    </div>
-
-                    <div class="store-form-section">
-                      <div class="store-form-section-head">
-                        <strong>Endereço da loja</strong>
-                        <span>Preencha cada campo separadamente para o agente responder melhor.</span>
-                      </div>
-                      <div class="store-address-grid">
-                        <label>
-                          Cidade
-                          <input id="storeAddressCityInput" type="text" placeholder="Ex.: Jaciara - MT" />
-                        </label>
-                        <label>
-                          Rua
-                          <input id="storeAddressStreetInput" type="text" placeholder="Ex.: Rua Tocantins" />
-                        </label>
-                        <label>
-                          Número
-                          <input id="storeAddressNumberInput" type="text" placeholder="Ex.: 374" />
-                        </label>
-                        <label>
-                          Bairro
-                          <input id="storeAddressNeighborhoodInput" type="text" placeholder="Ex.: Centro" />
-                        </label>
-                        <label class="store-address-complement">
-                          Complemento
-                          <input id="storeAddressComplementInput" type="text" placeholder="Ex.: Sala 2, próximo à praça" />
-                        </label>
-                      </div>
-                    </div>
-
-                    <label class="product-description-field">
-                      Descrição da loja
-                      <textarea id="storeDescriptionInput" rows="4" placeholder="Descreva a loja, o foco do atendimento e os principais diferenciais."></textarea>
-                    </label>
-
+                  <form id="storeInfoForm" class="new-chat-form store-info-form">
                     <div class="store-form-section">
                       <div class="store-form-section-head">
                         <strong>Identidade visual da empresa</strong>
@@ -493,6 +446,64 @@
                           </div>
                           <div id="companyPaletteList" class="company-palette-list"></div>
                         </div>
+                      </div>
+                    </div>
+
+                    <div class="store-info-details-grid">
+                      <div class="store-form-section store-form-section-primary">
+                        <div class="store-form-section-head">
+                          <strong>Dados principais</strong>
+                          <span>Essas informações ajudam o agente a identificar a empresa de forma rápida e consistente.</span>
+                        </div>
+                        <div class="store-form-grid">
+                          <label>
+                            Nome da loja
+                            <input id="storeNameInput" type="text" placeholder="Ex.: Norte Sul Sementes" />
+                          </label>
+                          <label>
+                            CNPJ
+                            <input id="storeCnpjInput" type="text" placeholder="00.000.000/0000-00" />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="store-form-section">
+                        <div class="store-form-section-head">
+                          <strong>Endereço da loja</strong>
+                          <span>Preencha cada campo separadamente para o agente responder melhor.</span>
+                        </div>
+                        <div class="store-address-grid">
+                          <label>
+                            Cidade
+                            <input id="storeAddressCityInput" type="text" placeholder="Ex.: Jaciara - MT" />
+                          </label>
+                          <label>
+                            Rua
+                            <input id="storeAddressStreetInput" type="text" placeholder="Ex.: Rua Tocantins" />
+                          </label>
+                          <label>
+                            Número
+                            <input id="storeAddressNumberInput" type="text" placeholder="Ex.: 374" />
+                          </label>
+                          <label>
+                            Bairro
+                            <input id="storeAddressNeighborhoodInput" type="text" placeholder="Ex.: Centro" />
+                          </label>
+                          <label class="store-address-complement">
+                            Complemento
+                            <input id="storeAddressComplementInput" type="text" placeholder="Ex.: Sala 2, próximo à praça" />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="store-form-section store-form-section-description">
+                        <div class="store-form-section-head">
+                          <strong>Descrição da loja</strong>
+                          <span>Explique o foco da empresa, o estilo de atendimento, os diferenciais e qualquer contexto importante para o agente responder melhor.</span>
+                        </div>
+                        <label class="store-description-field">
+                          <textarea id="storeDescriptionInput" rows="7" placeholder="Descreva a loja, o foco do atendimento, os principais diferenciais e observações relevantes para o agente."></textarea>
+                        </label>
                       </div>
                     </div>
 
@@ -534,38 +545,57 @@
                         </div>
                       </div>
                       <input id="productId" type="hidden" />
-                      <label>
+                      <label class="product-discount-toggle product-field-wide product-active-toggle">
+                        <span>Produto ativo</span>
+                        <span class="toggle-switch">
+                          <input id="productActive" type="checkbox" checked />
+                          <span class="toggle-switch-ui" aria-hidden="true"></span>
+                        </span>
+                      </label>
+                      <label class="product-field-wide">
                         Nome
-                      <input id="productName" type="text" required />
+                        <input id="productName" type="text" required />
+                      </label>
+                    <label class="product-field-quarter">
+                      Grupo
+                      <input id="productGroup" type="text" list="productGroupOptions" placeholder="Digite ou escolha um grupo" />
+                      <small>Você pode usar um grupo existente ou criar um novo ao salvar.</small>
+                      <div id="productGroupSuggestions" class="product-group-suggestions" hidden></div>
                     </label>
-                    <label>
+                    <label class="product-field-quarter">
                       Tipo
                       <select id="productType" required>
                         <option value="product">Produto</option>
                         <option value="service">Serviço</option>
                       </select>
                     </label>
-                    <label>
+                    <label class="product-field-quarter">
                       Preço
                       <input id="productPrice" type="number" min="0" step="0.01" required />
                     </label>
-                    <label class="product-discount-toggle">
-                      <span>Desconto habilitado</span>
-                      <input id="productDiscountEnabled" type="checkbox" />
-                    </label>
-                    <label id="productDiscountPriceField" hidden>
-                      Preço com desconto
-                      <input id="productDiscountPrice" type="number" min="0" step="0.01" />
-                    </label>
-                    <label id="productStockField">
+                    <label id="productStockField" class="product-field-quarter">
                       Estoque
                       <input id="productStock" type="number" min="0" step="1" required />
                     </label>
-                    <label id="productScheduleToggleField" class="product-discount-toggle" hidden>
-                      <span>Habilitar agendamento</span>
-                      <input id="productScheduleEnabled" type="checkbox" />
+                    <label class="product-discount-toggle product-field-half">
+                      <span>Desconto habilitado</span>
+                      <span class="toggle-switch">
+                        <input id="productDiscountEnabled" type="checkbox" />
+                        <span class="toggle-switch-ui" aria-hidden="true"></span>
+                      </span>
                     </label>
-                    <label id="productScheduleDurationField" hidden>
+                    <label id="productDiscountPriceField" class="product-field-half" hidden>
+                      Preço com desconto
+                      <input id="productDiscountPrice" type="number" min="0" step="0.01" />
+                    </label>
+                    <label id="productScheduleToggleField" class="product-discount-toggle product-field-half" hidden>
+                      <span>Habilitar agendamento</span>
+                      <span class="toggle-switch">
+                        <input id="productScheduleEnabled" type="checkbox" />
+                        <span class="toggle-switch-ui" aria-hidden="true"></span>
+                      </span>
+                    </label>
+                    <label id="productScheduleDurationField" class="product-field-half" hidden>
                       Tempo médio do serviço (minutos)
                       <input id="productServiceDuration" type="number" min="1" step="1" />
                     </label>
@@ -575,9 +605,13 @@
                     </label>
                     <label class="product-image-field">
                       Imagem
-                        <input id="productImage" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" />
-                        <small>Use uma foto nítida para ajudar o agente a sugerir o item.</small>
-                      </label>
+                      <input id="productImage" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" hidden />
+                      <button id="productImageSelectBtn" type="button" class="btn-secondary product-image-select-btn">
+                        <i class="bi bi-image"></i> Enviar imagem
+                      </button>
+                      <small>Use uma foto nítida para ajudar o agente a sugerir o item.</small>
+                    </label>
+                    <datalist id="productGroupOptions"></datalist>
                       <div class="products-form-actions">
                         <button id="productSubmitBtn" type="submit" class="btn-primary">
                           <i class="bi bi-check2-circle"></i> Cadastrar produto
