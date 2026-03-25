@@ -1,4 +1,4 @@
-import { saveOutboundMessage } from "../repositories/messages.repository";
+﻿import { saveOutboundMessage } from "../repositories/messages.repository";
 import {
   cancelAiSchedule,
   createAiOrder,
@@ -16,9 +16,11 @@ import {
 } from "../repositories/ai.repository";
 import {
   activateAiConversation,
+  clearConversationAiOrderDraft,
   clearConversationAiRescheduleContext,
   finalizeAiConversation,
   markConversationForHumanTransfer,
+  setConversationAiOrderDraft,
   setConversationAiRescheduleContext,
 } from "../repositories/conversations.repository";
 import { getWhatsAppAccountById } from "../repositories/accounts.repository";
@@ -195,7 +197,7 @@ function buildProductImageCaption(
   const name = String(product.name || "").trim();
   const description = String(product.description || "").trim();
   const numericPrice = Number(product.price || 0);
-  const formattedPrice = Number.isFinite(numericPrice) ? `Preço: R$${numericPrice.toFixed(2)}` : "";
+  const formattedPrice = Number.isFinite(numericPrice) ? `PreÃ§o: R$${numericPrice.toFixed(2)}` : "";
   const hasNumericStock = Number.isFinite(Number(product.stock));
   const formattedStock = hasNumericStock ? `Estoque: ${Math.max(0, Math.round(Number(product.stock)))}` : "";
 
@@ -241,7 +243,7 @@ function buildProductImageCaption(
       lines.push(formattedPrice);
     }
     if (explicitDescriptionRule && description) {
-      lines.push(`Descrição: ${description}`);
+      lines.push(`DescriÃ§Ã£o: ${description}`);
     }
     if (explicitStockRule && formattedStock) {
       lines.push(formattedStock);
@@ -330,7 +332,7 @@ function wasAwaitingOrderConfirmation(messages: any[]): boolean {
     .map((item) => normalizeText(String(item?.body || "")));
 
   return recentOutbound.some((body) =>
-    /(quer que eu confirme|posso confirmar|se estiver certo[, ]*posso confirmar|se voce confirmar[, ]*eu gero|se voc� confirmar[, ]*eu gero|confirma que eu gero|pode confirmar o pedido|quer confirmar o pedido|preciso da sua confirmacao final|me responda com uma confirmacao)/.test(
+    /(antes de gerar o pedido|quer que eu confirme|posso confirmar|se estiver certo[, ]*posso confirmar|se estiver tudo certo|se voce confirmar[, ]*eu gero|se vocï¿½ confirmar[, ]*eu gero|confirma que eu gero|pode confirmar o pedido|quer confirmar o pedido|preciso da sua confirmacao final|me responda com uma confirmacao|pode gerar)/.test(
       body,
     ),
   );
@@ -362,7 +364,7 @@ function hasDirectScheduleSelection(body: string, quotedBody?: string | null): b
     .toLowerCase();
   const combined = normalizeText(rawCombined);
   if (!combined) return false;
-  if (/^\s*(as|�s)?\s*(?:[01]?\d|2[0-3]):[0-5]\d(?:h)?\s*$/.test(rawCombined)) {
+  if (/^\s*(as|ï¿½s)?\s*(?:[01]?\d|2[0-3]):[0-5]\d(?:h)?\s*$/.test(rawCombined)) {
     return true;
   }
   if (/^\s*(?:[01]?\d|2[0-3])h[0-5]\d\s*$/.test(rawCombined)) {
@@ -375,7 +377,7 @@ function hasDirectScheduleSelection(body: string, quotedBody?: string | null): b
     /\b(?:[01]?\d|2[0-3])h\b/.test(rawCombined);
   const hasDateReference =
     /\b\d{4}-\d{2}-\d{2}\b/.test(combined) ||
-    /\b(hoje|amanha|amanh�|depois de amanha|depois de amanh�|segunda|terca|ter�a|quarta|quinta|sexta|sabado|s�bado|domingo|proxima semana|pr�xima semana)\b/.test(
+    /\b(hoje|amanha|amanhï¿½|depois de amanha|depois de amanhï¿½|segunda|terca|terï¿½a|quarta|quinta|sexta|sabado|sï¿½bado|domingo|proxima semana|prï¿½xima semana)\b/.test(
       combined,
     );
   const hasAcceptance = [
@@ -384,7 +386,7 @@ function hasDirectScheduleSelection(body: string, quotedBody?: string | null): b
     "quero este",
     "esse de",
     "esse as",
-    "esse �s",
+    "esse ï¿½s",
     "pode ser",
     "pode agendar",
     "fechado",
@@ -394,7 +396,7 @@ function hasDirectScheduleSelection(body: string, quotedBody?: string | null): b
   ].some((snippet) => combined.includes(normalizeText(snippet)));
   const hasBareTimeSelection =
     hasTimeReference &&
-    (/^\s*(as|�s)\s*\d/.test(rawCombined) ||
+    (/^\s*(as|ï¿½s)\s*\d/.test(rawCombined) ||
       /^\s*(?:[01]?\d|2[0-3]):[0-5]\d(?:h)?\s*$/.test(rawCombined) ||
       /^\s*(?:[01]?\d|2[0-3])h[0-5]\d\s*$/.test(rawCombined));
 
@@ -473,7 +475,7 @@ function isScheduleCancellationRequest(body: string, quotedBody?: string | null,
   }
 
   const hasScheduleReference =
-    /\b(agendamento|atendimento|horario|hor�rio|marcado|marcada|servico|servi�o)\b/.test(combined) ||
+    /\b(agendamento|atendimento|horario|horï¿½rio|marcado|marcada|servico|serviï¿½o)\b/.test(combined) ||
     /\b(agendamento|atendimento)\b/.test(normalizedPrevious);
 
   const mentionsOrderOnly =
@@ -490,7 +492,7 @@ function buildOrderConfirmationPrompt(params: {
   fulfillmentType?: string | null;
   paymentMethod?: string | null;
 }): string {
-  const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirma��o final."];
+  const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirmaï¿½ï¿½o final."];
   const itemLines = Array.isArray(params.items)
     ? params.items
         .map((item) => {
@@ -520,7 +522,7 @@ function buildOrderConfirmationPrompt(params: {
     lines.push(`Pagamento: ${String(params.paymentMethod || "").trim()}`);
   }
 
-  lines.push("", "Se estiver tudo certo, me responda com uma confirma��o, por exemplo: \"sim\", \"pode confirmar\" ou \"pode gerar\".");
+  lines.push("", "Se estiver tudo certo, me responda com uma confirmaï¿½ï¿½o, por exemplo: \"sim\", \"pode confirmar\" ou \"pode gerar\".");
   return lines.join("\n");
 }
 
@@ -530,18 +532,18 @@ function buildScheduleConfirmationPrompt(params: {
   scheduledTime?: string | null;
   durationMinutes?: number | null;
 }): string {
-  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirmação final."];
+  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirmaÃ§Ã£o final."];
   if (String(params.serviceName || "").trim()) {
-    lines.push("", `Serviço: ${String(params.serviceName || "").trim()}`);
+    lines.push("", `ServiÃ§o: ${String(params.serviceName || "").trim()}`);
   }
   if (String(params.scheduledDate || "").trim() || String(params.scheduledTime || "").trim()) {
-    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" às ");
-    lines.push(`Data e horário: ${when}`);
+    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" Ã s ");
+    lines.push(`Data e horÃ¡rio: ${when}`);
   }
   if (Number.isFinite(Number(params.durationMinutes))) {
-    lines.push(`Duração média: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
+    lines.push(`DuraÃ§Ã£o mÃ©dia: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
   }
-  lines.push("", "Se estiver tudo certo, me responda com uma confirmação para eu gerar o agendamento pendente.");
+  lines.push("", "Se estiver tudo certo, me responda com uma confirmaÃ§Ã£o para eu gerar o agendamento pendente.");
   return lines.join("\n");
 }
 
@@ -550,7 +552,7 @@ function indicatesQuotedOrderIntent(body: string): boolean {
   if (!text) return false;
   return (
     /(quero|queria|vou querer|pode colocar|coloca|inclui|incluir|adiciona|adicionar|separa|reservar)/.test(text) &&
-    /\b(desse|desses|desse ai|desse a�|esse|essa|esses|essas)\b/.test(text)
+    /\b(desse|desses|desse ai|desse aï¿½|esse|essa|esses|essas)\b/.test(text)
   );
 }
 
@@ -596,7 +598,7 @@ function buildAiTurnBody(body: string, quotedBody?: string | null, previousCompa
   const cleanPreviousCompany = String(previousCompanyBody || "").trim();
   if (!cleanQuoted) {
     if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
-      return `${cleanBody}\n[�ltima mensagem da empresa: ${cleanPreviousCompany}]`;
+      return `${cleanBody}\n[ï¿½ltima mensagem da empresa: ${cleanPreviousCompany}]`;
     }
     return cleanBody;
   }
@@ -606,11 +608,11 @@ function buildAiTurnBody(body: string, quotedBody?: string | null, previousCompa
   }
 
   if (isShortQuotedFollowup(cleanBody)) {
-    return `${cleanBody}\n[Refer�ncia citada: ${cleanQuoted}]`;
+    return `${cleanBody}\n[Referï¿½ncia citada: ${cleanQuoted}]`;
   }
 
   if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
-    return `${cleanBody}\n[Refer�ncia citada: ${cleanQuoted}]\n[�ltima mensagem da empresa: ${cleanPreviousCompany}]`;
+    return `${cleanBody}\n[Referï¿½ncia citada: ${cleanQuoted}]\n[ï¿½ltima mensagem da empresa: ${cleanPreviousCompany}]`;
   }
 
   return cleanBody;
@@ -661,27 +663,27 @@ function hasCompleteDeliveryAddress(value: string | null | undefined): boolean {
   const hasNoNumber =
     /\bsem numero\b/.test(normalized) ||
     /\bsem numero definido\b/.test(normalized) ||
-    /\bsem n[�o�]?\b/.test(normalized) ||
+    /\bsem n[ï¿½oï¿½]?\b/.test(normalized) ||
     /\bs\/n\b/.test(normalized) ||
     /\bsn\b/.test(normalized) ||
     /\bnao tem numero\b/.test(normalized) ||
-    /\bn�o tem numero\b/.test(normalized) ||
+    /\bnï¿½o tem numero\b/.test(normalized) ||
     /\bnao sei o numero\b/.test(normalized) ||
-    /\bn�o sei o numero\b/.test(normalized) ||
+    /\bnï¿½o sei o numero\b/.test(normalized) ||
     /\bo numero da casa eu nao sei\b/.test(normalized) ||
-    /\bo numero da casa eu n�o sei\b/.test(normalized) ||
+    /\bo numero da casa eu nï¿½o sei\b/.test(normalized) ||
     /\bnumero da casa nao sei\b/.test(normalized) ||
-    /\bnumero da casa n�o sei\b/.test(normalized);
+    /\bnumero da casa nï¿½o sei\b/.test(normalized);
   const hasNumber =
-    /\b(?:n[�o�]?|numero)\s*[:\-]?\s*\d+\b/.test(normalized) ||
+    /\b(?:n[ï¿½oï¿½]?|numero)\s*[:\-]?\s*\d+\b/.test(normalized) ||
     /\b(?:rua|avenida|av|travessa|alameda|rodovia)[^,\n]{0,80},\s*\d+\b/.test(normalized) ||
     /\b(?:rua|avenida|av|travessa|alameda|rodovia)[^,\n]{0,80}\s+\d+\b/.test(normalized);
   const hasDistrict = /\bbairro\b/.test(normalized) || /\bjd\b/.test(normalized) || /\bjardim\b/.test(normalized);
   const hasReference =
     /\breferencia\b/.test(normalized) ||
-    /\brefer�ncia\b/.test(normalized) ||
+    /\breferï¿½ncia\b/.test(normalized) ||
     /\bponto de referencia\b/.test(normalized) ||
-    /\bponto de refer�ncia\b/.test(normalized) ||
+    /\bponto de referï¿½ncia\b/.test(normalized) ||
     /\bem frente\b/.test(normalized) ||
     /\bde frente\b/.test(normalized) ||
     /\bquase em frente\b/.test(normalized) ||
@@ -689,7 +691,7 @@ function hasCompleteDeliveryAddress(value: string | null | undefined): boolean {
     /\bao lado\b/.test(normalized) ||
     /\bdo lado\b/.test(normalized) ||
     /\bproximo\b/.test(normalized) ||
-    /\bpr�ximo\b/.test(normalized) ||
+    /\bprï¿½ximo\b/.test(normalized) ||
     /\bperto\b/.test(normalized) ||
     /\bperto do\b/.test(normalized) ||
     /\bperto da\b/.test(normalized) ||
@@ -698,14 +700,15 @@ function hasCompleteDeliveryAddress(value: string | null | undefined): boolean {
     /\bdepois do\b/.test(normalized) ||
     /\bdepois da\b/.test(normalized) ||
     /\besquina\b/.test(normalized) ||
+    /\bsub esquina\b/.test(normalized) ||
     /\bcasa verde\b/.test(normalized) ||
     /\bcasa azul\b/.test(normalized) ||
     /\bportao verde\b/.test(normalized) ||
     /\bportao azul\b/.test(normalized) ||
     /\bnao tem erro\b/.test(normalized) ||
-    /\bn�o tem erro\b/.test(normalized) ||
+    /\bnï¿½o tem erro\b/.test(normalized) ||
     /\bfacil de achar\b/.test(normalized) ||
-    /\bf�cil de achar\b/.test(normalized);
+    /\bfï¿½cil de achar\b/.test(normalized);
   return hasCity && hasStreet && (hasNumber || hasNoNumber) && hasDistrict && hasReference;
 }
 
@@ -715,17 +718,17 @@ function textIndicatesNoNumber(value: string | null | undefined): boolean {
   return (
     /\bsem numero\b/.test(normalized) ||
     /\bsem numero definido\b/.test(normalized) ||
-    /\bsem n[�o�]?\b/.test(normalized) ||
+    /\bsem n[ï¿½oï¿½]?\b/.test(normalized) ||
     /\bs\/n\b/.test(normalized) ||
     /\bsn\b/.test(normalized) ||
     /\bnao tem numero\b/.test(normalized) ||
-    /\bn�o tem numero\b/.test(normalized) ||
+    /\bnï¿½o tem numero\b/.test(normalized) ||
     /\bnao sei o numero\b/.test(normalized) ||
-    /\bn�o sei o numero\b/.test(normalized) ||
+    /\bnï¿½o sei o numero\b/.test(normalized) ||
     /\bo numero da casa eu nao sei\b/.test(normalized) ||
-    /\bo numero da casa eu n�o sei\b/.test(normalized) ||
+    /\bo numero da casa eu nï¿½o sei\b/.test(normalized) ||
     /\bnumero da casa nao sei\b/.test(normalized) ||
-    /\bnumero da casa n�o sei\b/.test(normalized)
+    /\bnumero da casa nï¿½o sei\b/.test(normalized)
   );
 }
 
@@ -735,9 +738,9 @@ function buildDeliveryAddressForm() {
     "",
     "Cidade:",
     "Rua:",
-    "Número: (se não tiver, informe: sem número)",
+    "NÃºmero: (se nÃ£o tiver, informe: sem nÃºmero)",
     "Bairro:",
-    "Ponto de referência:",
+    "Ponto de referÃªncia:",
   ].join("\n");
 }
 
@@ -767,14 +770,14 @@ function parseStructuredDeliveryAddress(value: string | null | undefined) {
     .filter(Boolean);
 
   for (const segment of segments) {
-    const match = segment.match(/^(cidade|rua|numero|n�mero|bairro|ponto de referencia|ponto de refer�ncia|referencia|refer�ncia)\s*:\s*(.+)$/i);
-    if (!match) continue;
-    const label = normalizeText(match[1]);
-    const valuePart = String(match[2] || "").trim();
+    const separatorIndex = segment.indexOf(":");
+    if (separatorIndex <= 0) continue;
+    const label = normalizeText(segment.slice(0, separatorIndex));
+    const valuePart = String(segment.slice(separatorIndex + 1) || "").trim();
     if (!valuePart) continue;
     if (label === "cidade") parts.city = valuePart;
     if (label === "rua") parts.street = valuePart;
-    if (label === "numero" || label === "n�mero") parts.number = valuePart;
+    if (label === "numero") parts.number = valuePart;
     if (label === "bairro") parts.neighborhood = valuePart;
     if (label.includes("referencia")) parts.reference = valuePart;
   }
@@ -787,18 +790,18 @@ function extractDeliveryReferenceFromText(value: string | null | undefined): str
   if (!source) return null;
 
   const explicitMatch = source.match(
-    /(?:ponto de refer(?:e|�)n(?:c|�)ia|refer(?:e|�)n(?:c|�)ia)\s*[:\-]\s*([^\n.;]+)/iu,
+    /(?:ponto de refer(?:e|ê)n(?:c|ç)ia|refer(?:e|ê)n(?:c|ç)ia)\s*[:\-]\s*([^\n.;]+)/iu,
   );
   let reference = explicitMatch?.[1]?.trim() || "";
 
   if (!reference) {
     const contextualMatch = source.match(
-      /((?:quase em frente|quase de frente|em frente|de frente|ao lado|do lado|perto do|perto da|antes do|antes da|depois do|depois da)[^\n.;]*)/iu,
+      /((?:quase em frente|quase de frente|em frente|de frente|ao lado|do lado|perto do|perto da|antes do|antes da|depois do|depois da|(?:sub\s+)?esquina(?:\s+com)?|casa\s+(?:sub\s+)?esquina)[^\n.;]*)/iu,
     );
     reference = contextualMatch?.[1]?.trim() || "";
   }
 
-  const colorMatch = source.match(/((?:casa|port[a�]o)\s+(?:verde|azul|amarelo|branco|branca|preto|preta|rosa))/iu);
+  const colorMatch = source.match(/((?:casa|port[aï¿½]o)\s+(?:verde|azul|amarelo|branco|branca|preto|preta|rosa))/iu);
   if (colorMatch?.[1]) {
     const colorText = colorMatch[1].trim();
     if (!reference) {
@@ -816,6 +819,16 @@ function enrichDeliveryAddressWithCustomerText(
   currentAddress: string | null | undefined,
   customerText: string | null | undefined,
 ): string | null {
+  const rawCurrentAddress = String(currentAddress || "").trim();
+  const looksLikeStructuredAddress =
+    rawCurrentAddress.includes(":") &&
+    (rawCurrentAddress.includes("\n") ||
+      /cidade\s*:|rua\s*:|numero\s*:|número\s*:|bairro\s*:|referencia\s*:|referência\s*:/i.test(rawCurrentAddress));
+
+  if (looksLikeStructuredAddress) {
+    return rawCurrentAddress;
+  }
+
   const current = parseStructuredDeliveryAddress(currentAddress);
   const sourceText = String(customerText || "").trim();
   if (!sourceText) {
@@ -824,7 +837,7 @@ function enrichDeliveryAddressWithCustomerText(
 
   if (!current.number) {
     if (textIndicatesNoNumber(sourceText)) {
-      current.number = "sem n�mero";
+      current.number = "sem nï¿½mero";
     }
   }
 
@@ -835,9 +848,9 @@ function enrichDeliveryAddressWithCustomerText(
   const orderedLines = [
     current.city ? `Cidade: ${current.city}` : "",
     current.street ? `Rua: ${current.street}` : "",
-    current.number ? `N�mero: ${current.number}` : "",
+    current.number ? `Nï¿½mero: ${current.number}` : "",
     current.neighborhood ? `Bairro: ${current.neighborhood}` : "",
-    current.reference ? `Ponto de refer�ncia: ${current.reference}` : "",
+    current.reference ? `Ponto de referï¿½ncia: ${current.reference}` : "",
   ].filter(Boolean);
 
   if (!orderedLines.length) {
@@ -855,20 +868,20 @@ function buildMissingReferenceReply(
   const noNumber = textIndicatesNoNumber(customerText) || normalizeText(String(parsed.number || "")).includes("sem numero");
   const city = parsed.city || "";
   const street = parsed.street || "";
-  const number = noNumber ? "sem n�mero" : parsed.number || "";
+  const number = noNumber ? "sem nï¿½mero" : parsed.number || "";
   const neighborhood = parsed.neighborhood || "";
 
   return [
-    "Falta só o ponto de referência para eu gerar o pedido.",
+    "Falta sÃ³ o ponto de referÃªncia para eu gerar o pedido.",
     "",
     "Confirma assim:",
     city ? `Cidade: ${city}` : "Cidade:",
     street ? `Rua: ${street}` : "Rua:",
-    number ? `Número: ${number}` : "Número:",
+    number ? `NÃºmero: ${number}` : "NÃºmero:",
     neighborhood ? `Bairro: ${neighborhood}` : "Bairro:",
-    "Ponto de referência:",
+    "Ponto de referÃªncia:",
     "",
-    "Assim que você me enviar o ponto de referência, eu gero o pedido e deixo pendente de confirmação interna.",
+    "Assim que vocÃª me enviar o ponto de referÃªncia, eu gero o pedido e deixo pendente de confirmaÃ§Ã£o interna.",
   ].join("\n");
 }
 
@@ -947,13 +960,13 @@ function isStandaloneAgentMention(body: string, agentName?: string | null): bool
 function isGreetingMessage(body: string): boolean {
   const text = normalizeText(body);
   if (!text) return false;
-  return /^(oi|ola|ol�|bom dia|boa tarde|boa noite|opa|e ai|e a�|tudo bem)/.test(text);
+  return /^(oi|ola|olï¿½|bom dia|boa tarde|boa noite|opa|e ai|e aï¿½|tudo bem)/.test(text);
 }
 
 function isPureGreetingMessage(body: string): boolean {
   const text = normalizeText(body).replace(/[!?.,;:]+$/g, "").trim();
   if (!text) return false;
-  return /^(oi|ola|ol�|bom dia|boa tarde|boa noite|opa|e ai|e a�|tudo bem)$/.test(text);
+  return /^(oi|ola|olï¿½|bom dia|boa tarde|boa noite|opa|e ai|e aï¿½|tudo bem)$/.test(text);
 }
 
 function getCustomerFirstName(displayName?: string | null): string | null {
@@ -992,7 +1005,7 @@ function inferGreetingTone(body?: string | null): "neutral" | "casual" {
   const text = normalizeText(String(body || ""));
   if (!text) return "neutral";
   if (
-    /\b(opa|e ai|e a[ií]|fala|blz|beleza|tudo bem|td bem|bom diaa|boa tardee|boa noitee)\b/.test(text)
+    /\b(opa|e ai|e a[iÃ­]|fala|blz|beleza|tudo bem|td bem|bom diaa|boa tardee|boa noitee)\b/.test(text)
   ) {
     return "casual";
   }
@@ -1060,8 +1073,8 @@ function detectUnrealisticSalesRequest(input: {
   const text = normalizeText(input.body);
   const requestedQuantityMatch = text.match(/\b(\d{4,})\b/);
   const requestedQuantity = requestedQuantityMatch ? Number(requestedQuantityMatch[1]) : null;
-  const asksFreeShipping = text.includes("frete gratis") || text.includes("frete gr�tis");
-  const asksUnsupportedDestination = text.includes("japao") || text.includes("jap�o") || text.includes("lua");
+  const asksFreeShipping = text.includes("frete gratis") || text.includes("frete grï¿½tis");
+  const asksUnsupportedDestination = text.includes("japao") || text.includes("japï¿½o") || text.includes("lua");
   const maxStock = input.catalog.reduce((highest, item) => {
     if (item.type === "service") return highest;
     const stock = Number(item.stock || 0);
@@ -1081,20 +1094,20 @@ function buildUnrealisticSalesReply(
 ) {
   const lines: string[] = [];
   if (details.requestedQuantity && details.maxStock > 0 && details.requestedQuantity > details.maxStock) {
-    lines.push(`No momento eu n�o consigo fechar essa quantidade. Hoje temos at� ${details.maxStock} unidade(s) dispon�vel(is) para esse item.`);
+    lines.push(`No momento eu nï¿½o consigo fechar essa quantidade. Hoje temos atï¿½ ${details.maxStock} unidade(s) disponï¿½vel(is) para esse item.`);
   }
   if (details.asksFreeShipping) {
-    lines.push("Tamb�m n�o tenho permiss�o para oferecer frete gr�tis por aqui.");
+    lines.push("Tambï¿½m nï¿½o tenho permissï¿½o para oferecer frete grï¿½tis por aqui.");
   }
   if (details.asksUnsupportedDestination) {
-    lines.push("Tamb�m n�o consigo confirmar esse destino por aqui sem validar a entrega com a equipe.");
+    lines.push("Tambï¿½m nï¿½o consigo confirmar esse destino por aqui sem validar a entrega com a equipe.");
   }
   if (mood === "formal") {
-    lines.push("Se desejar, informe uma quantidade vi�vel e os dados corretos de entrega para eu seguir com o pedido.");
+    lines.push("Se desejar, informe uma quantidade viï¿½vel e os dados corretos de entrega para eu seguir com o pedido.");
   } else if (mood === "amigavel") {
-    lines.push("Se quiser, me passa uma quantidade vi�vel e os dados corretos de entrega que eu sigo com voc� ");
+    lines.push("Se quiser, me passa uma quantidade viï¿½vel e os dados corretos de entrega que eu sigo com vocï¿½ ");
   } else {
-    lines.push("Se quiser, me diga uma quantidade vi�vel e os dados corretos de entrega que eu sigo com o pedido.");
+    lines.push("Se quiser, me diga uma quantidade viï¿½vel e os dados corretos de entrega que eu sigo com o pedido.");
   }
   return lines.join("\n\n");
 }
@@ -1124,7 +1137,7 @@ function buildClosingReply(mood: "amigavel" | "informal" | "formal") {
     return "Tudo certo. Fico por aqui ";
   }
   if (mood === "formal") {
-    return "Tudo certo. Fico à disposição.";
+    return "Tudo certo. Fico Ã  disposiÃ§Ã£o.";
   }
   return "Tudo certo. Fico por aqui.";
 }
@@ -1135,21 +1148,21 @@ function buildOrderFallbackReply(input: {
 }) {
   if (input.updatedPendingOrder) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirma��o interna. Assim que for confirmado, eu te aviso por aqui ";
+      return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
     }
     if (input.mood === "formal") {
-      return "Perfeito. Seu pedido pendente foi ajustado e permanece aguardando confirma��o interna. Assim que houver a confirma��o, informarei por aqui.";
+      return "Perfeito. Seu pedido pendente foi ajustado e permanece aguardando confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirma��o interna. Assim que for confirmado, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
   }
 
   if (input.mood === "amigavel") {
-    return "Perfeito. Registrei seu pedido e ele ficou pendente de confirma��o interna. Assim que for confirmado, eu te aviso por aqui ";
+    return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
   }
   if (input.mood === "formal") {
-    return "Perfeito. Seu pedido foi registrado e ficou pendente de confirma��o interna. Assim que houver a confirma��o, informarei por aqui.";
+    return "Perfeito. Seu pedido foi registrado e ficou pendente de confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
   }
-  return "Perfeito. Registrei seu pedido e ele ficou pendente de confirma��o interna. Assim que for confirmado, eu te aviso por aqui.";
+  return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
 function buildScheduleFallbackReply(input: {
@@ -1159,31 +1172,31 @@ function buildScheduleFallbackReply(input: {
 }) {
   if (input.reopenedConfirmedSchedule) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+      return "Perfeito. Ajustei seu agendamento confirmado com o novo horÃ¡rio e ele voltou para pendente de confirmaÃ§Ã£o interna. Assim que for confirmado de novo, eu te aviso por aqui.";
     }
     if (input.mood === "formal") {
-      return "Perfeito. O agendamento confirmado foi ajustado com o novo horário e voltou para pendente de confirmação interna. Assim que houver a nova confirmação, informarei por aqui.";
+      return "Perfeito. O agendamento confirmado foi ajustado com o novo horÃ¡rio e voltou para pendente de confirmaÃ§Ã£o interna. Assim que houver a nova confirmaÃ§Ã£o, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu agendamento confirmado com o novo horÃ¡rio e ele voltou para pendente de confirmaÃ§Ã£o interna. Assim que for confirmado de novo, eu te aviso por aqui.";
   }
 
   if (input.updatedPendingSchedule) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirma��o interna. Assim que for confirmado, eu te aviso por aqui ";
+      return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
     }
     if (input.mood === "formal") {
-      return "Perfeito. Seu agendamento pendente foi ajustado e permanece aguardando confirma��o interna. Assim que houver a confirma��o, informarei por aqui.";
+      return "Perfeito. Seu agendamento pendente foi ajustado e permanece aguardando confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirma��o interna. Assim que for confirmado, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
   }
 
   if (input.mood === "amigavel") {
-    return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirma��o interna. Assim que for confirmado, eu te aviso por aqui ";
+    return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
   }
   if (input.mood === "formal") {
-    return "Perfeito. Seu agendamento foi registrado e ficou pendente de confirma��o interna. Assim que houver a confirma��o, informarei por aqui.";
+    return "Perfeito. Seu agendamento foi registrado e ficou pendente de confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
   }
-  return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirma��o interna. Assim que for confirmado, eu te aviso por aqui.";
+  return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
 function buildScheduleCancellationFallbackReply(input: {
@@ -1195,16 +1208,16 @@ function buildScheduleCancellationFallbackReply(input: {
   const serviceLabel = String(input.serviceName || "seu agendamento").trim();
   const whenLabel =
     input.scheduledDate && input.scheduledTime
-      ? ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} �s ${String(input.scheduledTime || "").trim()}`
+      ? ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} ï¿½s ${String(input.scheduledTime || "").trim()}`
       : "";
 
   if (input.mood === "amigavel") {
-    return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
+    return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tambÃ©m posso te ajudar a remarcar.`;
   }
   if (input.mood === "formal") {
-    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo horário.`;
+    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo horÃ¡rio.`;
   }
-  return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
+  return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tambÃ©m posso te ajudar a remarcar.`;
 }
 
 function wasAwaitingScheduleConfirmation(messages: any[]): boolean {
@@ -1214,7 +1227,7 @@ function wasAwaitingScheduleConfirmation(messages: any[]): boolean {
     .map((item) => normalizeText(String(item?.body || "")));
 
   return recentOutbound.some((body) =>
-    /(quer que eu confirme o agendamento|posso confirmar o agendamento|se voce confirmar[, ]*eu agendo|se voc� confirmar[, ]*eu agendo|pode confirmar o agendamento|quer confirmar o agendamento|preciso da sua confirmacao final do agendamento|me responda com uma confirmacao para agendar)/.test(
+    /(quer que eu confirme o agendamento|posso confirmar o agendamento|se voce confirmar[, ]*eu agendo|se vocï¿½ confirmar[, ]*eu agendo|pode confirmar o agendamento|quer confirmar o agendamento|preciso da sua confirmacao final do agendamento|me responda com uma confirmacao para agendar)/.test(
       body,
     ),
   );
@@ -1345,10 +1358,10 @@ function resolveRelativeScheduleDate(rawValue: string | null | undefined, source
   }
 
   const todayIso = getCurrentCuiabaDateIso(baseDate);
-  if (/\bdepois de amanha\b/.test(normalized) || rawText.includes("depois de amanhã")) {
+  if (/\bdepois de amanha\b/.test(normalized) || rawText.includes("depois de amanhÃ£")) {
     return addDaysToIsoDate(todayIso, 2);
   }
-  if (/\bamanha\b/.test(normalized) || rawText.includes("amanhã")) {
+  if (/\bamanha\b/.test(normalized) || rawText.includes("amanhÃ£")) {
     return addDaysToIsoDate(todayIso, 1);
   }
   if (/\bhoje\b/.test(normalized)) {
@@ -1358,11 +1371,11 @@ function resolveRelativeScheduleDate(rawValue: string | null | undefined, source
   const wantsNextWeek = /\b(proxima semana|semana que vem)\b/.test(normalized) || rawText.includes("pr?xima semana");
   const weekdays: Array<{ pattern: RegExp; index: number }> = [
     { pattern: /\bsegunda(?:-feira)?\b/, index: 1 },
-    { pattern: /\bterca(?:-feira)?\b|\bter�a(?:-feira)?\b/, index: 2 },
+    { pattern: /\bterca(?:-feira)?\b|\bterï¿½a(?:-feira)?\b/, index: 2 },
     { pattern: /\bquarta(?:-feira)?\b/, index: 3 },
     { pattern: /\bquinta(?:-feira)?\b/, index: 4 },
     { pattern: /\bsexta(?:-feira)?\b/, index: 5 },
-    { pattern: /\bsabado\b|\bs�bado\b/, index: 6 },
+    { pattern: /\bsabado\b|\bsï¿½bado\b/, index: 6 },
     { pattern: /\bdomingo\b/, index: 0 },
   ];
 
@@ -1394,23 +1407,23 @@ function buildScheduleSummary(input: {
   durationMinutes?: number | null;
 }) {
   const durationPart = Number.isFinite(input.durationMinutes)
-    ? ` | dura��o m�dia: ${Math.round(Number(input.durationMinutes))} min`
+    ? ` | duraï¿½ï¿½o mï¿½dia: ${Math.round(Number(input.durationMinutes))} min`
     : "";
-  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} às ${input.scheduledTime}${durationPart}`;
+  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} Ã s ${input.scheduledTime}${durationPart}`;
 }
 
 function buildScheduleConflictReply(input: {
   mood: "amigavel" | "informal" | "formal";
   conflict: { scheduled_date: string; scheduled_time: string; service_name?: string | null };
 }) {
-  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} às ${String(input.conflict.scheduled_time || "").trim()}`;
+  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} Ã s ${String(input.conflict.scheduled_time || "").trim()}`;
   if (input.mood === "amigavel") {
-    return `Nesse horário eu já tenho um agendamento registrado (${whenLabel}). Me passa outro horário que eu sigo com você.`;
+    return `Nesse horÃ¡rio eu jÃ¡ tenho um agendamento registrado (${whenLabel}). Me passa outro horÃ¡rio que eu sigo com vocÃª.`;
   }
   if (input.mood === "formal") {
-    return `Já existe um agendamento registrado para ${whenLabel}. Por favor, informe outro horário para que eu possa seguir com o agendamento.`;
+    return `JÃ¡ existe um agendamento registrado para ${whenLabel}. Por favor, informe outro horÃ¡rio para que eu possa seguir com o agendamento.`;
   }
-  return `Já existe um agendamento registrado para ${whenLabel}. Me passa outro horário que eu sigo com você.`;
+  return `JÃ¡ existe um agendamento registrado para ${whenLabel}. Me passa outro horÃ¡rio que eu sigo com vocÃª.`;
 }
 
 function findSchedulableServiceMatch(
@@ -1511,12 +1524,12 @@ function buildMissingImageReply(input: {
   const itemLabel = itemName ? ` de ${itemName}` : "";
 
   if (input.mood === "amigavel") {
-    return `Ainda n�o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto `;
+    return `Ainda nï¿½o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto `;
   }
   if (input.mood === "formal") {
-    return `No momento, n�o h� imagem${itemLabel} cadastrada no sistema. Se desejar, posso informar os detalhes do item por mensagem.`;
+    return `No momento, nï¿½o hï¿½ imagem${itemLabel} cadastrada no sistema. Se desejar, posso informar os detalhes do item por mensagem.`;
   }
-  return `Ainda n�o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto.`;
+  return `Ainda nï¿½o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto.`;
 }
 
 function catalogHasPlanLikeItems(
@@ -1542,8 +1555,8 @@ function isPlanLikeInquiry(body: string, quotedBody?: string | null, previousCom
 
   return (
     /\b(plano|planos|pacote|pacotes)\b/.test(combined) ||
-    ((/\b(mensal|trimestral|anual|premium|basico|b�sico)\b/.test(combined) || /\b\d+\s*mes(?:es)?\b/.test(combined)) &&
-      /\b(contratar|quero|fechar|aquele|esse|outro|valor|preco|pre�o|diferenca|diferen�a|mais barato|mais completo)\b/.test(combined))
+    ((/\b(mensal|trimestral|anual|premium|basico|bï¿½sico)\b/.test(combined) || /\b\d+\s*mes(?:es)?\b/.test(combined)) &&
+      /\b(contratar|quero|fechar|aquele|esse|outro|valor|preco|preï¿½o|diferenca|diferenï¿½a|mais barato|mais completo)\b/.test(combined))
   );
 }
 
@@ -1603,7 +1616,7 @@ function isBusinessRelevantTransferTopic(input: {
   if (!combined) return false;
 
   const businessKeywords =
-    /\b(produto|produtos|servico|servicos|pedido|pedidos|agendamento|agendamentos|atendimento|atendimentos|pagamento|pagamentos|entrega|retirada|frete|garantia|suporte|financeiro|orcamento|orçamento|preco|preço|valor|valores|desconto|estoque|disponibilidade|prazo|cnpj|endereco|endereço|troca|cancelamento|cancelar)\b/.test(
+    /\b(produto|produtos|servico|servicos|pedido|pedidos|agendamento|agendamentos|atendimento|atendimentos|pagamento|pagamentos|entrega|retirada|frete|garantia|suporte|financeiro|orcamento|orÃ§amento|preco|preÃ§o|valor|valores|desconto|estoque|disponibilidade|prazo|cnpj|endereco|endereÃ§o|troca|cancelamento|cancelar)\b/.test(
       combined,
     );
 
@@ -1770,7 +1783,7 @@ function isCustomerScheduleInquiry(body: string, quotedBody?: string | null, pre
     /\b(quais|qual|quero saber|me fala|me diga|tenho|tem|possuo|mostrar|mostra)\b/.test(combined) &&
     /\b(agendamento|agendamentos|atendimento|atendimentos|horario marcado|horarios marcados|marcado|marcados|pendente|pendentes)\b/.test(combined);
   const directOwnScheduleQuestion =
-    /\b(meus agendamentos|meus atendimentos|meu agendamento|meu atendimento|tenho agendamento|tenho atendimento|atendimentos eu tenho|agendamentos eu tenho|proximo atendimento|pr�ximo atendimento|proximo agendamento|pr�ximo agendamento)\b/.test(
+    /\b(meus agendamentos|meus atendimentos|meu agendamento|meu atendimento|tenho agendamento|tenho atendimento|atendimentos eu tenho|agendamentos eu tenho|proximo atendimento|prï¿½ximo atendimento|proximo agendamento|prï¿½ximo agendamento)\b/.test(
       combined,
     );
   const pendingOnly =
@@ -1779,10 +1792,10 @@ function isCustomerScheduleInquiry(body: string, quotedBody?: string | null, pre
     /\b(marcado|marcados|confirmado|confirmados)\b/.test(combined) &&
     /\b(agendamento|agendamentos|atendimento|atendimentos)\b/.test(combined);
   const followUpToScheduleList =
-    /\b(e os pendentes|e os marcados|e os confirmados|e o proximo|e o pr�ximo|e qual o proximo|e qual o pr�ximo)\b/.test(
+    /\b(e os pendentes|e os marcados|e os confirmados|e o proximo|e o prï¿½ximo|e qual o proximo|e qual o prï¿½ximo)\b/.test(
       normalizedBody,
     ) &&
-    /\b(encontrei estes atendimentos seus|seu proximo atendimento e|seu pr�ximo atendimento �)\b/.test(normalizedPreviousCompany);
+    /\b(encontrei estes atendimentos seus|seu proximo atendimento e|seu prï¿½ximo atendimento ï¿½)\b/.test(normalizedPreviousCompany);
 
   if (!(asksAboutOwnSchedules || directOwnScheduleQuestion || pendingOnly || markedOnly || followUpToScheduleList)) {
     return false;
@@ -1814,7 +1827,7 @@ function buildCustomerSchedulesReply(input: {
     /\b(agendamento|atendimento)\b/.test(normalizedBody) &&
     !/\b(quais|meus|minhas)\b/.test(normalizedBody);
   const wantsNext =
-    /\b(proximo|pr�ximo)\b/.test(normalizedBody) ||
+    /\b(proximo|prï¿½ximo)\b/.test(normalizedBody) ||
     asksSingularOwnAppointment ||
     rawBody.includes("pr?ximo") ||
     rawBody.includes("pr?ximo");
@@ -1828,22 +1841,22 @@ function buildCustomerSchedulesReply(input: {
   if (!baseSchedules.length) {
     if (onlyPending) {
       return input.mood === "formal"
-        ? "No momento, n�o encontrei agendamentos pendentes em seu nome por aqui."
-        : "No momento eu n�o encontrei agendamentos pendentes seus por aqui.";
+        ? "No momento, nï¿½o encontrei agendamentos pendentes em seu nome por aqui."
+        : "No momento eu nï¿½o encontrei agendamentos pendentes seus por aqui.";
     }
     return input.mood === "formal"
-      ? "No momento, n�o encontrei agendamentos ativos em seu nome por aqui."
-      : "No momento eu n�o encontrei agendamentos seus em aberto por aqui.";
+      ? "No momento, nï¿½o encontrei agendamentos ativos em seu nome por aqui."
+      : "No momento eu nï¿½o encontrei agendamentos seus em aberto por aqui.";
   }
 
   const targetSchedules = wantsNext ? baseSchedules.slice(0, 1) : baseSchedules.slice(0, 5);
   const lines = targetSchedules.map((item) => {
     const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    return `- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`;
+    return `- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} Ã s ${String(item.scheduled_time || "").trim()} (${statusLabel})`;
   });
 
   if (wantsNext) {
-    return ["Seu próximo atendimento é:", ...lines].join("\n");
+    return ["Seu prÃ³ximo atendimento Ã©:", ...lines].join("\n");
   }
 
   return [`Encontrei estes atendimentos seus:`, ...lines].join("\n");
@@ -1898,10 +1911,10 @@ function buildScheduleDisambiguationReply(input: {
     status: string;
   }>;
 }) {
-  const lines = ["Encontrei mais de um atendimento seu. Me diga qual você quer remarcar:"];
+  const lines = ["Encontrei mais de um atendimento seu. Me diga qual vocÃª quer remarcar:"];
   for (const item of input.schedules.slice(0, 5)) {
     const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
+    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} Ã s ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
   }
   return lines.join("\n");
 }
@@ -1914,22 +1927,22 @@ function buildScheduleCancellationDisambiguationReply(input: {
     status: string;
   }>;
 }) {
-  const lines = ["Encontrei mais de um atendimento seu. Me diga qual você quer cancelar:"];
+  const lines = ["Encontrei mais de um atendimento seu. Me diga qual vocÃª quer cancelar:"];
   for (const item of input.schedules.slice(0, 5)) {
     const statusLabel = String(item.status || "").trim() === "confirmed" ? "Confirmado" : "Pendente";
-    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} às ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
+    lines.push(`- ${String(item.service_name || "Atendimento").trim()} - ${formatShortBrDate(item.scheduled_date)} Ã s ${String(item.scheduled_time || "").trim()} (${statusLabel})`);
   }
   return lines.join("\n");
 }
 
 function buildNoDiscountPermissionReply(mood: "amigavel" | "informal" | "formal") {
   if (mood === "amigavel") {
-    return "No momento, n�o tenho permiss�o para oferecer desconto por aqui. Se quiser, posso seguir com os produtos e o pedido ";
+    return "No momento, nï¿½o tenho permissï¿½o para oferecer desconto por aqui. Se quiser, posso seguir com os produtos e o pedido ";
   }
   if (mood === "formal") {
-    return "No momento, n�o tenho permiss�o para oferecer desconto por este atendimento. Se desejar, posso seguir com as informa��es dos produtos e do pedido.";
+    return "No momento, nï¿½o tenho permissï¿½o para oferecer desconto por este atendimento. Se desejar, posso seguir com as informaï¿½ï¿½es dos produtos e do pedido.";
   }
-  return "No momento, n�o tenho permiss�o para oferecer desconto por aqui. Se quiser, posso seguir com os produtos e o pedido.";
+  return "No momento, nï¿½o tenho permissï¿½o para oferecer desconto por aqui. Se quiser, posso seguir com os produtos e o pedido.";
 }
 
 function getDiscountAwareProducts(
@@ -1980,7 +1993,7 @@ function buildQuotedContextFallbackReply(input: {
   });
 
   if (matchedProduct) {
-    return `${matchedProduct.name} — R$ ${Number(matchedProduct.price || 0).toFixed(2).replace(".", ",")} por unidade.`;
+    return `${matchedProduct.name} â€” R$ ${Number(matchedProduct.price || 0).toFixed(2).replace(".", ",")} por unidade.`;
   }
 
   return quotedBody;
@@ -2025,7 +2038,7 @@ function buildDeterministicCatalogReply(input: {
   if (isPriceQuestion(input.body, input.quotedBody) || isShortQuotedFollowup(input.body)) {
     if (matches.length === 1) {
       const item = matches[0];
-      return `${item.name} � R$ ${Number(item.price || 0).toFixed(2).replace(".", ",")}${item.type === "service" ? "" : " por unidade"}.`;
+      return `${item.name} ï¿½ R$ ${Number(item.price || 0).toFixed(2).replace(".", ",")}${item.type === "service" ? "" : " por unidade"}.`;
     }
 
     return matches
@@ -2057,7 +2070,7 @@ function parseStoreInfo(settings: any) {
         const normalizedLabel = normalizeText(label);
         if (normalizedLabel === "cidade") addressParts.city = value;
         if (normalizedLabel === "rua") addressParts.street = value;
-        if (normalizedLabel === "numero" || normalizedLabel === "n�mero") addressParts.number = value;
+        if (normalizedLabel === "numero" || normalizedLabel === "nï¿½mero") addressParts.number = value;
         if (normalizedLabel === "bairro") addressParts.neighborhood = value;
         if (normalizedLabel === "complemento") addressParts.complement = value;
       });
@@ -2367,12 +2380,12 @@ function isScheduleAvailabilityQuestion(body: string, quotedBody?: string | null
   return (
     /\bhorario\b/.test(text) ||
     /\bhorarios\b/.test(text) ||
-    /\bhor�rio\b/.test(text) ||
-    /\bhor�rios\b/.test(text) ||
+    /\bhorï¿½rio\b/.test(text) ||
+    /\bhorï¿½rios\b/.test(text) ||
     /\bdisponivel\b/.test(text) ||
     /\bdisponiveis\b/.test(text) ||
-    /\bdispon�vel\b/.test(text) ||
-    /\bdispon�veis\b/.test(text) ||
+    /\bdisponï¿½vel\b/.test(text) ||
+    /\bdisponï¿½veis\b/.test(text) ||
     /\bagenda\b/.test(text) ||
     rawText.includes("hor?rio") ||
     rawText.includes("hor?rios")
@@ -2403,12 +2416,12 @@ function isExplicitScheduleIntentMessage(body: string, quotedBody?: string | nul
     return true;
   }
 
-  if (/\b(agendar|agendo|agendamento|marcar|marco|marcado|marcacao|marca��o|remarcar|reagendar|reagendamento)\b/.test(combined)) {
+  if (/\b(agendar|agendo|agendamento|marcar|marco|marcado|marcacao|marcaï¿½ï¿½o|remarcar|reagendar|reagendamento)\b/.test(combined)) {
     return true;
   }
 
   const hasDateOrDayReference =
-    /\b(hoje|amanha|amanh�|depois de amanha|depois de amanh�|segunda|terca|ter�a|quarta|quinta|sexta|sabado|s�bado|domingo)\b/.test(
+    /\b(hoje|amanha|amanhï¿½|depois de amanha|depois de amanhï¿½|segunda|terca|terï¿½a|quarta|quinta|sexta|sabado|sï¿½bado|domingo)\b/.test(
       combined,
     ) ||
     /\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/.test(combined) ||
@@ -2424,10 +2437,10 @@ function getTargetScheduleDateForAvailability(body: string, quotedBody?: string 
 
 function asksForNextWeekWithoutDay(body: string, quotedBody?: string | null): boolean {
   const text = normalizeText([body, quotedBody].filter(Boolean).join(" "));
-  if (!/\b(proxima semana|pr�xima semana|semana que vem)\b/.test(text)) {
+  if (!/\b(proxima semana|prï¿½xima semana|semana que vem)\b/.test(text)) {
     return false;
   }
-  return !/\b(segunda|terca|ter�a|quarta|quinta|sexta|sabado|s�bado|domingo)\b/.test(text) && !/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/.test(text) && !/\b\d{4}-\d{2}-\d{2}\b/.test(text);
+  return !/\b(segunda|terca|terï¿½a|quarta|quinta|sexta|sabado|sï¿½bado|domingo)\b/.test(text) && !/\b\d{2}\/\d{2}(?:\/\d{2,4})?\b/.test(text) && !/\b\d{4}-\d{2}-\d{2}\b/.test(text);
 }
 
 function formatPeriodWindow(periods: Array<{ label: string; startTime: string; endTime: string }>): string {
@@ -2628,8 +2641,8 @@ function inferScheduleTimeFromNaturalSelection(input: {
     text.includes("primeiro da tarde") ||
     text.includes("depois do almoco") ||
     text.includes("apos o almoco") ||
-    rawText.includes("depois do almo�o") ||
-    rawText.includes("ap�s o almo�o") ||
+    rawText.includes("depois do almoï¿½o") ||
+    rawText.includes("apï¿½s o almoï¿½o") ||
     rawText.includes("depois do almo?o") ||
     rawText.includes("ap?s o almo?o");
 
@@ -2641,11 +2654,11 @@ function inferScheduleTimeFromNaturalSelection(input: {
     return match || null;
   }
 
-  if (/\b(primeiro horario|primeiro hor�rio|primeiro)\b/.test(text)) {
+  if (/\b(primeiro horario|primeiro horï¿½rio|primeiro)\b/.test(text)) {
     return candidateTimes[0] || null;
   }
 
-  if (/\b(ultimo horario|�ltimo hor�rio|ultimo|�ltimo)\b/.test(text)) {
+  if (/\b(ultimo horario|ï¿½ltimo horï¿½rio|ultimo|ï¿½ltimo)\b/.test(text)) {
     return candidateTimes[candidateTimes.length - 1] || null;
   }
 
@@ -2806,7 +2819,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   const requestedPeriod = detectRequestedSchedulePeriod(input.body, input.quotedBody);
   const filteredPeriods =
     requestedPeriod === "manha"
-      ? periods.filter((period) => period.label === "manhã")
+      ? periods.filter((period) => period.label === "manhÃ£")
       : requestedPeriod === "tarde"
         ? periods.filter((period) => period.label === "tarde")
         : requestedPeriod === "noite"
@@ -2814,7 +2827,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
           : periods;
   const windowLabel = formatPeriodWindow(filteredPeriods.length ? filteredPeriods : periods);
   const lunchLabel = automaticLunchBreak
-    ? ` O almoço fica entre ${automaticLunchBreak.startTime} e ${automaticLunchBreak.endTime}.`
+    ? ` O almoÃ§o fica entre ${automaticLunchBreak.startTime} e ${automaticLunchBreak.endTime}.`
     : "";
 
   if (filteredPeriods.length && requestedPeriod) {
@@ -2829,19 +2842,19 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   }
 
   if (requestedPeriod && !filteredPeriods.length) {
-    return `Nesse dia eu não tenho horário disponível na ${requestedPeriod === "manha" ? "manhã" : requestedPeriod}. Consigo te atender em ${formatPeriodWindow(periods)}. Se quiser, me fala outro horário dentro desses períodos.`;
+    return `Nesse dia eu nÃ£o tenho horÃ¡rio disponÃ­vel na ${requestedPeriod === "manha" ? "manhÃ£" : requestedPeriod}. Consigo te atender em ${formatPeriodWindow(periods)}. Se quiser, me fala outro horÃ¡rio dentro desses perÃ­odos.`;
   }
 
   if (!validSlots.length) {
-    return `Para ${service.name}, atendo em ${windowLabel || "horários configurados na agenda"}.${lunchLabel} No momento não tenho horário livre em ${weekdayLabel}, ${dateLabel}. Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana.`;
+    return `Para ${service.name}, atendo em ${windowLabel || "horÃ¡rios configurados na agenda"}.${lunchLabel} No momento nÃ£o tenho horÃ¡rio livre em ${weekdayLabel}, ${dateLabel}. Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana.`;
   }
 
   return [
-    `Para ${service.name} (${durationLabel}), em ${weekdayLabel}, ${dateLabel}, atendo em ${windowLabel || "horários configurados na agenda"}.${lunchLabel}`,
-    "Horários disponíveis:",
+    `Para ${service.name} (${durationLabel}), em ${weekdayLabel}, ${dateLabel}, atendo em ${windowLabel || "horÃ¡rios configurados na agenda"}.${lunchLabel}`,
+    "HorÃ¡rios disponÃ­veis:",
     ...validSlots.map((slot) => `- ${slot}`),
     "",
-    "Qual dia você prefere? Pode falar o dia (ex.: terça) ou a data (ex.: 24/03/26).",
+    "Qual dia vocÃª prefere? Pode falar o dia (ex.: terÃ§a) ou a data (ex.: 24/03/26).",
   ]
     .filter(Boolean)
     .join("\n");
@@ -2893,7 +2906,7 @@ async function buildDeterministicCustomerRescheduleReply(input: {
       ? String(input.targetSchedule.scheduled_date || "").trim()
       : findNextEnabledScheduleDate(input.settings, baseDate));
   if (!requestedDate) {
-    return "No momento eu não consegui localizar um dia disponível para esse reagendamento. Me fala a data em dd/mm/aa ou o dia da semana que você prefere.";
+    return "No momento eu nÃ£o consegui localizar um dia disponÃ­vel para esse reagendamento. Me fala a data em dd/mm/aa ou o dia da semana que vocÃª prefere.";
   }
 
   const durationMinutes = Number.isFinite(Number(input.targetSchedule.duration_minutes))
@@ -2923,13 +2936,13 @@ async function buildDeterministicCustomerRescheduleReply(input: {
   if (requestedPeriod) {
     const filteredPeriods = slotsData.periods.filter((period) =>
       requestedPeriod === "manha"
-        ? period.label === "manhã"
+        ? period.label === "manhÃ£"
         : requestedPeriod === "tarde"
           ? period.label === "tarde"
           : period.label === "noite",
     );
     if (!filteredPeriods.length) {
-      return `Para ${String(input.targetSchedule.service_name || "esse atendimento").trim()}, eu consigo remarcar em ${formatPeriodWindow(slotsData.periods)}. Me fala um horário dentro desses períodos ou outro dia.`;
+      return `Para ${String(input.targetSchedule.service_name || "esse atendimento").trim()}, eu consigo remarcar em ${formatPeriodWindow(slotsData.periods)}. Me fala um horÃ¡rio dentro desses perÃ­odos ou outro dia.`;
     }
     validSlots = validSlots.filter((slot) => {
       const slotMinutes = timeToMinutes(slot);
@@ -2944,25 +2957,25 @@ async function buildDeterministicCustomerRescheduleReply(input: {
   const dateLabel = formatShortBrDate(requestedDate);
   const weekdayLabel = formatWeekdayBr(requestedDate);
   const lunchLabel = slotsData.automaticLunchBreak
-    ? ` O almoço fica entre ${slotsData.automaticLunchBreak.startTime} e ${slotsData.automaticLunchBreak.endTime}.`
+    ? ` O almoÃ§o fica entre ${slotsData.automaticLunchBreak.startTime} e ${slotsData.automaticLunchBreak.endTime}.`
     : "";
-  const currentWhen = `${formatShortBrDate(input.targetSchedule.scheduled_date)} às ${String(input.targetSchedule.scheduled_time || "").trim()}`;
+  const currentWhen = `${formatShortBrDate(input.targetSchedule.scheduled_date)} Ã s ${String(input.targetSchedule.scheduled_time || "").trim()}`;
 
   if (!validSlots.length) {
     return [
       `Encontrei seu agendamento de ${String(input.targetSchedule.service_name || "atendimento").trim()} em ${currentWhen}.`,
       `Para remarcar, em ${weekdayLabel}, ${dateLabel}, atendo em ${formatPeriodWindow(slotsData.periods)}.${lunchLabel}`,
-      "No momento não tenho horário livre nesse dia.",
+      "No momento nÃ£o tenho horÃ¡rio livre nesse dia.",
       "Se quiser, me fala outro dia em dd/mm/aa ou o dia da semana que eu verifico na hora.",
     ].join("\n");
   }
 
   return [
     `Encontrei seu agendamento de ${String(input.targetSchedule.service_name || "atendimento").trim()} em ${currentWhen}.`,
-    `Posso remarcar. Para ${weekdayLabel}, ${dateLabel}, estes horários estão livres:${lunchLabel}`,
+    `Posso remarcar. Para ${weekdayLabel}, ${dateLabel}, estes horÃ¡rios estÃ£o livres:${lunchLabel}`,
     ...validSlots.slice(0, 8).map((slot) => `- ${slot}`),
     "",
-    "Me fala qual horário você prefere. Se quiser outro dia, pode mandar a data em dd/mm/aa ou o dia da semana.",
+    "Me fala qual horÃ¡rio vocÃª prefere. Se quiser outro dia, pode mandar a data em dd/mm/aa ou o dia da semana.",
   ].join("\n");
 }
 
@@ -2980,10 +2993,10 @@ function buildDeterministicStoreReply(input: {
   const asksCnpj = /\bcnpj\b/.test(text);
   const asksAddress =
     /\bendereco\b/.test(text) ||
-    /\bendere�o\b/.test(text) ||
+    /\bendereï¿½o\b/.test(text) ||
     /\bonde fica\b/.test(text) ||
     /\blocalizacao\b/.test(text) ||
-    /\blocaliza��o\b/.test(text);
+    /\blocalizaï¿½ï¿½o\b/.test(text);
   const asksPaymentMethods =
     /\bforma de pagamento\b/.test(text) ||
     /\bformas de pagamento\b/.test(text) ||
@@ -2992,7 +3005,7 @@ function buildDeterministicStoreReply(input: {
     /\bpagamento\b/.test(text) ||
     /\bpix\b/.test(text) ||
     /\bcartao\b/.test(text) ||
-    /\bcart�o\b/.test(text) ||
+    /\bcartï¿½o\b/.test(text) ||
     /\bdinheiro\b/.test(text);
   const asksDeliveryFee =
     /\btaxa de entrega\b/.test(text) ||
@@ -3003,22 +3016,22 @@ function buildDeterministicStoreReply(input: {
     /\bsobre a loja\b/.test(text) ||
     /\bme fala sobre a loja\b/.test(text) ||
     /\bquais informacoes da loja\b/.test(text) ||
-    /\bquais informa��es da loja\b/.test(text);
+    /\bquais informaï¿½ï¿½es da loja\b/.test(text);
 
   if (asksStoreName && store.name) {
-    return `O nome da loja � ${store.name}.`;
+    return `O nome da loja ï¿½ ${store.name}.`;
   }
 
   if (asksCnpj && store.cnpj) {
-    return `O CNPJ da loja � ${store.cnpj}.`;
+    return `O CNPJ da loja ï¿½ ${store.cnpj}.`;
   }
 
   if (asksAddress && store.rawAddress) {
     const lines = [
-      store.name ? `Endere�o da ${store.name}:` : "Endere�o da loja:",
+      store.name ? `Endereï¿½o da ${store.name}:` : "Endereï¿½o da loja:",
       store.addressParts.city ? `Cidade: ${store.addressParts.city}` : "",
       store.addressParts.street ? `Rua: ${store.addressParts.street}` : "",
-      store.addressParts.number ? `N�mero: ${store.addressParts.number}` : "",
+      store.addressParts.number ? `Nï¿½mero: ${store.addressParts.number}` : "",
       store.addressParts.neighborhood ? `Bairro: ${store.addressParts.neighborhood}` : "",
       store.addressParts.complement ? `Complemento: ${store.addressParts.complement}` : "",
     ].filter(Boolean);
@@ -3029,7 +3042,7 @@ function buildDeterministicStoreReply(input: {
     if (/\bdinheiro\b/.test(text)) {
       return store.paymentMethods.some((item: string) => normalizeText(item).includes("dinheiro"))
         ? "Sim, aceitamos dinheiro."
-        : "No momento, dinheiro n�o est� cadastrado como forma de pagamento.";
+        : "No momento, dinheiro nï¿½o estï¿½ cadastrado como forma de pagamento.";
     }
     return `Aceitamos:\n- ${store.paymentMethods.join("\n- ")}`;
   }
@@ -3041,11 +3054,11 @@ function buildDeterministicStoreReply(input: {
     });
 
     if (matchedFee) {
-      return `A taxa de entrega para ${matchedFee.label} � ${matchedFee.price}.`;
+      return `A taxa de entrega para ${matchedFee.label} ï¿½ ${matchedFee.price}.`;
     }
 
     if (/\bentregam\b/.test(text) || /\bentrega\b/.test(text)) {
-      return `Sim, fazemos entregas.\nPre�os:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`;
+      return `Sim, fazemos entregas.\nPreï¿½os:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`;
     }
   }
 
@@ -3056,10 +3069,10 @@ function buildDeterministicStoreReply(input: {
       store.cnpj ? `CNPJ: ${store.cnpj}` : "",
       store.rawAddress
         ? [
-            "Endere�o:",
+            "Endereï¿½o:",
             store.addressParts.city ? `- Cidade: ${store.addressParts.city}` : "",
             store.addressParts.street ? `- Rua: ${store.addressParts.street}` : "",
-            store.addressParts.number ? `- N�mero: ${store.addressParts.number}` : "",
+            store.addressParts.number ? `- Nï¿½mero: ${store.addressParts.number}` : "",
             store.addressParts.neighborhood ? `- Bairro: ${store.addressParts.neighborhood}` : "",
             store.addressParts.complement ? `- Complemento: ${store.addressParts.complement}` : "",
           ]
@@ -3068,7 +3081,7 @@ function buildDeterministicStoreReply(input: {
         : "",
       store.paymentMethods.length ? `Formas de pagamento:\n- ${store.paymentMethods.join("\n- ")}` : "",
       store.deliveryFees.length
-        ? `Pre�os de entrega:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`
+        ? `Preï¿½os de entrega:\n- ${store.deliveryFees.map((item: { label: string; price: string }) => `${item.label}: ${item.price}`).join("\n- ")}`
         : "",
     ].filter(Boolean);
     return blocks.join("\n\n");
@@ -3089,20 +3102,20 @@ function isSalesScopeMessage(
   const salesKeywords = [
     "loja",
     "endereco",
-    "endere�o",
+    "endereï¿½o",
     "cnpj",
     "bairro",
     "rua",
     "avenida",
     "numero",
-    "n�mero",
+    "nï¿½mero",
     "cidade",
     "forma de pagamento",
     "formas de pagamento",
     "taxa de entrega",
     "frete",
     "localizacao",
-    "localiza��o",
+    "localizaï¿½ï¿½o",
     "onde fica",
     "produto",
     "produtos",
@@ -3120,21 +3133,21 @@ function isSalesScopeMessage(
     "pagamento",
     "pix",
     "cartao",
-    "cart�o",
+    "cartï¿½o",
     "estoque",
     "disponivel",
-    "dispon�vel",
+    "disponï¿½vel",
     "foto",
     "imagem",
     "catalogo",
-    "cat�logo",
+    "catï¿½logo",
     "item",
     "itens",
     "unidade",
     "unidades",
     "quantidade",
     "orcamento",
-    "or�amento",
+    "orï¿½amento",
     "suporte",
     "venda",
     "semente",
@@ -3364,7 +3377,7 @@ export async function handleInboundAiAutomation(
         : [];
     const groundingNotes: string[] = [];
     if (customerPlanInquiry && !catalogHasPlanLikeItems(catalog)) {
-      groundingNotes.push(`A empresa n�o tem planos ou pacotes cadastrados. Base de resposta: ${buildMissingPlanReply(mood)}`);
+      groundingNotes.push(`A empresa nï¿½o tem planos ou pacotes cadastrados. Base de resposta: ${buildMissingPlanReply(mood)}`);
     }
     if (
       customerGreetingOnly &&
@@ -3375,7 +3388,7 @@ export async function handleInboundAiAutomation(
       !customerScheduleInquiry &&
       !customerPlanInquiry
     ) {
-      groundingNotes.push(`A mensagem atual do cliente � s� uma sauda��o simples. Base de resposta: ${buildGreetingReply(mood, context.display_name || null, lastCustomerTurnBody)}`);
+      groundingNotes.push(`A mensagem atual do cliente ï¿½ sï¿½ uma saudaï¿½ï¿½o simples. Base de resposta: ${buildGreetingReply(mood, context.display_name || null, lastCustomerTurnBody)}`);
     }
     if (
       customerClosingMessage &&
@@ -3390,7 +3403,7 @@ export async function handleInboundAiAutomation(
 
     if (customerRescheduleRequest && !aiRescheduleActive && !hasDirectScheduleSelection(lastCustomerTurnBody, quotedBody)) {
       if (!activeSchedulesForConversation.length) {
-        groundingNotes.push("O cliente pediu remarca��o, mas n�o h� agendamento ativo em aberto para remarcar nesta conversa.");
+        groundingNotes.push("O cliente pediu remarcaï¿½ï¿½o, mas nï¿½o hï¿½ agendamento ativo em aberto para remarcar nesta conversa.");
       } else {
         const targetSchedule = findRescheduleTargetSchedule(
           activeSchedulesForConversation.map((item) => ({
@@ -3407,7 +3420,7 @@ export async function handleInboundAiAutomation(
 
         if (!targetSchedule) {
           groundingNotes.push(
-            `O cliente pediu remarca��o, mas h� mais de um atendimento poss�vel. Base de resposta: ${buildScheduleDisambiguationReply({
+            `O cliente pediu remarcaï¿½ï¿½o, mas hï¿½ mais de um atendimento possï¿½vel. Base de resposta: ${buildScheduleDisambiguationReply({
               schedules: activeSchedulesForConversation.map((item) => ({
                 service_name: item.service_name,
                 scheduled_date: String(item.scheduled_date || "").trim(),
@@ -3441,7 +3454,7 @@ export async function handleInboundAiAutomation(
             },
           });
           groundingNotes.push(
-            `O cliente pediu remarca��o. Atendimento-alvo identificado: ${String(targetSchedule.service_name || "Atendimento").trim()} em ${formatShortBrDate(targetSchedule.scheduled_date)} �s ${String(targetSchedule.scheduled_time || "").trim()}. Base factual para responder: ${rescheduleGuidance}`,
+            `O cliente pediu remarcaï¿½ï¿½o. Atendimento-alvo identificado: ${String(targetSchedule.service_name || "Atendimento").trim()} em ${formatShortBrDate(targetSchedule.scheduled_date)} ï¿½s ${String(targetSchedule.scheduled_time || "").trim()}. Base factual para responder: ${rescheduleGuidance}`,
           );
         }
       }
@@ -3464,13 +3477,13 @@ export async function handleInboundAiAutomation(
             status: String(item.status || "").trim(),
           })),
       });
-      groundingNotes.push(`O cliente est� perguntando sobre os pr�prios agendamentos. Base factual para responder: ${replyText}`);
+      groundingNotes.push(`O cliente estï¿½ perguntando sobre os prï¿½prios agendamentos. Base factual para responder: ${replyText}`);
     }
 
     if (customerScheduleCancellationRequest && !aiRescheduleActive && !customerRescheduleRequest) {
       if (!activeSchedulesForConversation.length) {
         groundingNotes.push(
-          "O cliente pediu para cancelar um agendamento, mas n�o h� atendimento ativo em aberto nesta conversa para cancelar.",
+          "O cliente pediu para cancelar um agendamento, mas nï¿½o hï¿½ atendimento ativo em aberto nesta conversa para cancelar.",
         );
       } else {
         const cancellationTarget = findRescheduleTargetSchedule(
@@ -3488,7 +3501,7 @@ export async function handleInboundAiAutomation(
 
         if (!cancellationTarget) {
           groundingNotes.push(
-            `O cliente pediu para cancelar, mas h� mais de um atendimento ativo poss�vel. Base factual para responder: ${buildScheduleCancellationDisambiguationReply({
+            `O cliente pediu para cancelar, mas hï¿½ mais de um atendimento ativo possï¿½vel. Base factual para responder: ${buildScheduleCancellationDisambiguationReply({
               schedules: activeSchedulesForConversation.map((item) => ({
                 service_name: item.service_name,
                 scheduled_date: String(item.scheduled_date || "").trim(),
@@ -3501,7 +3514,7 @@ export async function handleInboundAiAutomation(
           groundingNotes.push(
             `O cliente quer cancelar este atendimento: ${String(cancellationTarget.service_name || "Atendimento").trim()} em ${formatShortBrDate(
               cancellationTarget.scheduled_date,
-            )} �s ${String(cancellationTarget.scheduled_time || "").trim()}. Se a resposta final confirmar o cancelamento, marque schedule.should_cancel=true.`,
+            )} ï¿½s ${String(cancellationTarget.scheduled_time || "").trim()}. Se a resposta final confirmar o cancelamento, marque schedule.should_cancel=true.`,
           );
         }
       }
@@ -3718,37 +3731,66 @@ export async function handleInboundAiAutomation(
     }
 
     const existingPendingItems = Array.isArray(context.open_order_items) ? context.open_order_items : [];
+    const existingDraftItems = Array.isArray(context.order_draft_items) ? context.order_draft_items : [];
     const mergedOrder = {
-      summary: pickFirstFilled(aiResult.order.summary, context.open_order_summary) || null,
-      items: aiResult.order.items.length ? aiResult.order.items : existingPendingItems,
+      summary: pickFirstFilled(aiResult.order.summary, context.open_order_summary, context.order_draft_summary) || null,
+      items: aiResult.order.items.length ? aiResult.order.items : existingPendingItems.length ? existingPendingItems : existingDraftItems,
       totalEstimate:
         aiResult.order.totalEstimate !== null && aiResult.order.totalEstimate !== undefined
           ? aiResult.order.totalEstimate
           : context.open_order_total_estimate !== null && context.open_order_total_estimate !== undefined
             ? Number(context.open_order_total_estimate)
+            : context.order_draft_total_estimate !== null && context.order_draft_total_estimate !== undefined
+              ? Number(context.order_draft_total_estimate)
             : null,
-      responsibleName: pickFirstFilled(aiResult.order.responsibleName, context.open_order_responsible_name),
-      fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.open_order_fulfillment_type),
-      deliveryAddress: pickFirstFilled(aiResult.order.deliveryAddress, context.open_order_delivery_address),
-      paymentMethod: pickFirstFilled(aiResult.order.paymentMethod, context.open_order_payment_method),
-      notes: pickFirstFilled(aiResult.order.notes, context.open_order_notes),
+      responsibleName: pickFirstFilled(
+        aiResult.order.responsibleName,
+        context.open_order_responsible_name,
+        context.order_draft_responsible_name,
+        context.display_name,
+      ),
+      fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.open_order_fulfillment_type, context.order_draft_fulfillment_type),
+      deliveryAddress: pickFirstFilled(aiResult.order.deliveryAddress, context.open_order_delivery_address, context.order_draft_delivery_address),
+      paymentMethod: pickFirstFilled(aiResult.order.paymentMethod, context.open_order_payment_method, context.order_draft_payment_method),
+      notes: pickFirstFilled(aiResult.order.notes, context.open_order_notes, context.order_draft_notes),
     };
 
     const normalizedFulfillment = normalizeName(String(mergedOrder.fulfillmentType || ""));
     const requiresDeliveryAddress = normalizedFulfillment.includes("entrega");
+    const hasNonEmptyDeliveryAddress = Boolean(String(mergedOrder.deliveryAddress || "").trim());
     if (requiresDeliveryAddress) {
       mergedOrder.deliveryAddress = enrichDeliveryAddressWithCustomerText(
         String(mergedOrder.deliveryAddress || ""),
         buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
       );
     }
+    const parsedDeliveryAddress = parseStructuredDeliveryAddress(mergedOrder.deliveryAddress);
+    const deliveryHasOnlyMissingReference =
+      normalizedFulfillment.includes("entrega") &&
+      Boolean(parsedDeliveryAddress.city) &&
+      Boolean(parsedDeliveryAddress.street) &&
+      Boolean(parsedDeliveryAddress.neighborhood) &&
+      Boolean(parsedDeliveryAddress.number) &&
+      !parsedDeliveryAddress.reference;
+    const hasUsableDeliveryAddress =
+      !requiresDeliveryAddress ||
+      (hasNonEmptyDeliveryAddress && !deliveryHasOnlyMissingReference) ||
+      hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || ""));
     const hasOrderDataReadyForConfirmation =
       Boolean(mergedOrder.summary) &&
       Boolean(mergedOrder.responsibleName) &&
       Boolean(mergedOrder.paymentMethod) &&
       Boolean(mergedOrder.fulfillmentType) &&
-      (!requiresDeliveryAddress || hasCompleteDeliveryAddress(String(mergedOrder.deliveryAddress || "")));
+      hasUsableDeliveryAddress;
     const hasRequiredOrderData = hasOrderDataReadyForConfirmation && customerDirectConfirmation;
+    const hasOrderDraftCandidate =
+      Boolean(aiResult.order.summary) ||
+      (Array.isArray(aiResult.order.items) && aiResult.order.items.length > 0) ||
+      Boolean(aiResult.order.responsibleName) ||
+      Boolean(aiResult.order.fulfillmentType) ||
+      Boolean(aiResult.order.deliveryAddress) ||
+      Boolean(aiResult.order.paymentMethod) ||
+      Boolean(aiResult.order.notes);
 
     const scheduleFlowRequested =
       awaitingScheduleConfirmation ||
@@ -3937,7 +3979,8 @@ export async function handleInboundAiAutomation(
 
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
-    if (aiResult.order.shouldCreate && hasRequiredOrderData) {
+    const shouldPersistOrder = (aiResult.order.shouldCreate || (awaitingOrderConfirmation && customerDirectConfirmation)) && hasRequiredOrderData;
+    if (shouldPersistOrder) {
       if (String(context.open_order_id || "").trim()) {
         const updatedOrder = await updatePendingAiOrder({
           orderId: String(context.open_order_id || "").trim(),
@@ -4067,6 +4110,22 @@ export async function handleInboundAiAutomation(
       }
     }
 
+    if (createdOrderId) {
+      await clearConversationAiOrderDraft(id).catch(() => undefined);
+    } else if (hasOrderDraftCandidate) {
+      await setConversationAiOrderDraft({
+        conversationId: id,
+        summary: mergedOrder.summary,
+        items: Array.isArray(mergedOrder.items) ? mergedOrder.items : [],
+        totalEstimate: mergedOrder.totalEstimate,
+        responsibleName: mergedOrder.responsibleName,
+        fulfillmentType: mergedOrder.fulfillmentType,
+        deliveryAddress: mergedOrder.deliveryAddress,
+        paymentMethod: mergedOrder.paymentMethod,
+        notes: mergedOrder.notes,
+      }).catch(() => undefined);
+    }
+
     if (aiResult.schedule.shouldCancel && scheduleCancellationTarget && !createdScheduleId) {
       const cancelledSchedule = await cancelAiSchedule(
         String(scheduleCancellationTarget.id || "").trim(),
@@ -4103,12 +4162,12 @@ export async function handleInboundAiAutomation(
                 status: String(item.status || "").trim(),
               })),
             })
-          : "No momento eu n�o encontrei agendamentos seus em aberto por aqui."
+          : "No momento eu nï¿½o encontrei agendamentos seus em aberto por aqui."
         : aiResult.schedule.shouldCancel && cancelledScheduleId
         ? ""
         :
       selectedSameAsCurrentSchedule
-        ? `Esse j� � o hor�rio atual do seu atendimento: ${formatShortBrDate(String(scheduleBaseDate || "").trim())} �s ${String(scheduleBaseTime || "").trim()}. Me passa outro hor�rio que eu sigo com o reagendamento.`
+        ? `Esse jï¿½ ï¿½ o horï¿½rio atual do seu atendimento: ${formatShortBrDate(String(scheduleBaseDate || "").trim())} ï¿½s ${String(scheduleBaseTime || "").trim()}. Me passa outro horï¿½rio que eu sigo com o reagendamento.`
         :
       scheduleConflict
         ? buildScheduleConflictReply({
@@ -4137,7 +4196,7 @@ export async function handleInboundAiAutomation(
             scheduledTime: mergedSchedule.scheduledTime,
             durationMinutes: mergedSchedule.durationMinutes,
           })
-        : aiResult.order.shouldCreate && hasRequiredOrderData
+        : shouldPersistOrder
         ? buildOrderFallbackReply({
             mood,
             updatedPendingOrder,
@@ -4176,12 +4235,12 @@ export async function handleInboundAiAutomation(
     const normalizedReplyText = normalizeText(replyText);
     const scheduleClaimedAsCreated =
       normalizedReplyText.includes("agendamento ficou pendente de confirmacao interna") ||
-      normalizedReplyText.includes("agendamento ficou pendente de confirma��o interna") ||
+      normalizedReplyText.includes("agendamento ficou pendente de confirmaï¿½ï¿½o interna") ||
       normalizedReplyText.includes("agendamento pendente") ||
       normalizedReplyText.includes("aguardando confirmacao interna") ||
-      normalizedReplyText.includes("aguardando confirma��o interna") ||
+      normalizedReplyText.includes("aguardando confirmaï¿½ï¿½o interna") ||
       normalizedReplyText.includes("permanece aguardando confirmacao interna") ||
-      normalizedReplyText.includes("permanece aguardando confirma��o interna") ||
+      normalizedReplyText.includes("permanece aguardando confirmaï¿½ï¿½o interna") ||
       normalizedReplyText.includes("registrei seu agendamento") ||
       normalizedReplyText.includes("seu agendamento foi registrado") ||
       normalizedReplyText.includes("ajustei seu agendamento") ||
@@ -4199,8 +4258,10 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("atendimento cancelado");
     const orderClaimedAsCreated =
       normalizedReplyText.includes("pedido ficou pendente de confirmacao interna") ||
+      normalizedReplyText.includes("pendente de confirmacao interna") ||
       normalizedReplyText.includes("pedido ficou pendente de confirma") ||
       normalizedReplyText.includes("pedido pendente") ||
+      normalizedReplyText.includes("pedido registrado") ||
       normalizedReplyText.includes("registrei seu pedido") ||
       normalizedReplyText.includes("seu pedido foi registrado") ||
       normalizedReplyText.includes("ajustei seu pedido") ||
@@ -4209,6 +4270,60 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("gerei o pedido") ||
       normalizedReplyText.includes("pedido foi confirmado") ||
       normalizedReplyText.includes("pedido confirmado");
+    const canBackfillClaimedOrder =
+      !createdOrderId &&
+      orderClaimedAsCreated &&
+      Boolean(mergedOrder.summary) &&
+      Array.isArray(mergedOrder.items) &&
+      mergedOrder.items.length > 0 &&
+      Boolean(mergedOrder.paymentMethod) &&
+      Boolean(mergedOrder.fulfillmentType) &&
+      hasUsableDeliveryAddress;
+    if (canBackfillClaimedOrder) {
+      try {
+        if (String(context.open_order_id || "").trim()) {
+          const updatedOrder = await updatePendingAiOrder({
+            orderId: String(context.open_order_id || "").trim(),
+            summary: String(mergedOrder.summary || "").trim(),
+            items: mergedOrder.items,
+            totalEstimate: mergedOrder.totalEstimate,
+            responsibleName: mergedOrder.responsibleName,
+            fulfillmentType: mergedOrder.fulfillmentType,
+            deliveryAddress: mergedOrder.deliveryAddress,
+            paymentMethod: mergedOrder.paymentMethod,
+            notes: mergedOrder.notes,
+          });
+
+          if (updatedOrder?.id) {
+            createdOrderId = String(updatedOrder.id || "").trim() || null;
+            updatedPendingOrder = true;
+          }
+        }
+
+        if (!createdOrderId) {
+          const createdOrder = await createAiOrder({
+            accountId: context.account_id || null,
+            conversationId: id,
+            customerPhone: context.phone || null,
+            summary: String(mergedOrder.summary || "").trim(),
+            items: mergedOrder.items,
+            totalEstimate: mergedOrder.totalEstimate,
+            responsibleName: mergedOrder.responsibleName,
+            fulfillmentType: mergedOrder.fulfillmentType,
+            deliveryAddress: mergedOrder.deliveryAddress,
+            paymentMethod: mergedOrder.paymentMethod,
+            notes: mergedOrder.notes,
+          });
+          createdOrderId = String(createdOrder.id || "").trim() || null;
+        }
+
+        if (createdOrderId) {
+          await clearConversationAiOrderDraft(id).catch(() => undefined);
+        }
+      } catch (error) {
+        console.error("Falha ao persistir pedido a partir de resposta confirmada da IA:", error);
+      }
+    }
     if (hasCompleteScheduleProposal && !createdScheduleId && !scheduleConflict && scheduleWindowValidation.ok && scheduleClaimedAsCreated) {
       replyText =
         fallbackReply ||
@@ -4231,7 +4346,7 @@ export async function handleInboundAiAutomation(
           scheduledTime: scheduleCancellationTarget?.scheduled_time || aiResult.schedule.scheduledTime,
         }) || replyText;
     }
-    if (hasRequiredOrderData && !createdOrderId && orderClaimedAsCreated) {
+    if (!createdOrderId && orderClaimedAsCreated) {
       replyText =
         buildOrderConfirmationPrompt({
           items: Array.isArray(mergedOrder.items) ? mergedOrder.items : [],
@@ -4261,14 +4376,12 @@ export async function handleInboundAiAutomation(
 
     replyText = formatIsoDatesInText(replyText);
 
-    const parsedDeliveryAddress = parseStructuredDeliveryAddress(mergedOrder.deliveryAddress);
-    const deliveryHasOnlyMissingReference =
-      normalizedFulfillment.includes("entrega") &&
-      Boolean(parsedDeliveryAddress.city) &&
-      Boolean(parsedDeliveryAddress.street) &&
-      Boolean(parsedDeliveryAddress.neighborhood) &&
-      Boolean(parsedDeliveryAddress.number) &&
-      !parsedDeliveryAddress.reference;
+    if (!createdOrderId && deliveryHasOnlyMissingReference) {
+      replyText = buildMissingReferenceReply(
+        mergedOrder.deliveryAddress,
+        buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
+      );
+    }
 
     const shouldAttemptImage = aiResult.media.shouldSendImages;
     let matchedProducts: Array<{
@@ -4439,3 +4552,7 @@ export async function handleInboundAiAutomation(
     }
   }
 }
+
+
+
+

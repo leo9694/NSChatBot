@@ -428,6 +428,76 @@ export async function clearConversationAiRescheduleContext(conversationId: strin
   return (result.rowCount || 0) > 0;
 }
 
+export async function setConversationAiOrderDraft(input: {
+  conversationId: string;
+  summary?: string | null;
+  items?: Array<Record<string, unknown>>;
+  totalEstimate?: number | null;
+  responsibleName?: string | null;
+  fulfillmentType?: string | null;
+  deliveryAddress?: string | null;
+  paymentMethod?: string | null;
+  notes?: string | null;
+}): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = jsonb_strip_nulls(
+        COALESCE(metadata, '{}'::jsonb)
+        || CASE WHEN $2::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_summary', $2::text) ELSE '{}'::jsonb END
+        || CASE WHEN $3::jsonb IS NOT NULL THEN jsonb_build_object('ai_order_draft_items', $3::jsonb) ELSE '{}'::jsonb END
+        || CASE WHEN $4::numeric IS NOT NULL THEN jsonb_build_object('ai_order_draft_total_estimate', $4::numeric) ELSE '{}'::jsonb END
+        || CASE WHEN $5::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_responsible_name', $5::text) ELSE '{}'::jsonb END
+        || CASE WHEN $6::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_fulfillment_type', $6::text) ELSE '{}'::jsonb END
+        || CASE WHEN $7::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_delivery_address', $7::text) ELSE '{}'::jsonb END
+        || CASE WHEN $8::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_payment_method', $8::text) ELSE '{}'::jsonb END
+        || CASE WHEN $9::text IS NOT NULL THEN jsonb_build_object('ai_order_draft_notes', $9::text) ELSE '{}'::jsonb END
+      ),
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [
+      input.conversationId,
+      input.summary || null,
+      input.items?.length ? JSON.stringify(input.items) : null,
+      Number.isFinite(Number(input.totalEstimate)) ? Number(input.totalEstimate) : null,
+      input.responsibleName || null,
+      input.fulfillmentType || null,
+      input.deliveryAddress || null,
+      input.paymentMethod || null,
+      input.notes || null,
+    ],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function clearConversationAiOrderDraft(conversationId: string): Promise<boolean> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    UPDATE conversations
+    SET
+      metadata = COALESCE(metadata, '{}'::jsonb)
+        - 'ai_order_draft_summary'
+        - 'ai_order_draft_items'
+        - 'ai_order_draft_total_estimate'
+        - 'ai_order_draft_responsible_name'
+        - 'ai_order_draft_fulfillment_type'
+        - 'ai_order_draft_delivery_address'
+        - 'ai_order_draft_payment_method'
+        - 'ai_order_draft_notes',
+      updated_at = NOW()
+    WHERE id = $1
+    `,
+    [conversationId],
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
 export async function clearConversationBulkInitiated(conversationId: string): Promise<void> {
   await ensureConversationWorkflowSchema();
   await pool.query(
