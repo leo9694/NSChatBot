@@ -63,6 +63,56 @@ export interface SessionUser {
 
 let ensureAuthSchemaPromise: Promise<void> | null = null;
 
+async function isAuthSchemaReady(): Promise<boolean> {
+  const result = await pool.query<{
+    companies_ok: boolean;
+    sectors_ok: boolean;
+    users_ok: boolean;
+    sessions_ok: boolean;
+  }>(`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'app_companies'
+          AND column_name IN ('id', 'name', 'logo_data_url', 'theme_palette_options', 'theme_selected_palette_index')
+        GROUP BY table_name
+        HAVING COUNT(DISTINCT column_name) = 5
+      ) AS companies_ok,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'app_sectors'
+          AND column_name IN ('id', 'company_id', 'name')
+        GROUP BY table_name
+        HAVING COUNT(DISTINCT column_name) = 3
+      ) AS sectors_ok,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'app_users'
+          AND column_name IN ('id', 'company_id', 'sector_id', 'name', 'username', 'password_hash', 'role', 'is_active')
+        GROUP BY table_name
+        HAVING COUNT(DISTINCT column_name) = 8
+      ) AS users_ok,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'app_user_sessions'
+          AND column_name IN ('id', 'user_id', 'token_hash', 'expires_at', 'revoked_at', 'last_seen_at')
+        GROUP BY table_name
+        HAVING COUNT(DISTINCT column_name) = 6
+      ) AS sessions_ok
+  `);
+
+  const row = result.rows[0];
+  return Boolean(row?.companies_ok && row?.sectors_ok && row?.users_ok && row?.sessions_ok);
+}
+
 function normalizeThemePaletteCandidate(value: any): CompanyThemePalette | null {
   const palette = {
     name: String(value?.name || "").trim() || "Paleta",
@@ -199,6 +249,11 @@ async function migrateLegacyDefaultCompanyData(targetCompanyId: string): Promise
 export async function ensureAuthSchema(): Promise<void> {
   if (!ensureAuthSchemaPromise) {
     ensureAuthSchemaPromise = (async () => {
+      const schemaReady = await isAuthSchemaReady().catch(() => false);
+      if (schemaReady) {
+        return;
+      }
+
       await pool.query(`
         CREATE TABLE IF NOT EXISTS app_companies (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
