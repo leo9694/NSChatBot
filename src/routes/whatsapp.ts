@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { rm } from "fs/promises";
 import { Request, Router } from "express";
 import { requireAdmin } from "../middlewares/auth.middleware";
 import {

@@ -1,6 +1,6 @@
 import { pool } from "../db/pool";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
+import path from "path";
+import { randomUUID } from "crypto";
 import { env } from "../config/env";
 import { jidToPhone, normalizeChatJid } from "../utils/whatsapp";
 

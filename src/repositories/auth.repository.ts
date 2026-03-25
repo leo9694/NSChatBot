@@ -1,4 +1,4 @@
-﻿import { randomBytes, createHash } from "node:crypto";
+﻿import { randomBytes, createHash } from "crypto";
 import { pool } from "../db/pool";
 
 export type AppUserRole = "ceo" | "administrador" | "operador";

@@ -1,5 +1,5 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "fs/promises";
+import path from "path";
 import sharp from "sharp";
 import { pool } from "../db/pool";
 

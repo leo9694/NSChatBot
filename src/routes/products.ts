@@ -1,6 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
+import fs from "fs";
+import path from "path";
+import { randomUUID } from "crypto";
 import multer from "multer";
 import { Router } from "express";
 import { createProduct, ensureProductsSchema, listProducts, updateProduct } from "../repositories/products.repository";
@@ -204,3 +204,4 @@ router.put("/:productId", upload.single("image"), async (req, res) => {
 });
 
 export default router;
+

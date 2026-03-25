@@ -8,7 +8,7 @@ import makeWASocket, {
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { Boom } from "@hapi/boom";
-import { rm } from "node:fs/promises";
+import { rm } from "fs/promises";
 import { env } from "../config/env";
 import {
   detectMessageType,

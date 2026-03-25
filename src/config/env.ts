@@ -1,10 +1,12 @@
 import dotenv from "dotenv";
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
+const initialNodeEnv = String(process.env.NODE_ENV || "development").trim().toLowerCase();
+const runningOnWindows = process.platform === "win32";
 const localEnvPath = path.resolve(process.cwd(), ".env.local");
-if (fs.existsSync(localEnvPath)) {
+if (runningOnWindows && initialNodeEnv !== "production" && fs.existsSync(localEnvPath)) {
   dotenv.config({ path: localEnvPath, override: false });
 }
 
@@ -24,11 +26,11 @@ export const env = {
   port: Number(optional("PORT", "3000")),
   nodeEnv: optional("NODE_ENV", "development"),
   databaseUrl:
-    optional("NODE_ENV", "development") !== "production" && process.env.LOCAL_DATABASE_URL
+    runningOnWindows && optional("NODE_ENV", "development") !== "production" && process.env.LOCAL_DATABASE_URL
       ? String(process.env.LOCAL_DATABASE_URL).trim()
       : required("DATABASE_URL"),
   databaseTarget:
-    optional("NODE_ENV", "development") !== "production" && process.env.LOCAL_DATABASE_URL
+    runningOnWindows && optional("NODE_ENV", "development") !== "production" && process.env.LOCAL_DATABASE_URL
       ? "local-test"
       : "production",
   productionDatabaseUrl: required("DATABASE_URL"),
