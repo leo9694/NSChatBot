@@ -860,6 +860,67 @@ function enrichDeliveryAddressWithCustomerText(
   return orderedLines.join("\n");
 }
 
+function extractDetailedDeliveryEntriesFromSummary(summary: string | null | undefined): Array<{ recipient: string; address: string }> {
+  const rawSummary = String(summary || "").replace(/\s+/g, " ").trim();
+  if (!rawSummary) return [];
+
+  const segments = rawSummary
+    .split(/\s*;\s*(?=\d+x?\s|\d+\s*x\s|Entrega:|destinat[áa]ri[ao]?:)/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const entries: Array<{ recipient: string; address: string }> = [];
+
+  for (const segment of segments) {
+    const recipientMatch = segment.match(/destinat[áa]ri[ao]?:\s*([^—;]+)/i);
+    const deliveryMatch = segment.match(/entrega:\s*(.*?)(?=\s+—\s+(?:pagamento|total|taxa|respons[aá]vel|observa|pendente)|$)/i);
+    if (!deliveryMatch) continue;
+
+    const address = String(deliveryMatch[1] || "").trim();
+    if (!address) continue;
+
+    const normalizedAddress = normalizeText(address);
+    const isGenericMultipleSummary =
+      normalizedAddress.includes("multiplos enderecos") ||
+      /^\d+\s+entregas?\b/i.test(address) ||
+      /^taxa\b/i.test(address);
+
+    if (isGenericMultipleSummary) continue;
+
+    entries.push({
+      recipient: String(recipientMatch?.[1] || "").trim(),
+      address,
+    });
+  }
+
+  return entries;
+}
+
+function shouldExpandMultiDeliveryAddress(value: string | null | undefined): boolean {
+  const normalized = normalizeText(String(value || ""));
+  return (
+    normalized.includes("ver enderecos por item") ||
+    normalized.includes("multiplos enderecos") ||
+    normalized.includes("múltiplos endereços")
+  );
+}
+
+function buildExpandedMultiDeliveryAddress(
+  summary: string | null | undefined,
+  currentAddress: string | null | undefined,
+): string | null {
+  const entries = extractDetailedDeliveryEntriesFromSummary(summary);
+  if (!entries.length) return String(currentAddress || "").trim() || null;
+
+  if (entries.length === 1 && !shouldExpandMultiDeliveryAddress(currentAddress)) {
+    return String(currentAddress || entries[0].address).trim() || null;
+  }
+
+  return entries
+    .map((entry, index) => `${index + 1}) ${entry.recipient ? `${entry.recipient} — ` : ""}${entry.address}`)
+    .join("; ");
+}
+
 function buildMissingReferenceReply(
   deliveryAddress: string | null | undefined,
   customerText: string | null | undefined,
@@ -3879,6 +3940,7 @@ export async function handleInboundAiAutomation(
         String(mergedOrder.deliveryAddress || ""),
         buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody),
       );
+      mergedOrder.deliveryAddress = buildExpandedMultiDeliveryAddress(mergedOrder.summary, mergedOrder.deliveryAddress);
     }
     const parsedDeliveryAddress = parseStructuredDeliveryAddress(mergedOrder.deliveryAddress);
     const deliveryHasOnlyMissingReference =

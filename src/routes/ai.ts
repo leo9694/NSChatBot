@@ -255,7 +255,14 @@ function extractOrderDeliveryAddressLines(order: Awaited<ReturnType<typeof getAi
   if (addresses.length) return addresses;
 
   const fallback = String(order?.delivery_address || "").trim();
-  return fallback ? [fallback] : [];
+  if (!fallback) return [];
+
+  const fallbackLines = fallback
+    .split(/\s*(?=\d+\)\s)|\n+/)
+    .map((line) => line.trim().replace(/;$/, ""))
+    .filter(Boolean);
+
+  return fallbackLines.length > 1 ? fallbackLines : [fallback];
 }
 
 function streamOrderPdf(
