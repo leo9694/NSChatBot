@@ -221,6 +221,43 @@ function formatOrderSummaryForPdf(summary?: string | null): string {
   return lines.join("\n");
 }
 
+function extractOrderDeliveryAddressLines(order: Awaited<ReturnType<typeof getAiOrderById>>): string[] {
+  const summary = String(order?.summary || "").replace(/\s+/g, " ").trim();
+  const addresses: string[] = [];
+
+  if (summary) {
+    const segments = summary
+      .split(/\s*;\s*(?=\d+x?\s|\d+\s*x\s|Entrega:|destinat[áa]ri[ao]?:)/i)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const segment of segments) {
+      const recipientMatch = segment.match(/destinat[áa]ri[ao]?:\s*([^—;]+)/i);
+      const deliveryMatch = segment.match(/entrega:\s*(.*?)(?=\s+—\s+(?:pagamento|total|taxa|respons[aá]vel|observa|pendente)|$)/i);
+      if (!deliveryMatch) continue;
+
+      const value = String(deliveryMatch[1] || "").trim();
+      if (!value) continue;
+
+      const normalizedValue = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const isGenericMultipleSummary =
+        normalizedValue.includes("multiplos enderecos") ||
+        /^\d+\s+entregas?\b/i.test(value) ||
+        /^taxa\b/i.test(value);
+
+      if (isGenericMultipleSummary) continue;
+
+      const recipient = String(recipientMatch?.[1] || "").trim();
+      addresses.push(recipient ? `${recipient}: ${value}` : value);
+    }
+  }
+
+  if (addresses.length) return addresses;
+
+  const fallback = String(order?.delivery_address || "").trim();
+  return fallback ? [fallback] : [];
+}
+
 function streamOrderPdf(
   res: Response,
   input: {
@@ -291,7 +328,8 @@ function streamOrderPdf(
   writeReceiptField("Total estimado", formatCurrencyBr(order?.total_estimate));
   writeReceiptField("Responsável", String(order?.responsible_name || "-"));
   writeReceiptField("Entrega/retirada", String(order?.fulfillment_type || "-"));
-  writeReceiptField("Endereço/retirada", String(order?.delivery_address || "-"));
+  const deliveryAddressLines = extractOrderDeliveryAddressLines(order);
+  writeReceiptField(deliveryAddressLines.length > 1 ? "Endereços/retirada" : "Endereço/retirada", deliveryAddressLines.join("\n") || "-");
   writeReceiptField("Pagamento", String(order?.payment_method || "-"));
   writeReceiptField("Observação", String(order?.notes || "-"));
   writeReceiptField("Tempo mínimo", order?.ready_time_minutes ? `${order.ready_time_minutes} minuto(s)` : "-");

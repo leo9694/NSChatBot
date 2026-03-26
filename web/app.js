@@ -2419,6 +2419,43 @@ function renderProducts() {
   }
 }
 
+function extractOrderDeliveryAddressLines(order) {
+  const summary = String(order?.summary || "").replace(/\s+/g, " ").trim();
+  const addresses = [];
+
+  if (summary) {
+    const segments = summary
+      .split(/\s*;\s*(?=\d+x?\s|\d+\s*x\s|Entrega:|destinat[áa]ri[ao]?:)/i)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const segment of segments) {
+      const recipientMatch = segment.match(/destinat[áa]ri[ao]?:\s*([^—;]+)/i);
+      const deliveryMatch = segment.match(/entrega:\s*(.*?)(?=\s+—\s+(?:pagamento|total|taxa|respons[aá]vel|observa|pendente)|$)/i);
+      if (!deliveryMatch) continue;
+
+      const value = String(deliveryMatch[1] || "").trim();
+      if (!value) continue;
+
+      const normalizedValue = normalizeText(value);
+      const isGenericMultipleSummary =
+        normalizedValue.includes("multiplos enderecos") ||
+        /^\d+\s+entregas?\b/i.test(value) ||
+        /^taxa\b/i.test(value);
+
+      if (isGenericMultipleSummary) continue;
+
+      const recipient = String(recipientMatch?.[1] || "").trim();
+      addresses.push(recipient ? `${recipient}: ${value}` : value);
+    }
+  }
+
+  if (addresses.length) return addresses;
+
+  const fallback = String(order?.delivery_address || "").trim();
+  return fallback ? [fallback] : [];
+}
+
 function renderOrders() {
   ordersListEl.innerHTML = "";
   if (!state.productOrders.length) {
@@ -2458,6 +2495,11 @@ function renderOrders() {
           })
           .join("\n")
       : "Sem itens detalhados";
+    const deliveryAddressLines = extractOrderDeliveryAddressLines(order);
+    const deliveryAddressLabel = deliveryAddressLines.length > 1 ? "Endereços/retirada" : "Endereço/retirada";
+    const deliveryAddressHtml = deliveryAddressLines.length
+      ? deliveryAddressLines.map((line) => escapeHtml(line)).join("<br />")
+      : "-";
     item.innerHTML = `
       <div class="schedule-list-main">
         <div class="schedule-list-summary">
@@ -2475,7 +2517,7 @@ function renderOrders() {
           <span><i class="bi bi-box-seam"></i> ${escapeHtml(itemsPreview).replace(/\n/g, "<br />")}</span>
           <span><i class="bi bi-person"></i> ${escapeHtml(order.responsible_name || "-")}</span>
           <span><i class="bi bi-truck"></i> ${escapeHtml(order.fulfillment_type ? `Entrega/retirada: ${order.fulfillment_type}` : "Entrega/retirada: -")}</span>
-          <span><i class="bi bi-geo-alt"></i> ${escapeHtml(order.delivery_address ? `Endereço/retirada: ${order.delivery_address}` : "Endereço/retirada: -")}</span>
+          <span><i class="bi bi-geo-alt"></i> ${escapeHtml(`${deliveryAddressLabel}: `)}${deliveryAddressHtml}</span>
           <span><i class="bi bi-wallet2"></i> ${escapeHtml(order.payment_method ? `Pagamento: ${order.payment_method}` : "Pagamento: -")}</span>
           ${order.notes ? `<span><i class="bi bi-card-text"></i> ${escapeHtml(order.notes)}</span>` : ""}
           ${order.ready_time_minutes ? `<span><i class="bi bi-hourglass-split"></i> ${escapeHtml(String(order.ready_time_minutes))} minuto(s)</span>` : ""}
