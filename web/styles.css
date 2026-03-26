@@ -2237,6 +2237,67 @@ body.auth-lock {
   gap: 12px;
 }
 
+.products-search-shell {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.products-search-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel-elevated) 88%, var(--accent) 12%), var(--panel-elevated));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+.products-search-bar i {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+  font-size: 16px;
+}
+
+.products-search-bar input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.products-search-bar input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+}
+
+.products-search-clear {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.products-search-clear:hover {
+  background: var(--hover);
+}
+
+.products-search-meta {
+  color: color-mix(in srgb, var(--text) 70%, var(--muted));
+  font-size: 13px;
+  padding: 0 4px;
+}
+
 .product-item {
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr) auto;

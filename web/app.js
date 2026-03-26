@@ -38,6 +38,7 @@
   settingsTab: "perfil",
   realtimeCheckpointToken: "",
   products: [],
+  productsSearch: "",
   productOrders: [],
   productSchedules: [],
   productsTab: "store-info",
@@ -311,6 +312,9 @@ const productPreviewPriceEl = document.getElementById("productPreviewPrice");
 const productPreviewDiscountEl = document.getElementById("productPreviewDiscount");
 const productPreviewStockEl = document.getElementById("productPreviewStock");
 const productsListEl = document.getElementById("productsList");
+const productsSearchInputEl = document.getElementById("productsSearchInput");
+const productsSearchClearBtnEl = document.getElementById("productsSearchClearBtn");
+const productsSearchMetaEl = document.getElementById("productsSearchMeta");
 const ordersListEl = document.getElementById("ordersList");
 const storeInfoFormEl = document.getElementById("storeInfoForm");
 const storeNameInputEl = document.getElementById("storeNameInput");
@@ -2315,13 +2319,54 @@ async function loadAgentStatus() {
 
 function renderProducts() {
   productsListEl.innerHTML = "";
+  if (productsSearchInputEl && productsSearchInputEl.value !== String(state.productsSearch || "")) {
+    productsSearchInputEl.value = String(state.productsSearch || "");
+  }
+  const query = String(state.productsSearch || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  const filteredProducts = !query
+    ? state.products
+    : state.products.filter((product) => {
+        const haystack = [
+          product.name,
+          product.group_name,
+          product.description,
+          product.type === "service" ? "servico serviço agendamento" : "produto mercadoria item",
+          product.is_active === false ? "inativo desativado off" : "ativo habilitado on",
+        ]
+          .join(" ")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase();
+
+        return query
+          .split(/\s+/)
+          .filter(Boolean)
+          .every((term) => haystack.includes(term));
+      });
+
+  productsSearchClearBtnEl.hidden = !query;
   if (!state.products.length) {
+    productsSearchMetaEl.textContent = "Nenhum produto cadastrado.";
     productsListEl.innerHTML = '<div class="empty-state">Nenhum produto cadastrado.</div>';
     return;
   }
 
+  productsSearchMetaEl.textContent = query
+    ? `${filteredProducts.length} produto(s) encontrado(s) para "${state.productsSearch}".`
+    : `Mostrando ${state.products.length} produto(s) cadastrados.`;
+
+  if (!filteredProducts.length) {
+    productsListEl.innerHTML = '<div class="empty-state">Nenhum produto encontrado para essa busca.</div>';
+    return;
+  }
+
   let currentGroupHeading = "";
-  for (const product of state.products) {
+  for (const product of filteredProducts) {
     const groupLabel = normalizeProductGroupName(product.group_name || "") || "Sem grupo";
     if (groupLabel !== currentGroupHeading) {
       currentGroupHeading = groupLabel;
@@ -6632,6 +6677,16 @@ productGroupSuggestionsEl?.addEventListener("click", (event) => {
 updateProductPreview();
 updateProductDiscountState();
 updateProductScheduleState();
+productsSearchInputEl?.addEventListener("input", (event) => {
+  state.productsSearch = String(event.target.value || "");
+  renderProducts();
+});
+productsSearchClearBtnEl?.addEventListener("click", () => {
+  state.productsSearch = "";
+  if (productsSearchInputEl) productsSearchInputEl.value = "";
+  renderProducts();
+  productsSearchInputEl?.focus();
+});
 productsListEl.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;

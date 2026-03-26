@@ -1814,7 +1814,63 @@ export async function createAiOrder(input: {
     [input.conversationId, input.summary],
   );
   if (existing.rows[0]) {
-    return existing.rows[0];
+    const updatedExisting = await pool.query<AiOrderRow>(
+      `
+      UPDATE ai_orders
+      SET
+        account_id = COALESCE($2, account_id),
+        customer_phone = COALESCE($3, customer_phone),
+        summary = $4,
+        items = $5::jsonb,
+        total_estimate = $6,
+        responsible_name = $7,
+        fulfillment_type = $8,
+        delivery_address = $9,
+        payment_method = $10,
+        notes = $11,
+        customer_confirmed_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id,
+        account_id,
+        conversation_id,
+        customer_phone,
+        summary,
+        items,
+        total_estimate::text,
+        responsible_name,
+        fulfillment_type,
+        delivery_address,
+        payment_method,
+        notes,
+        status,
+        customer_confirmed_at::text,
+        confirmed_at::text,
+        confirmed_by_user_id,
+        ready_time_minutes,
+        confirmation_note,
+        cancelled_at::text,
+        cancelled_by_user_id,
+        cancel_reason,
+        created_at::text,
+        updated_at::text
+      `,
+      [
+        existing.rows[0].id,
+        input.accountId,
+        input.customerPhone || null,
+        input.summary,
+        JSON.stringify(input.items || []),
+        Number.isFinite(Number(input.totalEstimate)) ? Number(input.totalEstimate) : null,
+        input.responsibleName || null,
+        input.fulfillmentType || null,
+        input.deliveryAddress || null,
+        input.paymentMethod || null,
+        input.notes || null,
+      ],
+    );
+    return updatedExisting.rows[0] || existing.rows[0];
   }
 
   const result = await pool.query<AiOrderRow>(

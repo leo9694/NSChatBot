@@ -3732,27 +3732,64 @@ export async function handleInboundAiAutomation(
 
     const existingPendingItems = Array.isArray(context.open_order_items) ? context.open_order_items : [];
     const existingDraftItems = Array.isArray(context.order_draft_items) ? context.order_draft_items : [];
+    const hasOrderDraftContext =
+      Boolean(String(context.order_draft_summary || "").trim()) ||
+      existingDraftItems.length > 0 ||
+      context.order_draft_total_estimate !== null && context.order_draft_total_estimate !== undefined ||
+      Boolean(String(context.order_draft_responsible_name || "").trim()) ||
+      Boolean(String(context.order_draft_fulfillment_type || "").trim()) ||
+      Boolean(String(context.order_draft_delivery_address || "").trim()) ||
+      Boolean(String(context.order_draft_payment_method || "").trim()) ||
+      Boolean(String(context.order_draft_notes || "").trim());
+    const shouldReuseOpenPendingOrder =
+      Boolean(String(context.open_order_id || "").trim()) &&
+      !aiResult.order.shouldCreate &&
+      awaitingOrderConfirmation &&
+      customerDirectConfirmation &&
+      !hasOrderDraftContext;
+    const orderBase = shouldReuseOpenPendingOrder
+      ? {
+          summary: context.open_order_summary,
+          items: existingPendingItems,
+          totalEstimate:
+            context.open_order_total_estimate !== null && context.open_order_total_estimate !== undefined
+              ? Number(context.open_order_total_estimate)
+              : null,
+          responsibleName: context.open_order_responsible_name,
+          fulfillmentType: context.open_order_fulfillment_type,
+          deliveryAddress: context.open_order_delivery_address,
+          paymentMethod: context.open_order_payment_method,
+          notes: context.open_order_notes,
+        }
+      : {
+          summary: null,
+          items: [],
+          totalEstimate: null,
+          responsibleName: null,
+          fulfillmentType: null,
+          deliveryAddress: null,
+          paymentMethod: null,
+          notes: null,
+        };
     const mergedOrder = {
-      summary: pickFirstFilled(aiResult.order.summary, context.open_order_summary, context.order_draft_summary) || null,
-      items: aiResult.order.items.length ? aiResult.order.items : existingPendingItems.length ? existingPendingItems : existingDraftItems,
+      summary: pickFirstFilled(aiResult.order.summary, context.order_draft_summary, orderBase.summary) || null,
+      items: aiResult.order.items.length ? aiResult.order.items : existingDraftItems.length ? existingDraftItems : orderBase.items,
       totalEstimate:
         aiResult.order.totalEstimate !== null && aiResult.order.totalEstimate !== undefined
           ? aiResult.order.totalEstimate
-          : context.open_order_total_estimate !== null && context.open_order_total_estimate !== undefined
-            ? Number(context.open_order_total_estimate)
-            : context.order_draft_total_estimate !== null && context.order_draft_total_estimate !== undefined
+          : context.order_draft_total_estimate !== null && context.order_draft_total_estimate !== undefined
               ? Number(context.order_draft_total_estimate)
-            : null,
+            : orderBase.totalEstimate,
       responsibleName: pickFirstFilled(
         aiResult.order.responsibleName,
-        context.open_order_responsible_name,
         context.order_draft_responsible_name,
+        orderBase.responsibleName,
         context.display_name,
       ),
-      fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.open_order_fulfillment_type, context.order_draft_fulfillment_type),
-      deliveryAddress: pickFirstFilled(aiResult.order.deliveryAddress, context.open_order_delivery_address, context.order_draft_delivery_address),
-      paymentMethod: pickFirstFilled(aiResult.order.paymentMethod, context.open_order_payment_method, context.order_draft_payment_method),
-      notes: pickFirstFilled(aiResult.order.notes, context.open_order_notes, context.order_draft_notes),
+      fulfillmentType: pickFirstFilled(aiResult.order.fulfillmentType, context.order_draft_fulfillment_type, orderBase.fulfillmentType),
+      deliveryAddress: pickFirstFilled(aiResult.order.deliveryAddress, context.order_draft_delivery_address, orderBase.deliveryAddress),
+      paymentMethod: pickFirstFilled(aiResult.order.paymentMethod, context.order_draft_payment_method, orderBase.paymentMethod),
+      notes: pickFirstFilled(aiResult.order.notes, context.order_draft_notes, orderBase.notes),
     };
 
     const normalizedFulfillment = normalizeName(String(mergedOrder.fulfillmentType || ""));
@@ -3981,7 +4018,7 @@ export async function handleInboundAiAutomation(
     let updatedPendingOrder = false;
     const shouldPersistOrder = (aiResult.order.shouldCreate || (awaitingOrderConfirmation && customerDirectConfirmation)) && hasRequiredOrderData;
     if (shouldPersistOrder) {
-      if (String(context.open_order_id || "").trim()) {
+      if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
         const updatedOrder = await updatePendingAiOrder({
           orderId: String(context.open_order_id || "").trim(),
           summary: String(mergedOrder.summary || "").trim(),
@@ -4281,7 +4318,7 @@ export async function handleInboundAiAutomation(
       hasUsableDeliveryAddress;
     if (canBackfillClaimedOrder) {
       try {
-        if (String(context.open_order_id || "").trim()) {
+        if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
           const updatedOrder = await updatePendingAiOrder({
             orderId: String(context.open_order_id || "").trim(),
             summary: String(mergedOrder.summary || "").trim(),

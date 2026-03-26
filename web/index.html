@@ -648,6 +648,21 @@
                       <p>Esses itens ficam disponíveis para o agente de IA consultar.</p>
                     </div>
                   </div>
+                  <div class="products-search-shell">
+                    <label class="products-search-bar" for="productsSearchInput">
+                      <i class="bi bi-search"></i>
+                      <input
+                        id="productsSearchInput"
+                        type="search"
+                        placeholder="Buscar por nome, grupo, descrição, tipo ou status..."
+                        autocomplete="off"
+                      />
+                      <button id="productsSearchClearBtn" type="button" class="products-search-clear" hidden>
+                        <i class="bi bi-x-lg"></i>
+                      </button>
+                    </label>
+                    <div id="productsSearchMeta" class="products-search-meta">Mostrando todos os produtos.</div>
+                  </div>
                   <div id="productsList" class="products-list"></div>
                 </div>
 
