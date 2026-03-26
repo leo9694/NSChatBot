@@ -25,6 +25,7 @@ import { sendWhatsAppText } from "../services/whatsapp.service";
 import { setConversationAiRescheduleContext, updateConversationAiEnabled } from "../repositories/conversations.repository";
 
 const router = Router();
+const APP_TIME_ZONE = String(process.env.APP_TIMEZONE || "America/Cuiaba").trim() || "America/Cuiaba";
 type AuthRequest = Express.Request & {
   authUser?: {
     id: string;
@@ -116,6 +117,21 @@ function formatCurrencyBr(value?: string | number | null): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "-";
   return numeric.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function formatDateTimeBrInAppTimeZone(value?: string | number | Date | null): string {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: APP_TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function buildOrderItemLines(items: Array<Record<string, unknown>>): string[] {
@@ -311,7 +327,7 @@ function streamOrderPdf(
     .fontSize(9)
     .fillColor("#3d4f5c")
     .text(`Pedido: ${String(order?.id || "").slice(0, 8).toUpperCase()}`, receiptX, topY + 18, { width: receiptWidth })
-    .text(`Emitido em: ${new Date().toLocaleString("pt-BR")}`, receiptX, topY + 31, { width: receiptWidth });
+    .text(`Emitido em: ${formatDateTimeBrInAppTimeZone()}`, receiptX, topY + 31, { width: receiptWidth });
   doc.y = topY + 48;
   doc.moveDown(0.35);
 
