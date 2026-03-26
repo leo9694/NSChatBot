@@ -492,7 +492,7 @@ function buildOrderConfirmationPrompt(params: {
   fulfillmentType?: string | null;
   paymentMethod?: string | null;
 }): string {
-  const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirmaï¿½ï¿½o final."];
+  const lines: string[] = ["Antes de gerar o pedido, preciso da sua confirmação final."];
   const itemLines = Array.isArray(params.items)
     ? params.items
         .map((item) => {
@@ -522,7 +522,7 @@ function buildOrderConfirmationPrompt(params: {
     lines.push(`Pagamento: ${String(params.paymentMethod || "").trim()}`);
   }
 
-  lines.push("", "Se estiver tudo certo, me responda com uma confirmaï¿½ï¿½o, por exemplo: \"sim\", \"pode confirmar\" ou \"pode gerar\".");
+  lines.push("", "Se estiver tudo certo, me responda com uma confirmação, por exemplo: \"sim\", \"pode confirmar\" ou \"pode gerar\".");
   return lines.join("\n");
 }
 
@@ -532,18 +532,18 @@ function buildScheduleConfirmationPrompt(params: {
   scheduledTime?: string | null;
   durationMinutes?: number | null;
 }): string {
-  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirmaÃ§Ã£o final."];
+  const lines: string[] = ["Antes de confirmar o agendamento, preciso da sua confirmação final."];
   if (String(params.serviceName || "").trim()) {
-    lines.push("", `ServiÃ§o: ${String(params.serviceName || "").trim()}`);
+    lines.push("", `Serviço: ${String(params.serviceName || "").trim()}`);
   }
   if (String(params.scheduledDate || "").trim() || String(params.scheduledTime || "").trim()) {
-    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" Ã s ");
-    lines.push(`Data e horÃ¡rio: ${when}`);
+    const when = [formatShortBrDate(params.scheduledDate), String(params.scheduledTime || "").trim()].filter(Boolean).join(" às ");
+    lines.push(`Data e horário: ${when}`);
   }
   if (Number.isFinite(Number(params.durationMinutes))) {
-    lines.push(`DuraÃ§Ã£o mÃ©dia: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
+    lines.push(`Duração média: ${Math.max(1, Math.round(Number(params.durationMinutes)))} min`);
   }
-  lines.push("", "Se estiver tudo certo, me responda com uma confirmaÃ§Ã£o para eu gerar o agendamento pendente.");
+  lines.push("", "Se estiver tudo certo, me responda com uma confirmação para eu gerar o agendamento pendente.");
   return lines.join("\n");
 }
 
@@ -598,7 +598,7 @@ function buildAiTurnBody(body: string, quotedBody?: string | null, previousCompa
   const cleanPreviousCompany = String(previousCompanyBody || "").trim();
   if (!cleanQuoted) {
     if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
-      return `${cleanBody}\n[ï¿½ltima mensagem da empresa: ${cleanPreviousCompany}]`;
+      return `${cleanBody}\n[Última mensagem da empresa: ${cleanPreviousCompany}]`;
     }
     return cleanBody;
   }
@@ -608,11 +608,11 @@ function buildAiTurnBody(body: string, quotedBody?: string | null, previousCompa
   }
 
   if (isShortQuotedFollowup(cleanBody)) {
-    return `${cleanBody}\n[Referï¿½ncia citada: ${cleanQuoted}]`;
+    return `${cleanBody}\n[Referência citada: ${cleanQuoted}]`;
   }
 
   if (isShortContextReply(cleanBody) && cleanPreviousCompany) {
-    return `${cleanBody}\n[Referï¿½ncia citada: ${cleanQuoted}]\n[ï¿½ltima mensagem da empresa: ${cleanPreviousCompany}]`;
+    return `${cleanBody}\n[Referência citada: ${cleanQuoted}]\n[Última mensagem da empresa: ${cleanPreviousCompany}]`;
   }
 
   return cleanBody;
@@ -738,9 +738,9 @@ function buildDeliveryAddressForm() {
     "",
     "Cidade:",
     "Rua:",
-    "NÃºmero: (se nÃ£o tiver, informe: sem nÃºmero)",
+    "Número: (se não tiver, informe: sem número)",
     "Bairro:",
-    "Ponto de referÃªncia:",
+    "Ponto de referência:",
   ].join("\n");
 }
 
@@ -868,20 +868,20 @@ function buildMissingReferenceReply(
   const noNumber = textIndicatesNoNumber(customerText) || normalizeText(String(parsed.number || "")).includes("sem numero");
   const city = parsed.city || "";
   const street = parsed.street || "";
-  const number = noNumber ? "sem nï¿½mero" : parsed.number || "";
+  const number = noNumber ? "sem número" : parsed.number || "";
   const neighborhood = parsed.neighborhood || "";
 
   return [
-    "Falta sÃ³ o ponto de referÃªncia para eu gerar o pedido.",
+    "Falta só o ponto de referência para eu gerar o pedido.",
     "",
     "Confirma assim:",
     city ? `Cidade: ${city}` : "Cidade:",
     street ? `Rua: ${street}` : "Rua:",
-    number ? `NÃºmero: ${number}` : "NÃºmero:",
+    number ? `Número: ${number}` : "Número:",
     neighborhood ? `Bairro: ${neighborhood}` : "Bairro:",
-    "Ponto de referÃªncia:",
+    "Ponto de referência:",
     "",
-    "Assim que vocÃª me enviar o ponto de referÃªncia, eu gero o pedido e deixo pendente de confirmaÃ§Ã£o interna.",
+    "Assim que você me enviar o ponto de referência, eu gero o pedido e deixo pendente de confirmação interna.",
   ].join("\n");
 }
 
@@ -1054,6 +1054,85 @@ export function __buildGreetingReplyForTests(
   return buildGreetingReply(mood, customerDisplayName, customerBody, now || new Date());
 }
 
+function stripRepeatedStoreGreetingIntro(input: {
+  replyText: string;
+  previousCompanyBody?: string | null;
+  customerBody?: string | null;
+  companyName?: string | null;
+  customerGreetingOnly?: boolean;
+}): string {
+  const replyText = String(input.replyText || "").trim();
+  if (!replyText) return "";
+
+  const previousCompanyBody = String(input.previousCompanyBody || "").trim();
+  const customerBody = String(input.customerBody || "").trim();
+  const companyName = String(input.companyName || "").trim();
+  const customerGreetingOnly = Boolean(input.customerGreetingOnly);
+
+  if (!previousCompanyBody || customerGreetingOnly || isPureGreetingMessage(customerBody)) {
+    return replyText;
+  }
+
+  const normalizedReply = normalizeText(replyText);
+  const normalizedPrevious = normalizeText(previousCompanyBody);
+  const normalizedCompany = normalizeText(companyName);
+  const hasGreetingPrefix = /^(bom dia|boa tarde|boa noite)\b/.test(normalizedReply);
+  if (!hasGreetingPrefix) {
+    return replyText;
+  }
+
+  const repeatsCompanyIntro =
+    normalizedReply.includes("aqui e da") ||
+    normalizedReply.includes("aqui é da") ||
+    (normalizedCompany && normalizedReply.includes(normalizedCompany));
+  const previousAlreadyGreeted =
+    /^(bom dia|boa tarde|boa noite)\b/.test(normalizedPrevious) ||
+    normalizedPrevious.includes("aqui e da") ||
+    normalizedPrevious.includes("aqui é da") ||
+    (normalizedCompany && normalizedPrevious.includes(normalizedCompany));
+
+  if (!repeatsCompanyIntro && !previousAlreadyGreeted) {
+    return replyText;
+  }
+
+  const firstBreakIndex = (() => {
+    const sentenceBreak = replyText.search(/[.\n]/);
+    return sentenceBreak >= 0 ? sentenceBreak : -1;
+  })();
+  const firstChunk =
+    firstBreakIndex >= 0 ? replyText.slice(0, firstBreakIndex + 1).trim() : replyText.trim();
+  const normalizedFirstChunk = normalizeText(firstChunk);
+  const rawFirstChunk = String(firstChunk || "").toLowerCase();
+
+  if (
+    !/^(bom dia|boa tarde|boa noite)\b/.test(normalizedFirstChunk) ||
+    (
+      !(
+        (normalizedCompany && normalizedFirstChunk.includes(normalizedCompany)) ||
+        normalizedFirstChunk.includes("aqui e da") ||
+        /aqui\s+.{0,3}\s*da/.test(rawFirstChunk)
+      )
+    )
+  ) {
+    return replyText;
+  }
+
+  const stripped =
+    firstBreakIndex >= 0 ? replyText.slice(firstBreakIndex + 1).trim() : "";
+
+  return stripped || replyText;
+}
+
+export function __stripRepeatedStoreGreetingIntroForTests(input: {
+  replyText: string;
+  previousCompanyBody?: string | null;
+  customerBody?: string | null;
+  companyName?: string | null;
+  customerGreetingOnly?: boolean;
+}): string {
+  return stripRepeatedStoreGreetingIntro(input);
+}
+
 function isDiscountQuestion(body: string): boolean {
   const text = normalizeText(body);
   return (
@@ -1137,7 +1216,7 @@ function buildClosingReply(mood: "amigavel" | "informal" | "formal") {
     return "Tudo certo. Fico por aqui ";
   }
   if (mood === "formal") {
-    return "Tudo certo. Fico Ã  disposiÃ§Ã£o.";
+    return "Tudo certo. Fico à disposição.";
   }
   return "Tudo certo. Fico por aqui.";
 }
@@ -1148,21 +1227,21 @@ function buildOrderFallbackReply(input: {
 }) {
   if (input.updatedPendingOrder) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
+      return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
     }
     if (input.mood === "formal") {
-      return "Perfeito. Seu pedido pendente foi ajustado e permanece aguardando confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
+      return "Perfeito. Seu pedido pendente foi ajustado e permanece aguardando confirmação interna. Assim que houver a confirmação, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu pedido pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
   }
 
   if (input.mood === "amigavel") {
-    return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
+    return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
   }
   if (input.mood === "formal") {
-    return "Perfeito. Seu pedido foi registrado e ficou pendente de confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
+    return "Perfeito. Seu pedido foi registrado e ficou pendente de confirmação interna. Assim que houver a confirmação, informarei por aqui.";
   }
-  return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
+  return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
 function buildScheduleFallbackReply(input: {
@@ -1172,31 +1251,31 @@ function buildScheduleFallbackReply(input: {
 }) {
   if (input.reopenedConfirmedSchedule) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu agendamento confirmado com o novo horÃ¡rio e ele voltou para pendente de confirmaÃ§Ã£o interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+      return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
     }
     if (input.mood === "formal") {
-      return "Perfeito. O agendamento confirmado foi ajustado com o novo horÃ¡rio e voltou para pendente de confirmaÃ§Ã£o interna. Assim que houver a nova confirmaÃ§Ã£o, informarei por aqui.";
+      return "Perfeito. O agendamento confirmado foi ajustado com o novo horário e voltou para pendente de confirmação interna. Assim que houver a nova confirmação, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu agendamento confirmado com o novo horÃ¡rio e ele voltou para pendente de confirmaÃ§Ã£o interna. Assim que for confirmado de novo, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu agendamento confirmado com o novo horário e ele voltou para pendente de confirmação interna. Assim que for confirmado de novo, eu te aviso por aqui.";
   }
 
   if (input.updatedPendingSchedule) {
     if (input.mood === "amigavel") {
-      return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
+      return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
     }
     if (input.mood === "formal") {
-      return "Perfeito. Seu agendamento pendente foi ajustado e permanece aguardando confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
+      return "Perfeito. Seu agendamento pendente foi ajustado e permanece aguardando confirmação interna. Assim que houver a confirmação, informarei por aqui.";
     }
-    return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
+    return "Perfeito. Ajustei seu agendamento pendente e ele continua aguardando confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
   }
 
   if (input.mood === "amigavel") {
-    return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui ";
+    return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
   }
   if (input.mood === "formal") {
-    return "Perfeito. Seu agendamento foi registrado e ficou pendente de confirmaï¿½ï¿½o interna. Assim que houver a confirmaï¿½ï¿½o, informarei por aqui.";
+    return "Perfeito. Seu agendamento foi registrado e ficou pendente de confirmação interna. Assim que houver a confirmação, informarei por aqui.";
   }
-  return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmaï¿½ï¿½o interna. Assim que for confirmado, eu te aviso por aqui.";
+  return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
 }
 
 function buildScheduleCancellationFallbackReply(input: {
@@ -1208,16 +1287,16 @@ function buildScheduleCancellationFallbackReply(input: {
   const serviceLabel = String(input.serviceName || "seu agendamento").trim();
   const whenLabel =
     input.scheduledDate && input.scheduledTime
-      ? ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} ï¿½s ${String(input.scheduledTime || "").trim()}`
+      ? ` em ${formatShortBrDate(String(input.scheduledDate || "").trim())} às ${String(input.scheduledTime || "").trim()}`
       : "";
 
   if (input.mood === "amigavel") {
-    return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tambÃ©m posso te ajudar a remarcar.`;
+    return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
   }
   if (input.mood === "formal") {
-    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo horÃ¡rio.`;
+    return `Pronto. Seu agendamento de ${serviceLabel}${whenLabel} foi cancelado com sucesso. Se desejar, posso ajudar com um novo horário.`;
   }
-  return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu tambÃ©m posso te ajudar a remarcar.`;
+  return `Prontinho, cancelei seu agendamento de ${serviceLabel}${whenLabel}. Se quiser, eu também posso te ajudar a remarcar.`;
 }
 
 function wasAwaitingScheduleConfirmation(messages: any[]): boolean {
@@ -1407,23 +1486,23 @@ function buildScheduleSummary(input: {
   durationMinutes?: number | null;
 }) {
   const durationPart = Number.isFinite(input.durationMinutes)
-    ? ` | duraï¿½ï¿½o mï¿½dia: ${Math.round(Number(input.durationMinutes))} min`
+    ? ` | duração média: ${Math.round(Number(input.durationMinutes))} min`
     : "";
-  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} Ã s ${input.scheduledTime}${durationPart}`;
+  return `${input.serviceName} | ${formatShortBrDate(input.scheduledDate)} às ${input.scheduledTime}${durationPart}`;
 }
 
 function buildScheduleConflictReply(input: {
   mood: "amigavel" | "informal" | "formal";
   conflict: { scheduled_date: string; scheduled_time: string; service_name?: string | null };
 }) {
-  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} Ã s ${String(input.conflict.scheduled_time || "").trim()}`;
+  const whenLabel = `${formatShortBrDate(String(input.conflict.scheduled_date || "").trim())} às ${String(input.conflict.scheduled_time || "").trim()}`;
   if (input.mood === "amigavel") {
-    return `Nesse horÃ¡rio eu jÃ¡ tenho um agendamento registrado (${whenLabel}). Me passa outro horÃ¡rio que eu sigo com vocÃª.`;
+    return `Nesse horário eu já tenho um agendamento registrado (${whenLabel}). Me passa outro horário que eu sigo com você.`;
   }
   if (input.mood === "formal") {
-    return `JÃ¡ existe um agendamento registrado para ${whenLabel}. Por favor, informe outro horÃ¡rio para que eu possa seguir com o agendamento.`;
+    return `Já existe um agendamento registrado para ${whenLabel}. Por favor, informe outro horário para que eu possa seguir com o agendamento.`;
   }
-  return `JÃ¡ existe um agendamento registrado para ${whenLabel}. Me passa outro horÃ¡rio que eu sigo com vocÃª.`;
+  return `Já existe um agendamento registrado para ${whenLabel}. Me passa outro horário que eu sigo com você.`;
 }
 
 function findSchedulableServiceMatch(
@@ -3819,7 +3898,9 @@ export async function handleInboundAiAutomation(
       Boolean(mergedOrder.paymentMethod) &&
       Boolean(mergedOrder.fulfillmentType) &&
       hasUsableDeliveryAddress;
-    const hasRequiredOrderData = hasOrderDataReadyForConfirmation && customerDirectConfirmation;
+    const aiConfirmedOrderDetails = Boolean(aiResult.order.customerConfirmedDetails) && awaitingOrderConfirmation;
+    const orderCustomerAcceptedProposal = customerDirectConfirmation || aiConfirmedOrderDetails;
+    const hasRequiredOrderData = hasOrderDataReadyForConfirmation && orderCustomerAcceptedProposal;
     const hasOrderDraftCandidate =
       Boolean(aiResult.order.summary) ||
       (Array.isArray(aiResult.order.items) && aiResult.order.items.length > 0) ||
@@ -4016,7 +4097,8 @@ export async function handleInboundAiAutomation(
 
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
-    const shouldPersistOrder = (aiResult.order.shouldCreate || (awaitingOrderConfirmation && customerDirectConfirmation)) && hasRequiredOrderData;
+    const shouldPersistOrder =
+      (aiResult.order.shouldCreate || (awaitingOrderConfirmation && orderCustomerAcceptedProposal)) && hasRequiredOrderData;
     if (shouldPersistOrder) {
       if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
         const updatedOrder = await updatePendingAiOrder({
@@ -4310,6 +4392,7 @@ export async function handleInboundAiAutomation(
     const canBackfillClaimedOrder =
       !createdOrderId &&
       orderClaimedAsCreated &&
+      orderCustomerAcceptedProposal &&
       Boolean(mergedOrder.summary) &&
       Array.isArray(mergedOrder.items) &&
       mergedOrder.items.length > 0 &&
@@ -4412,6 +4495,13 @@ export async function handleInboundAiAutomation(
     }
 
     replyText = formatIsoDatesInText(replyText);
+    replyText = stripRepeatedStoreGreetingIntro({
+      replyText,
+      previousCompanyBody,
+      customerBody: lastCustomerTurnBody,
+      companyName: accountSettings?.store_name || null,
+      customerGreetingOnly,
+    });
 
     if (!createdOrderId && deliveryHasOnlyMissingReference) {
       replyText = buildMissingReferenceReply(
