@@ -64,6 +64,85 @@ export async function testOpenAIConnection() {
   };
 }
 
+export async function generateAiOperationalMessage(input: {
+  accountId?: string | null;
+  eventType:
+    | "order_confirmation"
+    | "order_cancellation"
+    | "schedule_confirmation"
+    | "schedule_cancellation"
+    | "schedule_reminder"
+    | "schedule_reschedule_request";
+  customerName?: string | null;
+  facts: Array<string>;
+  extraGuidance?: string | null;
+}): Promise<string> {
+  const client = getOpenAIClient();
+  const accountId = String(input.accountId || "").trim() || null;
+  const storedSettings = accountId ? await getAiAccountSettings(accountId).catch(() => null) : null;
+  const account = accountId ? await getWhatsAppAccountById(accountId, null).catch(() => null) : null;
+  const companyId = account?.company_id || null;
+  const companyName = String(storedSettings?.company_name || storedSettings?.store_name || "").trim() || "Empresa";
+  const agentName = String(storedSettings?.agent_name || "").trim() || "Atendimento";
+  const moodInstruction = getMoodInstruction(storedSettings?.mood || "informal");
+  const storeContext = buildStoreContextText(storedSettings || {});
+  const customerName = String(input.customerName || "").trim();
+  const eventLabels: Record<string, string> = {
+    order_confirmation: "confirmação de pedido",
+    order_cancellation: "cancelamento de pedido",
+    schedule_confirmation: "confirmação de agendamento",
+    schedule_cancellation: "cancelamento de agendamento",
+    schedule_reminder: "lembrete de agendamento",
+    schedule_reschedule_request: "pedido de reagendamento",
+  };
+
+  const response = await client.responses.create({
+    model: env.openaiModel,
+    max_output_tokens: 520,
+    reasoning: { effort: "low" },
+    text: { verbosity: "low" },
+    input: [
+      {
+        role: "system",
+        content:
+          `Você escreve UMA mensagem operacional de WhatsApp para cliente, em português do Brasil.\n` +
+          `Empresa: ${companyName}\n` +
+          `Agente/assinatura interna: ${agentName}\n` +
+          `${moodInstruction}\n\n` +
+          `Regras obrigatórias:\n` +
+          `- Retorne apenas o texto final da mensagem.\n` +
+          `- A mensagem deve soar humana, natural e objetiva.\n` +
+          `- Não invente informações.\n` +
+          `- Inclua todas as informações factuais obrigatórias recebidas, sem omitir nenhuma.\n` +
+          `- Cubra explicitamente cada fato obrigatório da lista do usuário.\n` +
+          `- Preserve com exatidão fatos críticos como status, datas, horários, valores, formas de pagamento, motivos, nomes de serviços e nomes de itens do pedido.\n` +
+          `- Você pode organizar as informações do jeito que achar melhor, desde que nada importante seja omitido.\n` +
+          `- Não trate isso como conversa de venda; é uma atualização operacional.\n` +
+          `- Se houver nome do cliente, você pode usar uma saudação curta no início, mas não é obrigatório.\n` +
+          `- Revise a gramática antes de responder.\n` +
+          `- Revise a naturalidade do texto antes de responder. Corrija construções estranhas ou ambíguas.\n` +
+          `- Nunca escreva "agente combina" quando a intenção for "a gente combina".\n` +
+          `- Se usar linguagem coloquial, use português natural e correto.\n` +
+          `- Não troque, resuma demais nem esconda fatos obrigatórios atrás de frases vagas.\n` +
+          `- Não use markdown, JSON, títulos técnicos nem comentários meta.\n\n` +
+          `Contexto da loja:\n${storeContext}`,
+      },
+      {
+        role: "user",
+        content:
+          `Tipo de mensagem: ${eventLabels[input.eventType] || input.eventType}\n` +
+          `Cliente: ${customerName || "não informado"}\n` +
+          `Informações obrigatórias:\n- ${input.facts.map((item) => String(item || "").trim()).filter(Boolean).join("\n- ")}\n` +
+          `${String(input.extraGuidance || "").trim() ? `\nOrientação adicional:\n${String(input.extraGuidance || "").trim()}\n` : ""}` +
+          `\nEscreva agora a mensagem final para o cliente. ` +
+          `Antes de responder, confira internamente se todos os fatos obrigatórios aparecem de forma clara no texto final, especialmente datas, horários, valores, pagamento, motivo e nomes importantes.`,
+      },
+    ],
+  });
+
+  return extractResponseText(response);
+}
+
 function buildProductDiscountLabel(item: {
   discount_enabled?: boolean | null;
   discount_price?: string | null;

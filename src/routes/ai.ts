@@ -1,6 +1,6 @@
 ﻿import { Router, type Response } from "express";
 import PDFDocument = require("pdfkit");
-import { getOpenAIStatus, testOpenAIConnection } from "../services/openai.service";
+import { generateAiOperationalMessage, getOpenAIStatus, testOpenAIConnection } from "../services/openai.service";
 import {
   cancelAiOrder,
   cancelAiSchedule,
@@ -474,6 +474,191 @@ function formatCustomerScheduleMessage(input: {
   return parts.join("\n\n");
 }
 
+async function buildOperationalCustomerMessage(input: {
+  accountId?: string | null;
+  eventType:
+    | "order_confirmation"
+    | "order_cancellation"
+    | "schedule_confirmation"
+    | "schedule_cancellation"
+    | "schedule_reminder"
+    | "schedule_reschedule_request";
+  customerName?: string | null;
+  facts: Array<string | null | undefined>;
+  extraGuidance?: string | null;
+  fallback: () => string;
+}): Promise<string> {
+  const facts = input.facts.map((item) => String(item || "").trim()).filter(Boolean);
+  if (!facts.length) {
+    return input.fallback();
+  }
+
+  const normalizeForFactMatch = (value: string) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+  const normalizedEventType = String(input.eventType || "").trim().toLowerCase();
+
+  const badPhrases = [
+    "agente combina",
+    "o agente combina",
+    "agente segue com voce",
+    "agente sigo com voce",
+  ];
+
+  const stopwords = new Set([
+    "pedido",
+    "agendamento",
+    "servico",
+    "serviço",
+    "resumo",
+    "motivo",
+    "informacao",
+    "informação",
+    "adicional",
+    "tempo",
+    "estimado",
+    "horario",
+    "horário",
+    "data",
+    "media",
+    "média",
+    "minuto",
+    "minutos",
+    "cliente",
+    "confirmado",
+    "cancelado",
+    "sucesso",
+    "foi",
+    "com",
+    "sem",
+    "para",
+    "das",
+    "dos",
+    "que",
+    "uma",
+    "por",
+    "via",
+    "ja",
+    "já",
+    "esse",
+    "essa",
+    "neste",
+    "neste",
+    "atendimento",
+    "horario",
+    "horário",
+    "prazo",
+    "cliente",
+    "pedido",
+    "agendamento",
+  ]);
+
+  const pickSignificantWords = (value: string, limit = 2) =>
+    normalizeForFactMatch(value)
+      .split(/[^a-z0-9]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 4 && !stopwords.has(item))
+      .slice(0, limit);
+
+  const buildValidationTokens = (fact: string) => {
+    const normalizedFact = normalizeForFactMatch(fact);
+    const tokens: string[] = [];
+
+    const timeMatches = fact.match(/\b\d{1,2}:\d{2}\b/g) || [];
+    const dateMatches = fact.match(/\b\d{2}\/\d{2}\/\d{2,4}\b/g) || [];
+    const currencyMatches = fact.match(/r\$\s*\d[\d\.\,]*/gi) || [];
+    tokens.push(
+      ...timeMatches.map(normalizeForFactMatch),
+      ...dateMatches.map(normalizeForFactMatch),
+      ...currencyMatches.map(normalizeForFactMatch),
+    );
+
+    const paymentKeywords = ["pix", "cartao", "crédito", "credito", "debito", "débito", "dinheiro", "boleto"];
+    paymentKeywords.forEach((keyword) => {
+      const normalizedKeyword = normalizeForFactMatch(keyword);
+      if (normalizedFact.includes(normalizedKeyword)) {
+        tokens.push(normalizedKeyword);
+      }
+    });
+
+    if (normalizedFact.includes("confirmado")) tokens.push("confirm");
+    if (normalizedFact.includes("cancelado")) tokens.push("cancel");
+    if (normalizedFact.includes("lembrete")) tokens.push("lembrete");
+    if (normalizedFact.includes("reagendamento")) tokens.push("reagend");
+    if (normalizedFact.includes("agendamento")) tokens.push("agendamento");
+    if (normalizedFact.includes("pedido")) tokens.push("pedido");
+    if (normalizedFact.includes("servico") || normalizedFact.includes("serviço")) tokens.push("serv");
+
+    const labelMatch = fact.match(/^[^:]+:\s*(.+)$/);
+    if (labelMatch?.[1]) {
+      const valuePart = String(labelMatch[1] || "").trim();
+      if (/^resumo do pedido:/i.test(fact)) {
+        valuePart
+          .split(/\s+e\s+|,\s*|\s*;\s*/)
+          .map((item) => pickSignificantWords(item, 1))
+          .forEach((items) => tokens.push(...items));
+      } else {
+        tokens.push(...pickSignificantWords(valuePart, 2));
+      }
+    }
+
+    return Array.from(new Set(tokens.filter(Boolean)));
+  };
+
+  const eventRequiredTokens = () => {
+    switch (normalizedEventType) {
+      case "order_confirmation":
+        return ["pedido", "confirm"];
+      case "order_cancellation":
+        return ["pedido", "cancel"];
+      case "schedule_confirmation":
+        return ["agendamento", "confirm"];
+      case "schedule_cancellation":
+        return ["agendamento", "cancel"];
+      case "schedule_reminder":
+        return ["lembrete"];
+      case "schedule_reschedule_request":
+        return ["reagend"];
+      default:
+        return [];
+    }
+  };
+
+  const validateOperationalMessage = (message: string) => {
+    const normalizedMessage = normalizeForFactMatch(message);
+    if (!normalizedMessage.trim()) {
+      return false;
+    }
+    if (badPhrases.some((phrase) => normalizedMessage.includes(phrase))) {
+      return false;
+    }
+
+    const requiredTokens = Array.from(new Set([...eventRequiredTokens(), ...facts.flatMap((fact) => buildValidationTokens(fact))]));
+    return requiredTokens.every((token) => normalizedMessage.includes(token));
+  };
+
+  try {
+    const aiMessage = await generateAiOperationalMessage({
+      accountId: input.accountId || null,
+      eventType: input.eventType,
+      customerName: input.customerName || null,
+      facts,
+      extraGuidance: input.extraGuidance || null,
+    });
+    const finalMessage = String(aiMessage || "").trim();
+    if (!finalMessage || !validateOperationalMessage(finalMessage)) {
+      return input.fallback();
+    }
+    return finalMessage;
+  } catch (error) {
+    console.error("Falha ao gerar mensagem operacional por IA:", error);
+    return input.fallback();
+  }
+}
+
 export async function processDueScheduleReminders(): Promise<number> {
   const dueItems = await listAiSchedulesDueForReminder();
   let sentCount = 0;
@@ -484,17 +669,30 @@ export async function processDueScheduleReminders(): Promise<number> {
     }
 
     const customerName = String(schedule.customer_name || schedule.conversation_name || "").trim();
-    const greeting = customerName ? `${customerName},` : "";
-    const message = [
-      greeting,
-      "este é um lembrete do seu atendimento confirmado.",
-      schedule.service_name ? `Serviço: ${schedule.service_name}` : "",
-      schedule.scheduled_date && schedule.scheduled_time
-        ? `Horário: ${formatShortBrDate(schedule.scheduled_date)} às ${schedule.scheduled_time}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const message = await buildOperationalCustomerMessage({
+      accountId: schedule.account_id || null,
+      eventType: "schedule_reminder",
+      customerName,
+      facts: [
+        "É um lembrete de atendimento já confirmado.",
+        schedule.service_name ? `Serviço: ${schedule.service_name}` : null,
+        schedule.scheduled_date && schedule.scheduled_time
+          ? `Horário: ${formatShortBrDate(schedule.scheduled_date)} às ${schedule.scheduled_time}`
+          : null,
+      ],
+      extraGuidance: "Mantenha a mensagem curta e clara. O objetivo é apenas lembrar o cliente do horário confirmado.",
+      fallback: () =>
+        [
+          customerName ? `${customerName},` : "",
+          "este é um lembrete do seu atendimento confirmado.",
+          schedule.service_name ? `Serviço: ${schedule.service_name}` : "",
+          schedule.scheduled_date && schedule.scheduled_time
+            ? `Horário: ${formatShortBrDate(schedule.scheduled_date)} às ${schedule.scheduled_time}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+    });
 
     const waResponse = await sendWhatsAppText({
       to: schedule.customer_phone,
@@ -875,15 +1073,27 @@ router.post("/orders/:orderId/confirm", async (req, res) => {
     if (order.customer_phone && order.account_wa_jid) {
       const customerName = String(order.conversation_name || "").trim();
       const orderSummary = String(order.summary || "").trim();
-      const greeting = customerName ? `${customerName},` : "";
-      const statusLine = "seu pedido foi confirmado com sucesso.";
-      const message = formatCustomerOrderMessage({
-        greeting,
-        statusLine,
-        summary: orderSummary || "",
-        orderNotes: order.notes || null,
-        readyTimeMinutes: Math.round(readyTimeMinutes),
-        note: confirmationNote || null,
+      const message = await buildOperationalCustomerMessage({
+        accountId: order.account_id || null,
+        eventType: "order_confirmation",
+        customerName,
+        facts: [
+          "O pedido foi confirmado com sucesso.",
+          orderSummary ? `Resumo do pedido: ${orderSummary}` : null,
+          order.notes ? `Observação do pedido: ${order.notes}` : null,
+          `Tempo estimado: ${Math.round(readyTimeMinutes)} minuto(s)`,
+          confirmationNote ? `Informação adicional: ${confirmationNote}` : null,
+        ],
+        extraGuidance: "Deixe claro que o pedido foi confirmado e informe o prazo/tempo estimado com naturalidade.",
+        fallback: () =>
+          formatCustomerOrderMessage({
+            greeting: customerName ? `${customerName},` : "",
+            statusLine: "seu pedido foi confirmado com sucesso.",
+            summary: orderSummary || "",
+            orderNotes: order.notes || null,
+            readyTimeMinutes: Math.round(readyTimeMinutes),
+            note: confirmationNote || null,
+          }),
       });
 
       const waResponse = await sendWhatsAppText({
@@ -959,12 +1169,25 @@ router.post("/orders/:orderId/cancel", async (req, res) => {
     if (order.customer_phone && order.account_wa_jid) {
       const customerName = String(order.conversation_name || "").trim();
       const orderSummary = String(order.summary || "").trim();
-      const message = formatCustomerOrderMessage({
-        greeting: customerName ? `${customerName},` : "",
-        statusLine: "seu pedido foi cancelado.",
-        summary: orderSummary || "",
-        orderNotes: order.notes || null,
-        cancelReason: reason,
+      const message = await buildOperationalCustomerMessage({
+        accountId: order.account_id || null,
+        eventType: "order_cancellation",
+        customerName,
+        facts: [
+          "O pedido foi cancelado.",
+          orderSummary ? `Resumo do pedido: ${orderSummary}` : null,
+          order.notes ? `Observação do pedido: ${order.notes}` : null,
+          `Motivo do cancelamento: ${reason}`,
+        ],
+        extraGuidance: "Seja claro, respeitoso e direto. Não pareça ríspido.",
+        fallback: () =>
+          formatCustomerOrderMessage({
+            greeting: customerName ? `${customerName},` : "",
+            statusLine: "seu pedido foi cancelado.",
+            summary: orderSummary || "",
+            orderNotes: order.notes || null,
+            cancelReason: reason,
+          }),
       });
 
       const waResponse = await sendWhatsAppText({
@@ -1071,14 +1294,30 @@ router.post("/schedules/:scheduleId/confirm", async (req, res) => {
 
     if (schedule.customer_phone && schedule.account_wa_jid) {
       const customerName = String(schedule.customer_name || schedule.conversation_name || "").trim();
-      const message = formatCustomerScheduleMessage({
-        greeting: customerName ? `${customerName},` : "",
-        statusLine: "seu agendamento foi confirmado com sucesso.",
-        serviceName: schedule.service_name || "",
-        scheduledDate: schedule.scheduled_date || "",
-        scheduledTime: schedule.scheduled_time || "",
-        durationMinutes: schedule.duration_minutes,
-        note: confirmationNote || null,
+      const message = await buildOperationalCustomerMessage({
+        accountId: schedule.account_id || null,
+        eventType: "schedule_confirmation",
+        customerName,
+        facts: [
+          "O agendamento foi confirmado com sucesso.",
+          schedule.service_name ? `Serviço: ${schedule.service_name}` : null,
+          schedule.scheduled_date && schedule.scheduled_time
+            ? `Data e horário: ${formatShortBrDate(schedule.scheduled_date)} às ${schedule.scheduled_time}`
+            : null,
+          Number.isFinite(schedule.duration_minutes) ? `Duração média: ${Math.round(Number(schedule.duration_minutes))} minuto(s)` : null,
+          confirmationNote ? `Informação adicional: ${confirmationNote}` : null,
+        ],
+        extraGuidance: "A mensagem deve soar como uma confirmação operacional do atendimento já aprovado.",
+        fallback: () =>
+          formatCustomerScheduleMessage({
+            greeting: customerName ? `${customerName},` : "",
+            statusLine: "seu agendamento foi confirmado com sucesso.",
+            serviceName: schedule.service_name || "",
+            scheduledDate: schedule.scheduled_date || "",
+            scheduledTime: schedule.scheduled_time || "",
+            durationMinutes: schedule.duration_minutes,
+            note: confirmationNote || null,
+          }),
       });
 
       const waResponse = await sendWhatsAppText({
@@ -1148,13 +1387,28 @@ router.post("/schedules/:scheduleId/cancel", async (req, res) => {
 
     if (schedule.customer_phone && schedule.account_wa_jid) {
       const customerName = String(schedule.customer_name || schedule.conversation_name || "").trim();
-      const message = formatCustomerScheduleMessage({
-        greeting: customerName ? `${customerName},` : "",
-        statusLine: "seu agendamento foi cancelado.",
-        serviceName: schedule.service_name || "",
-        scheduledDate: schedule.scheduled_date || "",
-        scheduledTime: schedule.scheduled_time || "",
-        cancelReason: reason,
+      const message = await buildOperationalCustomerMessage({
+        accountId: schedule.account_id || null,
+        eventType: "schedule_cancellation",
+        customerName,
+        facts: [
+          "O agendamento foi cancelado.",
+          schedule.service_name ? `Serviço: ${schedule.service_name}` : null,
+          schedule.scheduled_date && schedule.scheduled_time
+            ? `Data e horário: ${formatShortBrDate(schedule.scheduled_date)} às ${schedule.scheduled_time}`
+            : null,
+          `Motivo do cancelamento: ${reason}`,
+        ],
+        extraGuidance: "A mensagem deve ser clara e respeitosa, explicando o cancelamento sem soar fria.",
+        fallback: () =>
+          formatCustomerScheduleMessage({
+            greeting: customerName ? `${customerName},` : "",
+            statusLine: "seu agendamento foi cancelado.",
+            serviceName: schedule.service_name || "",
+            scheduledDate: schedule.scheduled_date || "",
+            scheduledTime: schedule.scheduled_time || "",
+            cancelReason: reason,
+          }),
       });
 
       const waResponse = await sendWhatsAppText({
@@ -1262,12 +1516,26 @@ router.post("/schedules/:scheduleId/reschedule-assistant", async (req, res) => {
       return res.status(400).json({ error: "Horario fora do expediente configurado para esta empresa." });
     }
 
-    const message = buildAiRescheduleOutreachMessage({
-      customerName: schedule.customer_name || schedule.conversation_name || null,
-      serviceName: schedule.service_name || null,
-      reason,
-      suggestedDate,
-      suggestedTime,
+    const customerName = String(schedule.customer_name || schedule.conversation_name || "").trim();
+    const message = await buildOperationalCustomerMessage({
+      accountId: schedule.account_id || null,
+      eventType: "schedule_reschedule_request",
+      customerName,
+      facts: [
+        schedule.service_name ? `Serviço afetado: ${schedule.service_name}` : null,
+        `Motivo do reagendamento: ${reason}`,
+        `Novo horário sugerido: ${formatShortBrDate(suggestedDate)} às ${suggestedTime}`,
+        "Se esse horário não funcionar, o cliente pode responder com outro horário disponível.",
+      ],
+      extraGuidance: "A mensagem deve pedir o reagendamento de forma humana e colaborativa, propondo o novo horário e abrindo espaço para contraproposta.",
+      fallback: () =>
+        buildAiRescheduleOutreachMessage({
+          customerName: schedule.customer_name || schedule.conversation_name || null,
+          serviceName: schedule.service_name || null,
+          reason,
+          suggestedDate,
+          suggestedTime,
+        }),
     });
 
     await setConversationAiRescheduleContext({
