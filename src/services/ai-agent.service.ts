@@ -3378,10 +3378,18 @@ function shouldSendMultipleImages(lastCustomerMessage: string, productNames: str
     /\btodas as imagens\b/.test(text) ||
     /\btodas as fotos\b/.test(text) ||
     /\btodos os itens\b/.test(text) ||
+    /\bfotos? dos produtos\b/.test(text) ||
+    /\bimagens? dos produtos\b/.test(text) ||
+    /\bfotos? dos\b/.test(text) ||
+    /\bimagens? dos\b/.test(text) ||
     /\bcatalogo\b/.test(text) ||
     /\bmostra (todos|todas)\b/.test(text) ||
     /\bme envie (todos|todas)\b/.test(text)
   );
+}
+
+export function __shouldSendMultipleImagesForTests(lastCustomerMessage: string, productNames: string[]): boolean {
+  return shouldSendMultipleImages(lastCustomerMessage, productNames);
 }
 
 function isExplicitImageRequest(lastCustomerMessage: string): boolean {
@@ -3395,6 +3403,43 @@ function isExplicitImageRequest(lastCustomerMessage: string): boolean {
   );
 }
 
+function hasMultipleProductGroups(
+  catalog: Array<{ group_name?: string | null }>,
+): boolean {
+  const groups = new Set(
+    catalog
+      .map((item) => normalizeText(String(item.group_name || "")))
+      .filter(Boolean),
+  );
+  return groups.size > 1;
+}
+
+export function __hasMultipleProductGroupsForTests(
+  catalog: Array<{ group_name?: string | null }>,
+): boolean {
+  return hasMultipleProductGroups(catalog);
+}
+
+function isBroadCatalogImageRequest(lastCustomerMessage: string): boolean {
+  const text = normalizeText(lastCustomerMessage);
+  if (!text) return false;
+
+  const asksForImages = /\b(foto|fotos|imagem|imagens)\b/.test(text);
+  const mentionsCatalogScope =
+    /\b(produto|produtos|catalogo|catálogo|itens)\b/.test(text) ||
+    /\bque vcs tem\b/.test(text) ||
+    /\bque voces tem\b/.test(text) ||
+    /\bdisponiveis\b/.test(text) ||
+    /\btodos\b/.test(text) ||
+    /\btodas\b/.test(text);
+
+  return asksForImages && mentionsCatalogScope;
+}
+
+export function __isBroadCatalogImageRequestForTests(lastCustomerMessage: string): boolean {
+  return isBroadCatalogImageRequest(lastCustomerMessage);
+}
+
 function shouldAskGroupBeforeSendingAllProductPhotos(agentGuidelines?: Array<string> | null): boolean {
   const guidelines = getNormalizedAgentGuidelines(agentGuidelines);
   return guidelines.some((item) => {
@@ -3405,6 +3450,10 @@ function shouldAskGroupBeforeSendingAllProductPhotos(agentGuidelines?: Array<str
       (/\b(todos os produtos|todos|todas)\b/.test(item) || /\bcliente pedir fotos de todos os produtos\b/.test(item));
     return asksBeforeAllPhotos;
   });
+}
+
+export function __shouldAskGroupBeforeSendingAllProductPhotosForTests(agentGuidelines?: Array<string> | null): boolean {
+  return shouldAskGroupBeforeSendingAllProductPhotos(agentGuidelines);
 }
 
 function buildAskPhotoGroupReply(mood: "amigavel" | "informal" | "formal"): string {
@@ -4982,22 +5031,28 @@ export async function handleInboundAiAutomation(
       image_url: string | null;
     }> = [];
 
-    if (!shouldAttemptImage && isExplicitImageRequest(String(lastMessage.body || ""))) {
+    const normalizedLastMessageBody = String(lastMessage.body || "");
+
+    if (!shouldAttemptImage && isExplicitImageRequest(normalizedLastMessageBody)) {
       const askGroupFirst =
-        shouldSendMultipleImages(String(lastMessage.body || ""), []) &&
+        isBroadCatalogImageRequest(normalizedLastMessageBody) &&
+        hasMultipleProductGroups(catalog) &&
         shouldAskGroupBeforeSendingAllProductPhotos(accountSettings?.agent_guidelines);
 
       if (askGroupFirst) {
         replyText = buildAskPhotoGroupReply(mood);
       } else {
-        sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), []);
+        sendMultipleImages = shouldSendMultipleImages(normalizedLastMessageBody, []);
         const fallbackMatches = extractRequestedProductNames({
           catalog,
           productNames: aiResult.media.productNames,
-          lastCustomerMessage: String(lastMessage.body || ""),
+          lastCustomerMessage: normalizedLastMessageBody,
         });
 
         if (fallbackMatches.length > 0) {
+          if (fallbackMatches.length > 1 && /\b(fotos|imagens)\b/i.test(normalizedLastMessageBody)) {
+            sendMultipleImages = true;
+          }
           shouldAttemptImage = true;
           matchedProducts = sendMultipleImages ? fallbackMatches.slice(0, 10) : fallbackMatches.slice(0, 1);
           replyText = buildImageNoticeReply(mood, sendMultipleImages);
@@ -5006,15 +5061,19 @@ export async function handleInboundAiAutomation(
     }
 
     if (shouldAttemptImage && matchedProducts.length === 0) {
-      sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), aiResult.media.productNames);
+      sendMultipleImages = shouldSendMultipleImages(normalizedLastMessageBody, aiResult.media.productNames);
       matchedProducts = extractRequestedProductNames({
         catalog,
         productNames: aiResult.media.productNames,
-        lastCustomerMessage: String(lastMessage.body || ""),
+        lastCustomerMessage: normalizedLastMessageBody,
       });
 
+      if (!sendMultipleImages && matchedProducts.length > 1 && /\b(fotos|imagens)\b/i.test(normalizedLastMessageBody)) {
+        sendMultipleImages = true;
+      }
+
       if (sendMultipleImages) {
-        if (!matchedProducts.length && /\btodos\b|\btodas\b|\bcatalogo\b/.test(normalizeText(String(lastMessage.body || "")))) {
+        if (!matchedProducts.length && /\btodos\b|\btodas\b|\bcatalogo\b|\bprodutos\b/.test(normalizeText(normalizedLastMessageBody))) {
           matchedProducts = catalog.filter((product) => String(product.image_url || "").trim());
         }
         matchedProducts = matchedProducts.slice(0, 10);
