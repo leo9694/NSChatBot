@@ -324,8 +324,12 @@ function buildStoreContextText(settings: {
     ? settings.agent_guidelines.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
 
+  const guidelinesText = agentGuidelines.length
+    ? `Diretrizes da empresa:\n${agentGuidelines.map((item) => `- ${item}`).join("\n")}`
+    : "Diretrizes da empresa: Nenhuma diretriz adicional cadastrada";
+
   return [
-    `Diretrizes da empresa: ${agentGuidelines.length ? agentGuidelines.map((item) => `- ${item}`).join(" | ") : "Nenhuma diretriz adicional cadastrada"}`,
+    guidelinesText,
     `Nome da loja: ${String(settings.store_name || "").trim() || "Não informado"}`,
     `Descrição da loja: ${String(settings.store_description || "").trim() || "Não informada"}`,
     `CNPJ: ${String(settings.store_cnpj || "").trim() || "Não informado"}`,
@@ -409,7 +413,10 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
     "- Quando fizer sentido, voc? pode perguntar se h? observa??o no pedido, como bilhete, dedicat?ria, assinatura, recado ou instru??o especial. Isso ? opcional.",
     "- Se for entrega, o endere?o precisa ter cidade, rua, bairro e ponto de refer?ncia. O n?mero pode ser informado normalmente ou como 'sem n?mero' / 's/n'.",
     "- Nunca invente dados de endere?o.",
-    "- Quando pedir endere?o de entrega, use este formul?rio: Cidade: / Rua: / N?mero: (se n?o tiver, informe sem n?mero) / Bairro: / Ponto de refer?ncia:.",
+    "- Por padr?o, colete informa??es do pedido de forma natural e progressiva, uma parte por vez, sem transformar o atendimento em formul?rio.",
+    "- Evite fazer mais de duas perguntas por mensagem, a menos que uma diretriz da empresa exija claramente outro formato.",
+    "- Se faltar endere?o, pe?a somente o pr?ximo dado necess?rio para seguir, em linguagem natural.",
+    "- S? use bloco estruturado ou formul?rio de coleta quando houver diretriz expl?cita da empresa exigindo esse formato para aquele caso.",
     "- Voc? s? pode criar pedido depois de pedir a confirma??o final e receber uma confirma??o direta do cliente.",
     "- Dados completos de pedido N?O significam confirma??o final por si s?.",
     "- Frases como \"quero\", \"vou querer\", \"pode ser\", enviar nome, endere?o e pagamento, ou apenas descrever o pedido n?o bastam para criar o pedido se a confirma??o final ainda n?o foi pedida e respondida.",
@@ -456,6 +463,12 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
     "- Se houver diretrizes da empresa no contexto, siga essas diretrizes como regras ativas desta loja, desde que n?o entrem em conflito com fatos do sistema ou seguran?a operacional.",
     "- Quando uma diretriz da empresa entrar em conflito com seu estilo padr?o de escrita, a diretriz da empresa tem prioridade.",
     "- Se houver diretriz operacional espec?fica para foto, legenda, sauda??o, pedido, observa??o, endere?o ou forma de responder, cumpra essa diretriz literalmente sempre que ela se aplicar.",
+    "- Se a diretriz disser para n?o transformar o atendimento em formul?rio, n?o use listas longas de campos nem blocos de preenchimento; conduza a coleta em conversa natural.",
+    "- Se a diretriz disser para coletar informa??es uma por vez, pergunte apenas o pr?ximo dado necess?rio e n?o repita o que j? foi informado.",
+    "- Se a diretriz limitar a quantidade de perguntas por mensagem, respeite esse limite mesmo quando faltarem v?rios dados.",
+    "- Se a diretriz mandar apresentar o nome da loja na sauda??o, use isso na abertura real do atendimento, sem repetir a apresenta??o em toda mensagem seguinte.",
+    "- Se a diretriz mandar perguntar o grupo antes de enviar fotos de todos os produtos, fa?a essa pergunta antes de decidir enviar imagens.",
+    "- Se a diretriz mandar usar linguagem natural e conduzir a conversa, priorize perguntas curtas e contexto progressivo em vez de blocos longos de coleta.",
     "",
     "RETORNO",
     '- Retorne APENAS JSON neste formato: {"should_reply":true,"reply":"texto","memory_summary":"resumo curto","customer_profile":"perfil curto","order":{"should_create":false,"summary":"","items":[],"total_estimate":null,"responsible_name":"","fulfillment_type":"","delivery_address":"","payment_method":"","notes":"","customer_confirmed_details":false},"schedule":{"should_create":false,"should_cancel":false,"service_name":"","scheduled_date":"","scheduled_time":"","customer_name":"","notes":"","cancel_reason":"","duration_minutes":null,"customer_confirmed_details":false},"media":{"should_send_images":false,"product_names":[]},"handoff":{"should_transfer":false,"reason":""}}',
