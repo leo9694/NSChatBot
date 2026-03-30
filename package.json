@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "db:migrate": "ts-node src/db/runMigrations.ts",
-    "db:clone-local": "ts-node src/db/cloneProductionToLocal.ts"
+    "db:clone-local": "ts-node src/db/cloneProductionToLocal.ts",
+    "debug:ai-prompt": "ts-node src/scripts/dumpAiPrompt.ts"
   },
   "keywords": [],
   "author": "",

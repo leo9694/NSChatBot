@@ -25,7 +25,7 @@ import {
 } from "../repositories/conversations.repository";
 import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { listProductsForAgentDetailedContext } from "../repositories/products.repository";
-import { evaluateAiHumanTransferIntent, generateAiSalesReply } from "./openai.service";
+import { buildAiSalesPromptPayload, evaluateAiHumanTransferIntent, generateAiSalesReply } from "./openai.service";
 import { loadMediaBufferFromUrl } from "./media.service";
 import { sendWhatsAppMedia, sendWhatsAppText, setWhatsAppTypingPresence } from "./whatsapp.service";
 
@@ -3385,6 +3385,296 @@ function extractRequestedProductNames(input: {
   return rankedMatches
     .filter((entry) => Number((entry as any).score) === bestScore)
     .map((entry) => (entry as any).product);
+}
+
+export async function buildConversationAiPromptDebug(
+  conversationId: string,
+  options: { forceLatestCustomerMessage?: boolean } = {},
+): Promise<{
+  conversationId: string;
+  accountId: string | null;
+  model: string;
+  groundingNotes: string[];
+  messages: Array<{ role: "system" | "user"; content: string }>;
+}> {
+  const id = String(conversationId || "").trim();
+  if (!id) {
+    throw new Error("CONVERSATION_ID_REQUIRED");
+  }
+
+  const context = await getConversationAiContext(id);
+  if (!context) {
+    throw new Error("CONVERSATION_NOT_FOUND");
+  }
+
+  const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
+  const mood = getAgentMood(accountSettings?.mood);
+  const messages = await listConversationMessagesForAi(id, 80);
+  if (!messages.length) {
+    throw new Error("NO_MESSAGES");
+  }
+
+  const effectiveMessages = [...messages];
+  if (options.forceLatestCustomerMessage) {
+    while (
+      effectiveMessages.length > 0 &&
+      effectiveMessages[effectiveMessages.length - 1]?.from_me &&
+      effectiveMessages[effectiveMessages.length - 1]?.metadata?.ai_generated
+    ) {
+      effectiveMessages.pop();
+    }
+  }
+
+  if (!effectiveMessages.length) {
+    throw new Error("NO_CUSTOMER_MESSAGE_AFTER_QUEUE");
+  }
+
+  const account = context.account_id ? await getWhatsAppAccountById(String(context.account_id || "").trim(), null).catch(() => null) : null;
+  const catalog = await listProductsForAgentDetailedContext(account?.company_id || null);
+  const customerTurn = buildCustomerTurnContext(effectiveMessages);
+  const lastMessage = customerTurn.turnMessages[customerTurn.turnMessages.length - 1] || effectiveMessages[effectiveMessages.length - 1];
+  if (!lastMessage || lastMessage.from_me) {
+    throw new Error("LAST_MESSAGE_FROM_COMPANY");
+  }
+
+  const quotedBody = customerTurn.combinedQuotedBody || (typeof lastMessage.metadata?.quoted_body === "string" ? lastMessage.metadata.quoted_body : null);
+  const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
+  const previousCompanyMessage = findLastCompanyMessageBeforeTurn(effectiveMessages, customerTurn.turnMessages);
+  const previousCompanyBody = String(previousCompanyMessage?.body || "").trim() || null;
+  const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
+  const awaitingScheduleConfirmation = wasAwaitingScheduleConfirmation(effectiveMessages);
+  const customerRescheduleRequest = isScheduleRescheduleRequest(lastCustomerTurnBody, quotedBody);
+  const customerScheduleCancellationRequest = isScheduleCancellationRequest(lastCustomerTurnBody, quotedBody, previousCompanyBody);
+  const aiRescheduleActive = Boolean(context.reschedule_active);
+  const useRescheduleTargetConfirmedSchedule =
+    aiRescheduleActive &&
+    String(context.reschedule_target_schedule_id || "").trim() &&
+    String(context.confirmed_schedule_id || "").trim() === String(context.reschedule_target_schedule_id || "").trim();
+  const useConfirmedScheduleContext =
+    useRescheduleTargetConfirmedSchedule ||
+    (!context.open_schedule_id && customerRescheduleRequest);
+  const customerDirectConfirmation = hasDirectOrderConfirmation(
+    lastCustomerTurnBody,
+    quotedBody,
+    awaitingOrderConfirmation || awaitingScheduleConfirmation,
+  );
+  const customerDirectScheduleSelection = hasDirectScheduleSelection(lastCustomerTurnBody, quotedBody);
+  const customerGreetingOnly =
+    isPureGreetingMessage(lastCustomerTurnBody) &&
+    !customerDirectConfirmation &&
+    !customerDirectScheduleSelection;
+  const customerClosingMessage =
+    (isClosingMessage(lastCustomerTurnBody) ||
+      isShortAcknowledgeMessage(lastCustomerTurnBody) ||
+      isStandaloneAgentMention(lastCustomerTurnBody, context.agent_name || null)) &&
+    !customerDirectConfirmation;
+  const customerScheduleInquiry = isCustomerScheduleInquiry(lastCustomerTurnBody, quotedBody, previousCompanyBody);
+  const customerPlanInquiry = isPlanLikeInquiry(lastCustomerTurnBody, quotedBody, previousCompanyBody);
+
+  const activeSchedulesForConversation =
+    customerRescheduleRequest || aiRescheduleActive || customerScheduleInquiry || customerScheduleCancellationRequest
+      ? await listActiveAiSchedulesForConversation(id, {
+          limit: 6,
+          includePast: false,
+        }).catch(() => [])
+      : [];
+
+  const groundingNotes: string[] = [];
+  if (customerPlanInquiry && !catalogHasPlanLikeItems(catalog)) {
+    groundingNotes.push(`A empresa não tem planos ou pacotes cadastrados. Base de resposta: ${buildMissingPlanReply(mood)}`);
+  }
+  if (
+    customerGreetingOnly &&
+    !awaitingOrderConfirmation &&
+    !awaitingScheduleConfirmation &&
+    !customerRescheduleRequest &&
+    !aiRescheduleActive &&
+    !customerScheduleInquiry &&
+    !customerPlanInquiry
+  ) {
+    groundingNotes.push(`A mensagem atual do cliente é só uma saudação simples. Base de resposta: ${buildGreetingReply(mood, context.display_name || null, lastCustomerTurnBody)}`);
+  }
+  if (
+    customerClosingMessage &&
+    !awaitingOrderConfirmation &&
+    !awaitingScheduleConfirmation &&
+    !customerRescheduleRequest &&
+    !aiRescheduleActive &&
+    !customerDirectScheduleSelection
+  ) {
+    groundingNotes.push(`A mensagem atual do cliente indica encerramento ou agradecimento curto. Base de resposta: ${buildClosingReply(mood)}`);
+  }
+
+  if (customerRescheduleRequest && !aiRescheduleActive && !hasDirectScheduleSelection(lastCustomerTurnBody, quotedBody)) {
+    if (!activeSchedulesForConversation.length) {
+      groundingNotes.push("O cliente pediu remarcação, mas não há agendamento ativo em aberto para remarcar nesta conversa.");
+    } else {
+      const targetSchedule = findRescheduleTargetSchedule(
+        activeSchedulesForConversation.map((item) => ({
+          id: String(item.id || "").trim(),
+          service_name: item.service_name,
+          scheduled_date: String(item.scheduled_date || "").trim(),
+          scheduled_time: String(item.scheduled_time || "").trim(),
+          status: String(item.status || "").trim(),
+        })),
+        lastCustomerTurnBody,
+        quotedBody,
+        aiRescheduleActive ? context.reschedule_target_schedule_id : null,
+      );
+
+      if (!targetSchedule) {
+        groundingNotes.push(
+          `O cliente pediu remarcação, mas há mais de um atendimento possível. Base de resposta: ${buildScheduleDisambiguationReply({
+            schedules: activeSchedulesForConversation.map((item) => ({
+              service_name: item.service_name,
+              scheduled_date: String(item.scheduled_date || "").trim(),
+              scheduled_time: String(item.scheduled_time || "").trim(),
+              status: String(item.status || "").trim(),
+            })),
+          })}`,
+        );
+      } else {
+        const targetFullSchedule =
+          activeSchedulesForConversation.find((item) => String(item.id || "").trim() === targetSchedule.id) || null;
+        const rescheduleGuidance = await buildDeterministicCustomerRescheduleReply({
+          body: lastCustomerTurnBody,
+          quotedBody,
+          previousCompanyBody,
+          settings: accountSettings,
+          accountId: context.account_id || null,
+          targetSchedule: {
+            id: targetSchedule.id,
+            service_name: targetSchedule.service_name,
+            scheduled_date: targetSchedule.scheduled_date,
+            scheduled_time: targetSchedule.scheduled_time,
+            duration_minutes: targetFullSchedule?.duration_minutes ?? null,
+          },
+        });
+        groundingNotes.push(
+          `O cliente pediu remarcação. Atendimento-alvo identificado: ${String(targetSchedule.service_name || "Atendimento").trim()} em ${formatShortBrDate(targetSchedule.scheduled_date)} às ${String(targetSchedule.scheduled_time || "").trim()}. Base factual para responder: ${rescheduleGuidance}`,
+        );
+      }
+    }
+  }
+
+  if (customerScheduleInquiry && !aiRescheduleActive && !customerRescheduleRequest) {
+    const activeSchedules = activeSchedulesForConversation.length
+      ? activeSchedulesForConversation
+      : await listActiveAiSchedulesForConversation(id, { limit: 5, includePast: false }).catch(() => []);
+    const replyText = buildCustomerSchedulesReply({
+      mood,
+      body: lastCustomerTurnBody,
+      schedules: activeSchedules.map((item) => ({
+        service_name: item.service_name,
+        scheduled_date: String(item.scheduled_date || "").trim(),
+        scheduled_time: String(item.scheduled_time || "").trim(),
+        status: String(item.status || "").trim(),
+      })),
+    });
+    groundingNotes.push(`O cliente está perguntando sobre os próprios agendamentos. Base factual para responder: ${replyText}`);
+  }
+
+  if (customerScheduleCancellationRequest && !aiRescheduleActive && !customerRescheduleRequest) {
+    if (!activeSchedulesForConversation.length) {
+      groundingNotes.push("O cliente pediu para cancelar um agendamento, mas não há atendimento ativo em aberto nesta conversa para cancelar.");
+    } else {
+      const cancellationTarget = findRescheduleTargetSchedule(
+        activeSchedulesForConversation.map((item) => ({
+          id: String(item.id || "").trim(),
+          service_name: item.service_name,
+          scheduled_date: String(item.scheduled_date || "").trim(),
+          scheduled_time: String(item.scheduled_time || "").trim(),
+          status: String(item.status || "").trim(),
+        })),
+        lastCustomerTurnBody,
+        quotedBody,
+        null,
+      );
+
+      if (!cancellationTarget) {
+        groundingNotes.push(
+          `O cliente pediu para cancelar, mas há mais de um atendimento ativo possível. Base factual para responder: ${buildScheduleCancellationDisambiguationReply({
+            schedules: activeSchedulesForConversation.map((item) => ({
+              service_name: item.service_name,
+              scheduled_date: String(item.scheduled_date || "").trim(),
+              scheduled_time: String(item.scheduled_time || "").trim(),
+              status: String(item.status || "").trim(),
+            })),
+          })}`,
+        );
+      } else {
+        groundingNotes.push(
+          `O cliente quer cancelar este atendimento: ${String(cancellationTarget.service_name || "Atendimento").trim()} em ${formatShortBrDate(cancellationTarget.scheduled_date)} às ${String(cancellationTarget.scheduled_time || "").trim()}. Se a resposta final confirmar o cancelamento, marque schedule.should_cancel=true.`,
+        );
+      }
+    }
+  }
+
+  const deterministicScheduleAvailabilityReply = await buildDeterministicScheduleAvailabilityReply({
+    body: lastCustomerTurnBody,
+    quotedBody,
+    previousCompanyBody,
+    settings: accountSettings,
+    accountId: context.account_id || null,
+    catalog: catalog as Array<any>,
+    openScheduleServiceName: context.open_schedule_service_name || null,
+  });
+  if (deterministicScheduleAvailabilityReply) {
+    groundingNotes.push(`O cliente perguntou sobre disponibilidade de agenda. Base factual para responder: ${formatIsoDatesInText(deterministicScheduleAvailabilityReply)}`);
+  }
+
+  const payload = await buildAiSalesPromptPayload({
+    accountId: context.account_id || null,
+    companyName: null,
+    agentName: null,
+    conversationName: context.display_name || null,
+    customerPhone: context.phone || null,
+    memorySummary: context.memory_summary || null,
+    customerProfile: context.customer_profile || null,
+    lastOrderSummary: context.open_order_summary || null,
+    lastOrderStatus: context.open_order_status || null,
+    lastScheduleSummary:
+      !useRescheduleTargetConfirmedSchedule && context.open_schedule_id && context.open_schedule_service_name && context.open_schedule_date && context.open_schedule_time
+        ? buildScheduleSummary({
+            serviceName: String(context.open_schedule_service_name || ""),
+            scheduledDate: String(context.open_schedule_date || ""),
+            scheduledTime: String(context.open_schedule_time || ""),
+            durationMinutes: context.open_schedule_duration_minutes != null ? Number(context.open_schedule_duration_minutes) : null,
+          })
+        : useConfirmedScheduleContext && context.confirmed_schedule_service_name && context.confirmed_schedule_date && context.confirmed_schedule_time
+          ? buildScheduleSummary({
+              serviceName: String(context.confirmed_schedule_service_name || ""),
+              scheduledDate: String(context.confirmed_schedule_date || ""),
+              scheduledTime: String(context.confirmed_schedule_time || ""),
+              durationMinutes: context.confirmed_schedule_duration_minutes != null ? Number(context.confirmed_schedule_duration_minutes) : null,
+            })
+          : null,
+    lastScheduleStatus:
+      !useRescheduleTargetConfirmedSchedule && context.open_schedule_id
+        ? context.open_schedule_status || null
+        : useConfirmedScheduleContext
+          ? context.confirmed_schedule_status || null
+          : null,
+    groundingNotes,
+    messages: effectiveMessages.map((item) => ({
+      from_me: Boolean(item.from_me),
+      body: item === lastMessage ? buildAiTurnBody(lastCustomerTurnBody, quotedBody, previousCompanyBody) : String(item.body || ""),
+      sent_at: item.sent_at || item.created_at || null,
+      message_type: item.message_type || null,
+      quoted_body: typeof item.metadata?.quoted_body === "string" ? item.metadata.quoted_body : null,
+    })),
+  });
+
+  return {
+    conversationId: id,
+    accountId: context.account_id || null,
+    model: payload.model,
+    groundingNotes,
+    messages: payload.messages.map((item) => ({
+      role: item.role as "system" | "user",
+      content: typeof item.content === "string" ? item.content : String(item.content || ""),
+    })),
+  };
 }
 
 export async function handleInboundAiAutomation(

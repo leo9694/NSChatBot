@@ -38,5 +38,5 @@ export const env = {
   whatsappSessionPath: optional("WHATSAPP_SESSION_PATH", "./.baileys_auth"),
   mediaFallbackBaseUrl: optional("MEDIA_FALLBACK_BASE_URL", "").replace(/\/+$/, ""),
   openaiApiKey: optional("OPENAI_API_KEY", "").trim(),
-  openaiModel: optional("OPENAI_MODEL", "gpt-5-mini").trim(),
+  openaiModel: optional("OPENAI_MODEL", "gpt-4o-mini").trim(),
 };
