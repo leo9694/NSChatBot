@@ -180,6 +180,39 @@ function getNormalizedAgentGuidelines(guidelines?: Array<string> | null): string
     : [];
 }
 
+function shouldOmitProductNamesInImageNotice(agentGuidelines?: Array<string> | null): boolean {
+  const guidelines = getNormalizedAgentGuidelines(agentGuidelines);
+  return guidelines.some((item) => {
+    const mentionsNotice = /\b(mensagem|aviso)\b/.test(item) && /\b(envio|enviar)\b/.test(item) && /\b(foto|fotos|imagem|imagens)\b/.test(item);
+    const forbidsListing = /\b(nao listar|não listar|sem listar|nao listar os produtos|não listar os produtos)\b/.test(item);
+    return mentionsNotice && forbidsListing;
+  });
+}
+
+function buildImageNoticeReply(
+  mood: "amigavel" | "informal" | "formal",
+  sendMultipleImages: boolean,
+): string {
+  if (mood === "formal") {
+    return sendMultipleImages ? "Estou enviando as imagens agora." : "Estou enviando a imagem agora.";
+  }
+  if (mood === "amigavel") {
+    return sendMultipleImages ? "Vou te mandar as fotos agora." : "Vou te mandar a foto agora.";
+  }
+  return sendMultipleImages ? "Estou enviando as fotos agora." : "Estou enviando a foto agora.";
+}
+
+export function __shouldOmitProductNamesInImageNoticeForTests(agentGuidelines?: Array<string> | null): boolean {
+  return shouldOmitProductNamesInImageNotice(agentGuidelines);
+}
+
+export function __buildImageNoticeReplyForTests(
+  mood: "amigavel" | "informal" | "formal",
+  sendMultipleImages: boolean,
+): string {
+  return buildImageNoticeReply(mood, sendMultipleImages);
+}
+
 function buildProductImageCaption(
   product: {
     name: string;
@@ -1746,6 +1779,15 @@ function isExplicitHumanTransferRequest(body: string, quotedBody?: string | null
   return /\b(gostaria de falar com outro atendente|quero falar com outro atendente|falar com outro atendente|outro atendente|gostaria de falar com outra pessoa|falar com outra pessoa|quero falar com outra pessoa|quero falar com alguem|quero falar com algu?m|quero falar com humano|falar com humano|atendente humano|agente humano|suporte humano|falar com atendente|falar com vendedor|falar com gerente|falar com financeiro|passa para o financeiro|me transfere|pode me transferir|pode me transferir pra outro atendente|pode me transferir para outro atendente|transfere meu atendimento)\b/.test(text);
 }
 
+function hasHumanTransferHint(body: string, quotedBody?: string | null, previousCompanyBody?: string | null): boolean {
+  const text = normalizeText([body, quotedBody || "", previousCompanyBody || ""].filter(Boolean).join(" "));
+  if (!text) return false;
+  if (isExplicitHumanTransferRequest(body, quotedBody)) return true;
+  return /\b(alguem da equipe|alguem ai|alguem aí|alguem pode ver|alguem consegue ver|preciso que alguem veja|preciso que alguem analise|quem da equipe pode ver|quem da equipe pode me ajudar|encaminha pra equipe|encaminha para equipe|passa pra equipe|passa para equipe|um responsavel pode ver|um responsavel consegue ver|quero que alguem veja isso comigo)\b/.test(
+    text,
+  );
+}
+
 function isBusinessRelevantTransferTopic(input: {
   body: string;
   quotedBody?: string | null;
@@ -1787,6 +1829,7 @@ function shouldTriggerHumanTransfer(input: {
   awaitingScheduleConfirmation?: boolean;
 }): boolean {
   const explicitHumanRequest = isExplicitHumanTransferRequest(input.body, input.quotedBody);
+  const humanTransferHint = hasHumanTransferHint(input.body, input.quotedBody, input.previousCompanyBody);
   const scheduleFlowContext =
     Boolean(input.scheduleFlowRequested) ||
     Boolean(input.customerScheduleInquiry) ||
@@ -1796,7 +1839,7 @@ function shouldTriggerHumanTransfer(input: {
     Boolean(input.customerDirectScheduleSelection) ||
     Boolean(input.awaitingScheduleConfirmation);
 
-  if (explicitHumanRequest) {
+  if (explicitHumanRequest || humanTransferHint) {
     return true;
   }
 
@@ -1804,20 +1847,11 @@ function shouldTriggerHumanTransfer(input: {
     return false;
   }
 
-  if (input.evaluatedTransfer) {
-    return true;
-  }
-
-  if (!input.aiRequestedTransfer) {
+  if (!input.evaluatedTransfer && !input.aiRequestedTransfer) {
     return false;
   }
 
-  return isBusinessRelevantTransferTopic({
-    body: input.body,
-    quotedBody: input.quotedBody,
-    previousCompanyBody: input.previousCompanyBody,
-    catalog: input.catalog,
-  });
+  return false;
 }
 
 export function __shouldTriggerHumanTransferForTests(input: {
@@ -4863,6 +4897,7 @@ export async function handleInboundAiAutomation(
     }
 
     const shouldAttemptImage = aiResult.media.shouldSendImages;
+    let sendMultipleImages = false;
     let matchedProducts: Array<{
       id: string;
       name: string;
@@ -4874,7 +4909,7 @@ export async function handleInboundAiAutomation(
     }> = [];
 
     if (shouldAttemptImage) {
-      const sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), aiResult.media.productNames);
+      sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), aiResult.media.productNames);
       matchedProducts = extractRequestedProductNames({
         catalog,
         productNames: aiResult.media.productNames,
@@ -4905,6 +4940,14 @@ export async function handleInboundAiAutomation(
           requestedName,
         });
       }
+    }
+
+    if (
+      shouldAttemptImage &&
+      matchedProducts.length > 0 &&
+      shouldOmitProductNamesInImageNotice(accountSettings?.agent_guidelines)
+    ) {
+      replyText = buildImageNoticeReply(mood, sendMultipleImages);
     }
 
     if (!aiResult.shouldReply || !replyText) {

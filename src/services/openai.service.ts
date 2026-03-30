@@ -454,6 +454,8 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
     "",
     "DIRETRIZES DA EMPRESA",
     "- Se houver diretrizes da empresa no contexto, siga essas diretrizes como regras ativas desta loja, desde que n?o entrem em conflito com fatos do sistema ou seguran?a operacional.",
+    "- Quando uma diretriz da empresa entrar em conflito com seu estilo padr?o de escrita, a diretriz da empresa tem prioridade.",
+    "- Se houver diretriz operacional espec?fica para foto, legenda, sauda??o, pedido, observa??o, endere?o ou forma de responder, cumpra essa diretriz literalmente sempre que ela se aplicar.",
     "",
     "RETORNO",
     '- Retorne APENAS JSON neste formato: {"should_reply":true,"reply":"texto","memory_summary":"resumo curto","customer_profile":"perfil curto","order":{"should_create":false,"summary":"","items":[],"total_estimate":null,"responsible_name":"","fulfillment_type":"","delivery_address":"","payment_method":"","notes":"","customer_confirmed_details":false},"schedule":{"should_create":false,"should_cancel":false,"service_name":"","scheduled_date":"","scheduled_time":"","customer_name":"","notes":"","cancel_reason":"","duration_minutes":null,"customer_confirmed_details":false},"media":{"should_send_images":false,"product_names":[]},"handoff":{"should_transfer":false,"reason":""}}',
@@ -651,8 +653,10 @@ export async function evaluateAiHumanTransferIntent(input: {
           "Você é um classificador de transferência de atendimento no WhatsApp. " +
           `${moodInstruction} ` +
           "Seu trabalho é decidir se a mensagem do cliente deve ser encaminhada para um atendente humano. " +
-          "Considere transferência quando o cliente pedir para falar com outra pessoa, com um atendente, humano, gerente, financeiro ou equipe, mesmo que diga isso de forma simples e educada. " +
-          "Também considere transferência quando a dúvida for importante e ligada à empresa, produto, serviço, pedido, agendamento, exceção comercial, aprovação, negociação, suporte sensível ou análise humana. " +
+          "Considere transferência principalmente quando o cliente pedir de forma explícita ou claramente implícita para falar com outra pessoa, com um atendente, humano, gerente, financeiro ou equipe. " +
+          "Considere transferência implícita apenas quando o cliente realmente pedir revisão humana, como 'preciso que alguém da equipe veja isso comigo'. " +
+          "Não considere transferência só porque a dúvida é importante, comercial, sensível, tem mais de um item, tem mais de um endereço, envolve pagamento, entrega, agendamento, exceção comercial ou exige montar um pedido mais detalhado. " +
+          "Pedidos com múltiplas entregas, mais de um destinatário, dúvidas de produto, venda, preço, estoque, pagamento, retirada, entrega, desconto, catálogo, criação de pedido e agendamento continuam sendo responsabilidade normal da IA. " +
           "Não considere transferência quando o cliente estiver apenas perguntando horários, tentando agendar, confirmando disponibilidade, escolhendo data, escolhendo horário, reagendando normalmente ou seguindo um fluxo comum de agendamento que a IA consegue conduzir sozinha. " +
           "Não marque transferência para curiosidades aleatórias, assuntos fora da empresa ou perguntas sem relação prática com o atendimento. " +
           "Se for transferência, escreva uma resposta curta, natural e direta confirmando o encaminhamento. " +
@@ -661,6 +665,8 @@ export async function evaluateAiHumanTransferIntent(input: {
           "Exemplo positivo: 'Gostaria de falar com um atendente' => should_transfer=true. " +
           "Exemplo positivo: 'Pode me transferir para o financeiro?' => should_transfer=true. " +
           "Exemplo positivo: 'Preciso que alguém da equipe veja isso comigo' => should_transfer=true. " +
+          "Exemplo negativo: 'Quero uma cesta de chocolate e café da manhã para duas pessoas em endereços diferentes' => should_transfer=false. " +
+          "Exemplo negativo: 'Quero fechar um pedido com duas entregas' => should_transfer=false. " +
           "Exemplo negativo: 'Quero marcar para amanhã às 14h' => should_transfer=false. " +
           "Exemplo negativo: 'Quais horários disponíveis para a avaliação?' => should_transfer=false. " +
           "Exemplo negativo: 'Pode confirmar a disponibilidade amanhã às 14h?' => should_transfer=false. " +
