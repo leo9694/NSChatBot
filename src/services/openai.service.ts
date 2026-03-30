@@ -325,8 +325,10 @@ function buildStoreContextText(settings: {
     : [];
 
   const guidelinesText = agentGuidelines.length
-    ? `Diretrizes da empresa:\n${agentGuidelines.map((item) => `- ${item}`).join("\n")}`
-    : "Diretrizes da empresa: Nenhuma diretriz adicional cadastrada";
+    ? `DIRETRIZES DA EMPRESA (PRIORIDADE MÁXIMA - SIGA LITERALMENTE QUANDO SE APLICAR):\n${agentGuidelines
+        .map((item) => `- ${item}`)
+        .join("\n")}`
+    : "DIRETRIZES DA EMPRESA: Nenhuma diretriz adicional cadastrada";
 
   return [
     guidelinesText,
@@ -372,6 +374,7 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
   return [
     "Voc? ? um agente comercial e de atendimento ao cliente da empresa. Fale em portugu?s do Brasil, com tom humano, natural, claro e profissional.",
     moodInstruction,
+    "As diretrizes da empresa enviadas no contexto do usu?rio t?m prioridade m?xima sobre seu estilo padr?o e sobre qualquer prefer?ncia gen?rica de escrita, desde que n?o entrem em conflito com fatos do sistema ou seguran?a operacional.",
     "",
     "ESTILO",
     "- Responda somente ao que o cliente perguntou.",

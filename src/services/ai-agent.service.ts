@@ -3384,8 +3384,50 @@ function shouldSendMultipleImages(lastCustomerMessage: string, productNames: str
   );
 }
 
+function isExplicitImageRequest(lastCustomerMessage: string): boolean {
+  const text = normalizeText(lastCustomerMessage);
+  if (!text) return false;
+
+  return (
+    /\b(foto|fotos|imagem|imagens)\b/.test(text) ||
+    /\b(me manda|manda|envia|me envia|mostrar|mostra|ver)\b.*\b(foto|fotos|imagem|imagens)\b/.test(text) ||
+    /\bquero ver\b/.test(text)
+  );
+}
+
+function shouldAskGroupBeforeSendingAllProductPhotos(agentGuidelines?: Array<string> | null): boolean {
+  const guidelines = getNormalizedAgentGuidelines(agentGuidelines);
+  return guidelines.some((item) => {
+    const asksBeforeAllPhotos =
+      /\b(perguntar|pergunte)\b/.test(item) &&
+      /\b(grupo|grupos)\b/.test(item) &&
+      /\b(foto|fotos|imagem|imagens)\b/.test(item) &&
+      (/\b(todos os produtos|todos|todas)\b/.test(item) || /\bcliente pedir fotos de todos os produtos\b/.test(item));
+    return asksBeforeAllPhotos;
+  });
+}
+
+function buildAskPhotoGroupReply(mood: "amigavel" | "informal" | "formal"): string {
+  if (mood === "formal") {
+    return "Claro. Qual grupo de produtos você gostaria de ver nas fotos?";
+  }
+  if (mood === "amigavel") {
+    return "Claro. Me diz qual grupo de produtos você quer ver nas fotos primeiro?";
+  }
+  return "Claro. Qual grupo de produtos você quer ver nas fotos primeiro?";
+}
+
 function extractRequestedProductNames(input: {
-  catalog: Array<{ name: string; image_url: string | null; price: string; type: string; description: string | null; id: string; stock: number }>;
+  catalog: Array<{
+    name: string;
+    group_name?: string | null;
+    image_url: string | null;
+    price: string;
+    type: string;
+    description: string | null;
+    id: string;
+    stock: number;
+  }>;
   productNames: string[];
   lastCustomerMessage: string;
 }) {
@@ -3396,17 +3438,31 @@ function extractRequestedProductNames(input: {
     if (!String(product.image_url || "").trim()) return false;
 
     const productName = normalizeName(product.name);
+    const groupName = normalizeName(String(product.group_name || ""));
     const nameParts = getSignificantNameParts(product.name);
+    const groupParts = groupName ? getSignificantNameParts(groupName) : [];
       let score = 0;
 
     const matchesExplicitName = requestedNames.some((requested) => productName.includes(requested) || requested.includes(productName));
       if (matchesExplicitName) score += 100;
 
+      const matchesExplicitGroup = groupName
+        ? requestedNames.some((requested) => groupName.includes(requested) || requested.includes(groupName))
+        : false;
+      if (matchesExplicitGroup) score += 90;
+
       if (customerText.includes(productName)) score += 80;
+      if (groupName && customerText.includes(groupName)) score += 70;
 
       for (const part of nameParts) {
         if (customerText.includes(part)) {
           score += 20;
+        }
+      }
+
+      for (const part of groupParts) {
+        if (customerText.includes(part)) {
+          score += 15;
         }
       }
 
@@ -3419,6 +3475,23 @@ function extractRequestedProductNames(input: {
   return rankedMatches
     .filter((entry) => Number((entry as any).score) === bestScore)
     .map((entry) => (entry as any).product);
+}
+
+export function __extractRequestedProductNamesForTests(input: {
+  catalog: Array<{
+    name: string;
+    group_name?: string | null;
+    image_url: string | null;
+    price: string;
+    type: string;
+    description: string | null;
+    id: string;
+    stock: number;
+  }>;
+  productNames: string[];
+  lastCustomerMessage: string;
+}) {
+  return extractRequestedProductNames(input);
 }
 
 export async function buildConversationAiPromptDebug(
@@ -4896,11 +4969,12 @@ export async function handleInboundAiAutomation(
       );
     }
 
-    const shouldAttemptImage = aiResult.media.shouldSendImages;
+    let shouldAttemptImage = aiResult.media.shouldSendImages;
     let sendMultipleImages = false;
     let matchedProducts: Array<{
       id: string;
       name: string;
+      group_name?: string | null;
       type: string;
       description: string | null;
       price: string;
@@ -4908,7 +4982,30 @@ export async function handleInboundAiAutomation(
       image_url: string | null;
     }> = [];
 
-    if (shouldAttemptImage) {
+    if (!shouldAttemptImage && isExplicitImageRequest(String(lastMessage.body || ""))) {
+      const askGroupFirst =
+        shouldSendMultipleImages(String(lastMessage.body || ""), []) &&
+        shouldAskGroupBeforeSendingAllProductPhotos(accountSettings?.agent_guidelines);
+
+      if (askGroupFirst) {
+        replyText = buildAskPhotoGroupReply(mood);
+      } else {
+        sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), []);
+        const fallbackMatches = extractRequestedProductNames({
+          catalog,
+          productNames: aiResult.media.productNames,
+          lastCustomerMessage: String(lastMessage.body || ""),
+        });
+
+        if (fallbackMatches.length > 0) {
+          shouldAttemptImage = true;
+          matchedProducts = sendMultipleImages ? fallbackMatches.slice(0, 10) : fallbackMatches.slice(0, 1);
+          replyText = buildImageNoticeReply(mood, sendMultipleImages);
+        }
+      }
+    }
+
+    if (shouldAttemptImage && matchedProducts.length === 0) {
       sendMultipleImages = shouldSendMultipleImages(String(lastMessage.body || ""), aiResult.media.productNames);
       matchedProducts = extractRequestedProductNames({
         catalog,
