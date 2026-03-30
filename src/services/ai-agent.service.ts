@@ -3381,7 +3381,11 @@ function shouldSendMultipleImages(lastCustomerMessage: string, productNames: str
     /\bfotos? dos produtos\b/.test(text) ||
     /\bimagens? dos produtos\b/.test(text) ||
     /\bfotos? dos\b/.test(text) ||
+    /\bfotos? das\b/.test(text) ||
+    /\bfotos? de\b/.test(text) ||
     /\bimagens? dos\b/.test(text) ||
+    /\bimagens? das\b/.test(text) ||
+    /\bimagens? de\b/.test(text) ||
     /\bcatalogo\b/.test(text) ||
     /\bmostra (todos|todas)\b/.test(text) ||
     /\bme envie (todos|todas)\b/.test(text)
@@ -4885,7 +4889,6 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("atendimento cancelado");
     const orderClaimedAsCreated =
       normalizedReplyText.includes("pedido ficou pendente de confirmacao interna") ||
-      normalizedReplyText.includes("pendente de confirmacao interna") ||
       normalizedReplyText.includes("pedido ficou pendente de confirma") ||
       normalizedReplyText.includes("pedido pendente") ||
       normalizedReplyText.includes("pedido registrado") ||
