@@ -281,6 +281,102 @@ function extractOrderDeliveryAddressLines(order: Awaited<ReturnType<typeof getAi
   return fallbackLines.length > 1 ? fallbackLines : [fallback];
 }
 
+function normalizePdfSourceText(value?: string | null): string {
+  return String(value || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+function pickFirstOrderTextMatch(
+  sources: string[],
+  patterns: RegExp[],
+): string {
+  for (const source of sources) {
+    if (!source) continue;
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      const value = String(match?.[1] || "").trim().replace(/[.;,\s]+$/g, "");
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function pickFirstOrderTextMatchFromNormalizedSources(
+  sources: string[],
+  patterns: RegExp[],
+): string {
+  const normalizedSources = sources.map((source) =>
+    String(source || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/Ã¡|Ã£|Ã¢/gi, "a")
+      .replace(/Ã©|Ãª/gi, "e")
+      .replace(/Ã­/gi, "i")
+      .replace(/Ã³|Ã´|Ãµ/gi, "o")
+      .replace(/Ãº/gi, "u")
+      .replace(/Ã§/gi, "c"),
+  );
+
+  for (const source of normalizedSources) {
+    if (!source) continue;
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      const value = String(match?.[1] || "").trim().replace(/[.;,\s]+$/g, "");
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function extractOrderPdfDetails(order: Awaited<ReturnType<typeof getAiOrderById>>) {
+  const sources = [
+    normalizePdfSourceText(order?.notes),
+    normalizePdfSourceText(order?.confirmation_note),
+    normalizePdfSourceText(order?.delivery_address),
+    normalizePdfSourceText(order?.summary),
+  ].filter(Boolean);
+
+  const deliveryDate =
+    pickFirstOrderTextMatch(sources, [
+      /(?:^|\n|[-*]\s*)data da entrega:\s*([^\n]+)/i,
+      /(?:^|\n|[-*]\s*)data:\s*([^\n]+)/i,
+    ]) ||
+    pickFirstOrderTextMatchFromNormalizedSources(sources, [/\b(\d{2}\/\d{2}\/\d{2,4})\b/]);
+
+  const deliveryTime =
+    pickFirstOrderTextMatchFromNormalizedSources(sources, [
+      /(?:^|\n|[-*]\s*)hor.{0,3}rio(?: de entrega)?:\s*([^\n]+)/i,
+      /(?:^|\n|[-*]\s*)per.{0,3}odo:\s*([^\n]+)/i,
+      /(?:^|\n|[-*]\s*)turno:\s*([^\n]+)/i,
+    ]) ||
+    pickFirstOrderTextMatchFromNormalizedSources(sources, [/\b(?:as)\s+([0-2]?\d(?::[0-5]\d)?h?)\b/i]);
+
+  const contactPhone =
+    pickFirstOrderTextMatch(sources, [
+      /(?:^|\n|[-*]\s*)telefone(?: de contato)?(?: de quem ir[áa] receber)?\s*:\s*([^\n]+)/i,
+      /(?:^|\n|[-*]\s*)contato:\s*([^\n]+)/i,
+    ]) || String(order?.customer_phone || "").trim();
+
+  const recipientName = pickFirstOrderTextMatch(sources, [
+    /(?:^|\n|[-*]\s*)nome completo de quem vai receber:\s*([^\n]+)/i,
+    /(?:^|\n|[-*]\s*)nome(?: de quem vai receber)?\s*:\s*([^\n]+)/i,
+  ]);
+
+  return {
+    deliveryDate,
+    deliveryTime,
+    contactPhone,
+    recipientName,
+  };
+}
+
+export function __extractOrderPdfDetailsForTests(order: Partial<Awaited<ReturnType<typeof getAiOrderById>>>) {
+  return extractOrderPdfDetails(order as Awaited<ReturnType<typeof getAiOrderById>>);
+}
+
 function streamOrderPdf(
   res: Response,
   input: {
@@ -333,6 +429,7 @@ function streamOrderPdf(
 
   const orderStatus = String(order?.status || "").trim();
   const statusLabel = orderStatus === "confirmed" ? "Confirmado" : orderStatus === "cancelled" ? "Cancelado" : "Pendente";
+  const derivedOrderDetails = extractOrderPdfDetails(order);
 
   const writeReceiptField = (label: string, value: string) => {
     if (!value || value === "-") return;
@@ -350,9 +447,13 @@ function streamOrderPdf(
   writeReceiptField("Status", statusLabel);
   writeReceiptField("Total estimado", formatCurrencyBr(order?.total_estimate));
   writeReceiptField("Responsável", String(order?.responsible_name || "-"));
+  writeReceiptField("Recebedor", String(derivedOrderDetails.recipientName || "-"));
   writeReceiptField("Entrega/retirada", String(order?.fulfillment_type || "-"));
   const deliveryAddressLines = extractOrderDeliveryAddressLines(order);
   writeReceiptField(deliveryAddressLines.length > 1 ? "Endereços/retirada" : "Endereço/retirada", deliveryAddressLines.join("\n") || "-");
+  writeReceiptField("Telefone de contato", String(derivedOrderDetails.contactPhone || "-"));
+  writeReceiptField("Data da entrega", String(derivedOrderDetails.deliveryDate || "-"));
+  writeReceiptField("Horário/período", String(derivedOrderDetails.deliveryTime || "-"));
   writeReceiptField("Pagamento", String(order?.payment_method || "-"));
   writeReceiptField("Observação", String(order?.notes || "-"));
   writeReceiptField("Tempo mínimo", order?.ready_time_minutes ? `${order.ready_time_minutes} minuto(s)` : "-");
