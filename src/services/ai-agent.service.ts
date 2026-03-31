@@ -5,6 +5,7 @@ import {
   createAiSchedule,
   findAiScheduleConflict,
   getAiAccountSettings,
+  getAiOrderById,
   getConversationAiContext,
   listActiveAiSchedulesForConversation,
   listAiSchedulesForDate,
@@ -1365,6 +1366,28 @@ function buildOrderFallbackReply(input: {
     return "Perfeito. Seu pedido foi registrado e ficou pendente de confirmação interna. Assim que houver a confirmação, informarei por aqui.";
   }
   return "Perfeito. Registrei seu pedido e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
+}
+
+function buildOrderPersistenceFailureReply(mood: "amigavel" | "informal" | "formal") {
+  if (mood === "amigavel") {
+    return "Recebi sua confirmação, mas tive um problema para registrar o pedido internamente agora. Vou revisar isso e te atualizar por aqui.";
+  }
+  if (mood === "formal") {
+    return "Recebi sua confirmação, porém ocorreu uma falha ao registrar o pedido internamente neste momento. Vou verificar e retornar por aqui.";
+  }
+  return "Recebi sua confirmação, mas tive um problema para registrar o pedido internamente agora. Vou revisar isso e te atualizar por aqui.";
+}
+
+async function verifyPersistedOrderId(orderId: string | null | undefined): Promise<string | null> {
+  const normalizedId = String(orderId || "").trim();
+  if (!normalizedId) return null;
+  try {
+    const persisted = await getAiOrderById(normalizedId);
+    return persisted?.id ? String(persisted.id || "").trim() || null : null;
+  } catch (error) {
+    console.error("Falha ao verificar pedido persistido no banco:", error);
+    return null;
+  }
 }
 
 function buildScheduleFallbackReply(input: {
@@ -4361,11 +4384,11 @@ export async function handleInboundAiAutomation(
       Boolean(String(context.order_draft_delivery_address || "").trim()) ||
       Boolean(String(context.order_draft_payment_method || "").trim()) ||
       Boolean(String(context.order_draft_notes || "").trim());
+    const aiConfirmedOrderDetails = Boolean(aiResult.order.customerConfirmedDetails);
+    const orderCreationAuthorizedByAi = aiConfirmedOrderDetails;
     const shouldReuseOpenPendingOrder =
       Boolean(String(context.open_order_id || "").trim()) &&
-      !aiResult.order.shouldCreate &&
-      awaitingOrderConfirmation &&
-      customerDirectConfirmation &&
+      orderCreationAuthorizedByAi &&
       !hasOrderDraftContext;
     const orderBase = shouldReuseOpenPendingOrder
       ? {
@@ -4440,9 +4463,7 @@ export async function handleInboundAiAutomation(
       Boolean(mergedOrder.paymentMethod) &&
       Boolean(mergedOrder.fulfillmentType) &&
       hasUsableDeliveryAddress;
-    const aiConfirmedOrderDetails = Boolean(aiResult.order.customerConfirmedDetails);
-    const orderCustomerAcceptedProposal = aiConfirmedOrderDetails;
-    const hasRequiredOrderData = hasOrderDataReadyForConfirmation && orderCustomerAcceptedProposal;
+    const hasRequiredOrderData = hasOrderDataReadyForConfirmation && orderCreationAuthorizedByAi;
     const hasOrderDraftCandidate =
       Boolean(aiResult.order.summary) ||
       (Array.isArray(aiResult.order.items) && aiResult.order.items.length > 0) ||
@@ -4639,8 +4660,7 @@ export async function handleInboundAiAutomation(
 
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
-    const shouldPersistOrder =
-      (aiResult.order.shouldCreate || orderCustomerAcceptedProposal) && hasRequiredOrderData;
+    const shouldPersistOrder = orderCreationAuthorizedByAi && hasRequiredOrderData;
     if (shouldPersistOrder) {
       if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
         const updatedOrder = await updatePendingAiOrder({
@@ -4677,6 +4697,8 @@ export async function handleInboundAiAutomation(
         });
         createdOrderId = String(createdOrder.id || "").trim() || null;
       }
+
+      createdOrderId = await verifyPersistedOrderId(createdOrderId);
     }
 
     let createdScheduleId: string | null = null;
@@ -4857,11 +4879,13 @@ export async function handleInboundAiAutomation(
             scheduledTime: mergedSchedule.scheduledTime,
             durationMinutes: mergedSchedule.durationMinutes,
           })
-        : shouldPersistOrder
+        : createdOrderId
         ? buildOrderFallbackReply({
             mood,
             updatedPendingOrder,
           })
+        : shouldPersistOrder
+        ? buildOrderPersistenceFailureReply(mood)
         : "";
     let replyText =
       String(aiResult.reply || "").trim() ||
@@ -4930,61 +4954,6 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("gerei o pedido") ||
       normalizedReplyText.includes("pedido foi confirmado") ||
       normalizedReplyText.includes("pedido confirmado");
-    const canBackfillClaimedOrder =
-      !createdOrderId &&
-      orderClaimedAsCreated &&
-      orderCustomerAcceptedProposal &&
-      Boolean(mergedOrder.summary) &&
-      Array.isArray(mergedOrder.items) &&
-      mergedOrder.items.length > 0 &&
-      Boolean(mergedOrder.paymentMethod) &&
-      Boolean(mergedOrder.fulfillmentType) &&
-      hasUsableDeliveryAddress;
-    if (canBackfillClaimedOrder) {
-      try {
-        if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
-          const updatedOrder = await updatePendingAiOrder({
-            orderId: String(context.open_order_id || "").trim(),
-            summary: String(mergedOrder.summary || "").trim(),
-            items: mergedOrder.items,
-            totalEstimate: mergedOrder.totalEstimate,
-            responsibleName: mergedOrder.responsibleName,
-            fulfillmentType: mergedOrder.fulfillmentType,
-            deliveryAddress: mergedOrder.deliveryAddress,
-            paymentMethod: mergedOrder.paymentMethod,
-            notes: mergedOrder.notes,
-          });
-
-          if (updatedOrder?.id) {
-            createdOrderId = String(updatedOrder.id || "").trim() || null;
-            updatedPendingOrder = true;
-          }
-        }
-
-        if (!createdOrderId) {
-          const createdOrder = await createAiOrder({
-            accountId: context.account_id || null,
-            conversationId: id,
-            customerPhone: context.phone || null,
-            summary: String(mergedOrder.summary || "").trim(),
-            items: mergedOrder.items,
-            totalEstimate: mergedOrder.totalEstimate,
-            responsibleName: mergedOrder.responsibleName,
-            fulfillmentType: mergedOrder.fulfillmentType,
-            deliveryAddress: mergedOrder.deliveryAddress,
-            paymentMethod: mergedOrder.paymentMethod,
-            notes: mergedOrder.notes,
-          });
-          createdOrderId = String(createdOrder.id || "").trim() || null;
-        }
-
-        if (createdOrderId) {
-          await clearConversationAiOrderDraft(id).catch(() => undefined);
-        }
-      } catch (error) {
-        console.error("Falha ao persistir pedido a partir de resposta confirmada da IA:", error);
-      }
-    }
     if (hasCompleteScheduleProposal && !createdScheduleId && !scheduleConflict && scheduleWindowValidation.ok && scheduleClaimedAsCreated) {
       replyText =
         fallbackReply ||
@@ -5007,7 +4976,15 @@ export async function handleInboundAiAutomation(
           scheduledTime: scheduleCancellationTarget?.scheduled_time || aiResult.schedule.scheduledTime,
         }) || replyText;
     }
-    if (!createdOrderId && orderClaimedAsCreated) {
+    if (createdOrderId) {
+      replyText =
+        buildOrderFallbackReply({
+          mood,
+          updatedPendingOrder,
+        }) || replyText;
+    } else if (shouldPersistOrder) {
+      replyText = buildOrderPersistenceFailureReply(mood);
+    } else if (orderClaimedAsCreated) {
       replyText =
         buildOrderConfirmationPrompt({
           items: Array.isArray(mergedOrder.items) ? mergedOrder.items : [],
@@ -5016,13 +4993,6 @@ export async function handleInboundAiAutomation(
           fulfillmentType: mergedOrder.fulfillmentType,
           paymentMethod: mergedOrder.paymentMethod,
         }) || buildUnknownSalesReply(mood);
-    }
-    if (createdOrderId && !orderClaimedAsCreated) {
-      replyText =
-        buildOrderFallbackReply({
-          mood,
-          updatedPendingOrder,
-        }) || replyText;
     }
     if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);

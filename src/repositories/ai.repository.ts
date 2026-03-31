@@ -825,6 +825,7 @@ export async function updatePendingAiOrder(input: {
     `
     UPDATE ai_orders
     SET
+      account_id = COALESCE(ai_orders.account_id, c.account_id),
       summary = $2,
       items = $3::jsonb,
       total_estimate = $4,
@@ -835,32 +836,34 @@ export async function updatePendingAiOrder(input: {
       notes = $9,
       customer_confirmed_at = NOW(),
       updated_at = NOW()
-    WHERE id = $1
-      AND status = 'pending_confirmation'
+    FROM conversations c
+    WHERE ai_orders.id = $1
+      AND c.id = ai_orders.conversation_id
+      AND ai_orders.status = 'pending_confirmation'
     RETURNING
-      id,
-      account_id,
-      conversation_id,
-      customer_phone,
-      summary,
-      items,
-      total_estimate::text,
-      responsible_name,
-      fulfillment_type,
-      delivery_address,
-      payment_method,
-      notes,
-      status,
-      customer_confirmed_at::text,
-      confirmed_at::text,
-      confirmed_by_user_id,
-      ready_time_minutes,
-      confirmation_note,
-      cancelled_at::text,
-      cancelled_by_user_id,
-      cancel_reason,
-      created_at::text,
-      updated_at::text
+      ai_orders.id,
+      ai_orders.account_id,
+      ai_orders.conversation_id,
+      ai_orders.customer_phone,
+      ai_orders.summary,
+      ai_orders.items,
+      ai_orders.total_estimate::text,
+      ai_orders.responsible_name,
+      ai_orders.fulfillment_type,
+      ai_orders.delivery_address,
+      ai_orders.payment_method,
+      ai_orders.notes,
+      ai_orders.status,
+      ai_orders.customer_confirmed_at::text,
+      ai_orders.confirmed_at::text,
+      ai_orders.confirmed_by_user_id,
+      ai_orders.ready_time_minutes,
+      ai_orders.confirmation_note,
+      ai_orders.cancelled_at::text,
+      ai_orders.cancelled_by_user_id,
+      ai_orders.cancel_reason,
+      ai_orders.created_at::text,
+      ai_orders.updated_at::text
     `,
     [
       input.orderId,
@@ -1778,6 +1781,22 @@ export async function createAiOrder(input: {
   notes?: string | null;
 }): Promise<AiOrderRow> {
   await ensureAiSchema();
+  const resolvedAccountId =
+    String(input.accountId || "").trim() ||
+    String(
+      (
+        await pool.query<{ account_id: string | null }>(
+          `
+          SELECT account_id
+          FROM conversations
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [input.conversationId],
+        )
+      ).rows[0]?.account_id || "",
+    ).trim() ||
+    null;
   const existing = await pool.query<AiOrderRow>(
     `
     SELECT
@@ -1858,7 +1877,7 @@ export async function createAiOrder(input: {
       `,
       [
         existing.rows[0].id,
-        input.accountId,
+        resolvedAccountId,
         input.customerPhone || null,
         input.summary,
         JSON.stringify(input.items || []),
@@ -1917,7 +1936,7 @@ export async function createAiOrder(input: {
       updated_at::text
     `,
     [
-      input.accountId,
+      resolvedAccountId,
       input.conversationId,
       input.customerPhone || null,
       input.summary,
@@ -1939,7 +1958,7 @@ export async function listAiOrders(accountId?: string | null, companyId?: string
     `
     SELECT
       o.id,
-      o.account_id,
+      COALESCE(o.account_id, c.account_id) AS account_id,
       o.conversation_id,
       o.customer_phone,
       o.summary,
@@ -1965,8 +1984,8 @@ export async function listAiOrders(accountId?: string | null, companyId?: string
       wa.wa_jid AS account_wa_jid
     FROM ai_orders o
     LEFT JOIN conversations c ON c.id = o.conversation_id
-    LEFT JOIN whatsapp_accounts wa ON wa.id = o.account_id
-    WHERE ($1::uuid IS NULL OR o.account_id = $1)
+    LEFT JOIN whatsapp_accounts wa ON wa.id = COALESCE(o.account_id, c.account_id)
+    WHERE ($1::uuid IS NULL OR COALESCE(o.account_id, c.account_id) = $1)
       AND ($2::uuid IS NULL OR wa.company_id = $2)
     ORDER BY o.created_at DESC
     `,
@@ -1985,7 +2004,7 @@ export async function getAiOrderById(orderId: string): Promise<AiOrderRow | null
     `
     SELECT
       o.id,
-      o.account_id,
+      COALESCE(o.account_id, c.account_id) AS account_id,
       o.conversation_id,
       o.customer_phone,
       o.summary,
@@ -2011,7 +2030,7 @@ export async function getAiOrderById(orderId: string): Promise<AiOrderRow | null
       wa.wa_jid AS account_wa_jid
     FROM ai_orders o
     LEFT JOIN conversations c ON c.id = o.conversation_id
-    LEFT JOIN whatsapp_accounts wa ON wa.id = o.account_id
+    LEFT JOIN whatsapp_accounts wa ON wa.id = COALESCE(o.account_id, c.account_id)
     WHERE o.id = $1
     LIMIT 1
     `,
