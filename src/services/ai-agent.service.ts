@@ -175,6 +175,28 @@ function normalizeText(value: string): string {
     .trim();
 }
 
+function singularizeNormalizedWord(value: string): string {
+  const word = normalizeText(value);
+  if (word.length <= 4) return word;
+  if (word.endsWith("oes")) return `${word.slice(0, -3)}ao`;
+  if (word.endsWith("aes")) return `${word.slice(0, -3)}ao`;
+  if (word.endsWith("ais")) return `${word.slice(0, -3)}al`;
+  if (word.endsWith("eis")) return `${word.slice(0, -3)}el`;
+  if (word.endsWith("is")) return `${word.slice(0, -2)}il`;
+  if (word.endsWith("es")) return word.slice(0, -2);
+  if (word.endsWith("s")) return word.slice(0, -1);
+  return word;
+}
+
+function normalizeMatchText(value: string): string {
+  return normalizeText(value)
+    .split(/\s+/)
+    .map((part) => singularizeNormalizedWord(part))
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
 function getNormalizedAgentGuidelines(guidelines?: Array<string> | null): string[] {
   return Array.isArray(guidelines)
     ? guidelines.map((item) => normalizeText(String(item || ""))).filter(Boolean)
@@ -224,6 +246,7 @@ function buildProductImageCaption(
   agentGuidelines?: Array<string> | null,
 ): string {
   const guidelines = getNormalizedAgentGuidelines(agentGuidelines);
+  const guidelinesText = normalizeText(Array.isArray(agentGuidelines) ? agentGuidelines.join("\n") : "");
   const imageRules = guidelines.filter((item) =>
     /\b(foto|fotos|imagem|imagens|legenda|descricao|descricao da foto|descricao da imagem|mostrar produto)\b/.test(item),
   );
@@ -234,6 +257,62 @@ function buildProductImageCaption(
   const formattedPrice = Number.isFinite(numericPrice) ? `Preço: R$${numericPrice.toFixed(2)}` : "";
   const hasNumericStock = Number.isFinite(Number(product.stock));
   const formattedStock = hasNumericStock ? `Estoque: ${Math.max(0, Math.round(Number(product.stock)))}` : "";
+  const normalizedProductContext = normalizeMatchText([product.name, product.description || ""].filter(Boolean).join(" "));
+
+  const hasStrongBouquetCaptionRule =
+    guidelinesText.includes("legenda") &&
+    guidelinesText.includes("foto") &&
+    guidelinesText.includes("buque") &&
+    guidelinesText.includes("nessa ordem") &&
+    guidelinesText.includes("nome") &&
+    guidelinesText.includes("preco") &&
+    guidelinesText.includes("descricao");
+
+  if (hasStrongBouquetCaptionRule && normalizedProductContext.includes("buque")) {
+    const orderedFields = [`Nome: ${name}`];
+    if (formattedPrice) orderedFields.push(formattedPrice);
+    if (description) orderedFields.push(`Descrição: ${description}`);
+    return orderedFields.join("\n");
+  }
+
+  const directOrderedCaptionRule = guidelines.find((item) => {
+    if (!(item.includes("nessa ordem") || item.includes("nesta ordem") || item.includes("ordem"))) return false;
+    const mentionsBouquetOnly = item.includes("buque") || item.includes("buques");
+    if (mentionsBouquetOnly && !normalizedProductContext.includes("buque")) {
+      return false;
+    }
+    return item.includes("nome") && (item.includes("preco") || item.includes("valor")) && item.includes("descricao");
+  });
+
+  if (directOrderedCaptionRule) {
+    const orderedFields = [`Nome: ${name}`];
+    if (formattedPrice) orderedFields.push(formattedPrice);
+    if (description) orderedFields.push(`Descrição: ${description}`);
+    if ((directOrderedCaptionRule.includes("estoque") || directOrderedCaptionRule.includes("disponibilidade")) && formattedStock) {
+      orderedFields.push(formattedStock);
+    }
+    return orderedFields.join("\n");
+  }
+
+  const orderedFieldRule = imageRules.find((item) => {
+    if (!(item.includes("nessa ordem") || item.includes("nesta ordem") || item.includes("ordem"))) return false;
+    const mentionsBouquetOnly = item.includes("buque") || item.includes("buques");
+    if (mentionsBouquetOnly && !/\bbuque\b/.test(normalizedProductContext)) {
+      return false;
+    }
+    return item.includes("nome") && (item.includes("preco") || item.includes("valor")) && item.includes("descricao");
+  });
+
+  if (orderedFieldRule) {
+    const orderedFields: string[] = [];
+    if (/\bnome\b/.test(orderedFieldRule)) orderedFields.push(`Nome: ${name}`);
+    if (/\b(preco|valor)\b/.test(orderedFieldRule) && formattedPrice) orderedFields.push(formattedPrice);
+    if (/\bdescricao\b/.test(orderedFieldRule) && description) orderedFields.push(`Descrição: ${description}`);
+    if (/\bestoque|disponibilidade\b/.test(orderedFieldRule) && formattedStock) orderedFields.push(formattedStock);
+    if (orderedFields.length) {
+      return orderedFields.join("\n");
+    }
+  }
 
   const onlyNameRule = imageRules.some((item) =>
     /\b(somente|apenas|so)\b.*\bnome\b/.test(item) ||
@@ -245,19 +324,29 @@ function buildProductImageCaption(
   }
 
   const descriptionRule = imageRules.some((item) =>
-    /\b(descricao|descricao|descrever)\b/.test(item) &&
-    !/\bsem descricao\b|\bsem descricao\b/.test(item),
+    (item.includes("descricao") || item.includes("descrever")) &&
+    !item.includes("sem descricao"),
   );
   const priceForbiddenRule = imageRules.some((item) =>
-    /\b(sem preco|sem valor|nao mostrar preco|nao mostrar valor|sem o preco|sem o valor)\b/.test(item),
+    item.includes("sem preco") ||
+    item.includes("sem valor") ||
+    item.includes("nao mostrar preco") ||
+    item.includes("nao mostrar valor") ||
+    item.includes("sem o preco") ||
+    item.includes("sem o valor"),
   );
   const priceRequiredRule = imageRules.some((item) =>
-    /\b(com preco|com valor|mostrar preco|mostrar valor|informar preco|informar valor)\b/.test(item),
+    item.includes("com preco") ||
+    item.includes("com valor") ||
+    item.includes("mostrar preco") ||
+    item.includes("mostrar valor") ||
+    item.includes("informar preco") ||
+    item.includes("informar valor"),
   );
-  const explicitNameRule = imageRules.some((item) => /\bnome\b/.test(item));
-  const explicitPriceRule = imageRules.some((item) => /\b(preco|valor)\b/.test(item));
-  const explicitDescriptionRule = imageRules.some((item) => /\b(descricao|descrever)\b/.test(item));
-  const explicitStockRule = imageRules.some((item) => /\b(estoque|disponibilidade)\b/.test(item));
+  const explicitNameRule = imageRules.some((item) => item.includes("nome"));
+  const explicitPriceRule = imageRules.some((item) => item.includes("preco") || item.includes("valor"));
+  const explicitDescriptionRule = imageRules.some((item) => item.includes("descricao") || item.includes("descrever"));
+  const explicitStockRule = imageRules.some((item) => item.includes("estoque") || item.includes("disponibilidade"));
   const hasExplicitFieldList = explicitNameRule || explicitPriceRule || explicitDescriptionRule || explicitStockRule;
 
   if (hasExplicitFieldList) {
@@ -315,7 +404,7 @@ export function __buildProductImageCaptionForTests(
 }
 
 function getSignificantNameParts(value: string): string[] {
-  return normalizeName(value)
+  return normalizeMatchText(value)
     .split(/\s+/)
     .filter((part) => part.length >= 4 && !GENERIC_PRODUCT_NAME_PARTS.has(part));
 }
@@ -3538,35 +3627,59 @@ function extractRequestedProductNames(input: {
 }) {
   const requestedNames = input.productNames.map((item) => normalizeName(item)).filter(Boolean);
   const customerText = normalizeText(input.lastCustomerMessage);
+  const customerTextForMatch = normalizeMatchText(input.lastCustomerMessage);
+  const broadImageRequest = shouldSendMultipleImages(input.lastCustomerMessage, input.productNames);
   const rankedMatches = input.catalog
     .map((product) => {
     if (!String(product.image_url || "").trim()) return false;
 
     const productName = normalizeName(product.name);
+    const productNameForMatch = normalizeMatchText(product.name);
     const groupName = normalizeName(String(product.group_name || ""));
+    const groupNameForMatch = normalizeMatchText(String(product.group_name || ""));
     const nameParts = getSignificantNameParts(product.name);
-    const groupParts = groupName ? getSignificantNameParts(groupName) : [];
+    const groupParts = groupNameForMatch ? getSignificantNameParts(groupNameForMatch) : [];
       let score = 0;
 
-    const matchesExplicitName = requestedNames.some((requested) => productName.includes(requested) || requested.includes(productName));
+    const matchesExplicitName = requestedNames.some((requested) => {
+      const normalizedRequested = normalizeName(requested);
+      const normalizedRequestedForMatch = normalizeMatchText(requested);
+      return (
+        productName.includes(normalizedRequested) ||
+        normalizedRequested.includes(productName) ||
+        productNameForMatch.includes(normalizedRequestedForMatch) ||
+        normalizedRequestedForMatch.includes(productNameForMatch)
+      );
+    });
       if (matchesExplicitName) score += 100;
 
-      const matchesExplicitGroup = groupName
-        ? requestedNames.some((requested) => groupName.includes(requested) || requested.includes(groupName))
+      const matchesExplicitGroup = groupName || groupNameForMatch
+        ? requestedNames.some((requested) => {
+            const normalizedRequested = normalizeName(requested);
+            const normalizedRequestedForMatch = normalizeMatchText(requested);
+            return (
+              groupName.includes(normalizedRequested) ||
+              normalizedRequested.includes(groupName) ||
+              groupNameForMatch.includes(normalizedRequestedForMatch) ||
+              normalizedRequestedForMatch.includes(groupNameForMatch)
+            );
+          })
         : false;
       if (matchesExplicitGroup) score += 90;
 
       if (customerText.includes(productName)) score += 80;
+      if (customerTextForMatch.includes(productNameForMatch)) score += 60;
       if (groupName && customerText.includes(groupName)) score += 70;
+      if (groupNameForMatch && customerTextForMatch.includes(groupNameForMatch)) score += 70;
 
       for (const part of nameParts) {
-        if (customerText.includes(part)) {
+        if (customerText.includes(part) || customerTextForMatch.includes(part)) {
           score += 20;
         }
       }
 
       for (const part of groupParts) {
-        if (customerText.includes(part)) {
+        if (customerText.includes(part) || customerTextForMatch.includes(part)) {
           score += 15;
         }
       }
@@ -3577,8 +3690,13 @@ function extractRequestedProductNames(input: {
     .sort((a, b) => Number((b as any).score) - Number((a as any).score));
 
   const bestScore = rankedMatches.length ? Number((rankedMatches[0] as any).score) : 0;
+  const minimumBroadScore = broadImageRequest ? 20 : bestScore;
   return rankedMatches
-    .filter((entry) => Number((entry as any).score) === bestScore)
+    .filter((entry) =>
+      broadImageRequest
+        ? Number((entry as any).score) >= minimumBroadScore
+        : Number((entry as any).score) === bestScore,
+    )
     .map((entry) => (entry as any).product);
 }
 
