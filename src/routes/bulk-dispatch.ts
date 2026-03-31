@@ -25,18 +25,22 @@ router.post("/jobs", async (req, res) => {
   try {
     const message = String(req.body?.message || "").trim();
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const messageBlocks = Array.isArray(req.body?.message_blocks) ? req.body.message_blocks : [];
     const intervalMinSeconds = Number(req.body?.interval_min_seconds || 0);
     const intervalMaxSeconds = Number(req.body?.interval_max_seconds || 0);
     const contacts = Array.isArray(req.body?.contacts) ? req.body.contacts : [];
+    const enableAiAgent = Boolean(req.body?.enable_ai_agent);
 
     const created = await createBulkDispatchJob({
       userId: authReq.authUser?.id || null,
       companyId: authReq.authUser?.company_id || null,
       message,
       messages,
+      messageBlocks,
       intervalMinSeconds,
       intervalMaxSeconds,
       contacts,
+      enableAiAgent,
     });
 
     return res.status(201).json({

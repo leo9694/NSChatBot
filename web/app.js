@@ -23,7 +23,11 @@
   contextConversationId: null,
   currentView: "chats",
   bulkContacts: [],
+  bulkContactsSource: "none",
+  bulkContactsLoading: false,
   bulkContactsSearch: "",
+  bulkContactsPage: 1,
+  bulkContactsPageSize: 30,
   bulkJobs: [],
   selectedBulkJobId: null,
   bulkJobDetailsMap: {},
@@ -208,10 +212,16 @@ const bulkIntervalMaxEl = document.getElementById("bulkIntervalMax");
 const bulkMessagesContainerEl = document.getElementById("bulkMessagesContainer");
 const bulkAddMessageBtnEl = document.getElementById("bulkAddMessageBtn");
 const bulkContactsCountEl = document.getElementById("bulkContactsCount");
+const bulkEnableAiAgentEl = document.getElementById("bulkEnableAiAgent");
+const bulkEnableAiAgentBtnEl = document.getElementById("bulkEnableAiAgentBtn");
+const bulkEnableAiAgentStateEl = document.getElementById("bulkEnableAiAgentState");
+const bulkLoadOpenChatsBtnEl = document.getElementById("bulkLoadOpenChatsBtn");
+const bulkContactsPanelEl = document.getElementById("bulkContactsPanel");
 const bulkContactsSearchEl = document.getElementById("bulkContactsSearch");
 const bulkSelectAllBtnEl = document.getElementById("bulkSelectAllBtn");
 const bulkClearAllBtnEl = document.getElementById("bulkClearAllBtn");
 const bulkContactsListEl = document.getElementById("bulkContactsList");
+const bulkContactsPaginationEl = document.getElementById("bulkContactsPagination");
 const bulkJobsListEl = document.getElementById("bulkJobsList");
 const bulkJobDetailsEl = document.getElementById("bulkJobDetails");
 const uiDialogOverlayEl = document.getElementById("uiDialogOverlay");
@@ -390,7 +400,11 @@ let bulkMonitorTimer = null;
 let editingUserId = "";
 let transferConversationId = "";
 let accountSwitchMode = "select";
-let bulkMessagesDraft = [""];
+let bulkMessagesDraft = [];
+let bulkAudioRecorder = null;
+let bulkAudioStream = null;
+let bulkAudioChunks = [];
+let bulkAudioRecordingTarget = null;
 let pendingConversationRefresh = false;
 let pendingMessagesRefresh = false;
 let conversationRefreshTimer = null;
@@ -3427,54 +3441,460 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function renderBulkAiToggleState() {
+  const enabled = Boolean(bulkEnableAiAgentEl?.checked);
+  if (bulkEnableAiAgentBtnEl) {
+    bulkEnableAiAgentBtnEl.setAttribute("aria-pressed", enabled ? "true" : "false");
+    bulkEnableAiAgentBtnEl.classList.toggle("is-enabled", enabled);
+  }
+  if (bulkEnableAiAgentStateEl) {
+    bulkEnableAiAgentStateEl.textContent = enabled ? "Ligado" : "Desligado";
+  }
+}
+
+function createBulkMessageAsset(type = "image") {
+  return {
+    id: `bulk-asset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    file_base64: "",
+    mimetype: "",
+    file_name: "",
+    caption: "",
+  };
+}
+
+function createBulkMessageBlock() {
+  return {
+    id: `bulk-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    text: "",
+    assets: [],
+    order: ["text"],
+  };
+}
+
+function moveItem(array, fromIndex, toIndex) {
+  if (!Array.isArray(array)) return;
+  if (fromIndex < 0 || toIndex < 0 || fromIndex >= array.length || toIndex >= array.length) return;
+  const [item] = array.splice(fromIndex, 1);
+  array.splice(toIndex, 0, item);
+}
+
 function normalizeBulkMessagesDraft() {
   if (!Array.isArray(bulkMessagesDraft)) {
-    bulkMessagesDraft = [""];
+    bulkMessagesDraft = [createBulkMessageBlock()];
   }
   if (!bulkMessagesDraft.length) {
-    bulkMessagesDraft = [""];
+    bulkMessagesDraft = [createBulkMessageBlock()];
   }
+  bulkMessagesDraft = bulkMessagesDraft.map((block) => ({
+    id: String(block?.id || createBulkMessageBlock().id),
+    text: String(block?.text || ""),
+    assets: Array.isArray(block?.assets)
+      ? block.assets.map((asset) => ({
+          id: String(asset?.id || createBulkMessageAsset().id),
+          type: ["image", "video", "audio"].includes(String(asset?.type || "").toLowerCase())
+            ? String(asset.type).toLowerCase()
+            : "image",
+          file_base64: String(asset?.file_base64 || ""),
+          mimetype: String(asset?.mimetype || ""),
+          file_name: String(asset?.file_name || ""),
+          caption: String(asset?.caption || ""),
+        }))
+      : [],
+    order: Array.isArray(block?.order) ? block.order.map((item) => String(item || "")) : ["text"],
+  }));
+
+  bulkMessagesDraft = bulkMessagesDraft.map((block) => {
+    const validOrder = ["text", ...block.assets.map((asset) => asset.id)];
+    const uniqueOrder = block.order.filter((item, index) => validOrder.includes(item) && block.order.indexOf(item) === index);
+    for (const item of validOrder) {
+      if (!uniqueOrder.includes(item)) {
+        uniqueOrder.push(item);
+      }
+    }
+    return {
+      ...block,
+      order: uniqueOrder,
+    };
+  });
 }
 
 function renderBulkMessagesBuilder() {
   normalizeBulkMessagesDraft();
   bulkMessagesContainerEl.innerHTML = "";
 
-  bulkMessagesDraft.forEach((value, index) => {
-    const label = document.createElement("label");
-    label.className = "bulk-message-item";
-    label.innerHTML = `
-      Mensagem ${index + 1}
-      <textarea class="bulk-message-input" rows="4" placeholder="Digite a mensagem do disparo"></textarea>
-    `;
+  bulkMessagesDraft.forEach((block, index) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "bulk-message-item";
 
-    const textarea = label.querySelector("textarea");
-    textarea.value = String(value || "");
+    const head = document.createElement("div");
+    head.className = "bulk-message-card-head";
+
+    const title = document.createElement("div");
+    title.textContent = `Bloco ${index + 1}`;
+    head.appendChild(title);
+
+    const badges = document.createElement("div");
+    badges.className = "bulk-message-badges";
+    if (String(block.text || "").trim()) {
+      const textBadge = document.createElement("span");
+      textBadge.className = "bulk-message-badge";
+      textBadge.textContent = "Texto";
+      badges.appendChild(textBadge);
+    }
+    for (const asset of block.assets) {
+      const badge = document.createElement("span");
+      badge.className = "bulk-message-badge";
+      badge.textContent = asset.type === "image" ? "Imagem" : asset.type === "video" ? "Vídeo" : "Áudio";
+      badges.appendChild(badge);
+    }
+    if (!badges.childElementCount) {
+      const emptyBadge = document.createElement("span");
+      emptyBadge.className = "bulk-message-badge is-muted";
+      emptyBadge.textContent = "Vazio";
+      badges.appendChild(emptyBadge);
+    }
+    head.appendChild(badges);
+    wrapper.appendChild(head);
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "bulk-message-input";
+    textarea.rows = 4;
+    textarea.placeholder = "Texto opcional deste bloco";
+    textarea.value = String(block.text || "");
     textarea.addEventListener("input", () => {
-      bulkMessagesDraft[index] = textarea.value;
+      bulkMessagesDraft[index].text = textarea.value;
     });
+    wrapper.appendChild(textarea);
+
+    const orderCard = document.createElement("div");
+    orderCard.className = "bulk-order-panel";
+
+    const orderTitle = document.createElement("div");
+    orderTitle.className = "bulk-order-title";
+    orderTitle.textContent = "Ordem de envio deste bloco";
+    orderCard.appendChild(orderTitle);
+
+    const orderHint = document.createElement("small");
+    orderHint.textContent = "Defina a sequência em que o texto e cada mídia serão enviados para o cliente.";
+    orderCard.appendChild(orderHint);
+
+    const orderList = document.createElement("div");
+    orderList.className = "bulk-order-list";
+    block.order.forEach((entryId, orderIndex) => {
+      const orderItem = document.createElement("div");
+      orderItem.className = "bulk-order-item";
+
+      const label = document.createElement("span");
+      label.className = "bulk-order-item-label";
+      if (entryId === "text") {
+        label.textContent = String(block.text || "").trim() ? "Texto do bloco" : "Texto do bloco (vazio)";
+      } else {
+        const linkedAsset = block.assets.find((asset) => asset.id === entryId);
+        label.textContent = linkedAsset
+          ? `${linkedAsset.type === "image" ? "Imagem" : linkedAsset.type === "video" ? "Vídeo" : "Áudio"}${linkedAsset.file_name ? ` · ${linkedAsset.file_name}` : ""}`
+          : "Mídia";
+      }
+      orderItem.appendChild(label);
+
+      const orderActions = document.createElement("div");
+      orderActions.className = "bulk-order-item-actions";
+
+      const upBtn = document.createElement("button");
+      upBtn.type = "button";
+      upBtn.className = "btn-secondary";
+      upBtn.textContent = "↑";
+      upBtn.disabled = orderIndex === 0;
+      upBtn.addEventListener("click", () => {
+        moveItem(bulkMessagesDraft[index].order, orderIndex, orderIndex - 1);
+        renderBulkMessagesBuilder();
+      });
+      orderActions.appendChild(upBtn);
+
+      const downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.className = "btn-secondary";
+      downBtn.textContent = "↓";
+      downBtn.disabled = orderIndex === block.order.length - 1;
+      downBtn.addEventListener("click", () => {
+        moveItem(bulkMessagesDraft[index].order, orderIndex, orderIndex + 1);
+        renderBulkMessagesBuilder();
+      });
+      orderActions.appendChild(downBtn);
+
+      orderItem.appendChild(orderActions);
+      orderList.appendChild(orderItem);
+    });
+    orderCard.appendChild(orderList);
+    wrapper.appendChild(orderCard);
+
+    const assetsWrap = document.createElement("div");
+    assetsWrap.className = "bulk-assets-list";
+
+    block.assets.forEach((asset, assetIndex) => {
+      const assetCard = document.createElement("div");
+      assetCard.className = "bulk-asset-card";
+      const isRecordingThisAsset =
+        Boolean(bulkAudioRecordingTarget) &&
+        bulkAudioRecordingTarget.blockIndex === index &&
+        bulkAudioRecordingTarget.assetIndex === assetIndex &&
+        bulkAudioRecorder &&
+        bulkAudioRecorder.state === "recording";
+
+      const assetHead = document.createElement("div");
+      assetHead.className = "bulk-asset-head";
+
+      const assetType = document.createElement("select");
+      assetType.className = "bulk-message-input";
+      assetType.innerHTML = `
+        <option value="image">Imagem</option>
+        <option value="video">Vídeo</option>
+        <option value="audio">Áudio</option>
+      `;
+      assetType.value = asset.type;
+      assetType.addEventListener("change", () => {
+        const nextType = assetType.value;
+        const current = bulkMessagesDraft[index].assets[assetIndex];
+        if (isRecordingThisAsset && nextType !== "audio") {
+          stopBulkAudioRecording();
+        }
+        bulkMessagesDraft[index].assets[assetIndex] = {
+          ...current,
+          type: nextType,
+          caption: nextType === "audio" ? "" : current.caption || "",
+        };
+        renderBulkMessagesBuilder();
+      });
+      assetHead.appendChild(assetType);
+
+      const removeAssetBtn = document.createElement("button");
+      removeAssetBtn.type = "button";
+      removeAssetBtn.className = "btn-secondary bulk-asset-remove-btn";
+      removeAssetBtn.textContent = "Remover mídia";
+      removeAssetBtn.addEventListener("click", () => {
+        if (isRecordingThisAsset) {
+          stopBulkAudioRecording();
+        }
+        const removedAssetId = bulkMessagesDraft[index].assets[assetIndex]?.id;
+        bulkMessagesDraft[index].assets.splice(assetIndex, 1);
+        bulkMessagesDraft[index].order = bulkMessagesDraft[index].order.filter((entry) => entry !== removedAssetId);
+        renderBulkMessagesBuilder();
+      });
+      assetHead.appendChild(removeAssetBtn);
+      assetCard.appendChild(assetHead);
+
+      const uploadInput = document.createElement("input");
+      uploadInput.className = "bulk-message-input";
+      uploadInput.type = "file";
+      uploadInput.accept =
+        asset.type === "image"
+          ? "image/*"
+          : asset.type === "video"
+            ? "video/*"
+            : "audio/*";
+      uploadInput.addEventListener("change", async () => {
+        const file = uploadInput.files?.[0];
+        if (!file) return;
+        const dataUrl = await fileToDataUrl(file);
+        bulkMessagesDraft[index].assets[assetIndex].file_base64 = dataUrl;
+        bulkMessagesDraft[index].assets[assetIndex].mimetype = file.type || "";
+        bulkMessagesDraft[index].assets[assetIndex].file_name = file.name || "";
+        renderBulkMessagesBuilder();
+      });
+      assetCard.appendChild(uploadInput);
+
+      if (asset.type === "audio") {
+        const audioActions = document.createElement("div");
+        audioActions.className = "bulk-asset-inline-actions";
+
+        const recordBtn = document.createElement("button");
+        recordBtn.type = "button";
+        recordBtn.className = isRecordingThisAsset ? "btn-danger" : "btn-secondary";
+        recordBtn.textContent = isRecordingThisAsset ? "Parar gravação" : "Gravar áudio";
+        recordBtn.addEventListener("click", async () => {
+          try {
+            if (isRecordingThisAsset) {
+              stopBulkAudioRecording();
+            } else {
+              await startBulkAudioRecording(index, assetIndex);
+            }
+          } catch (error) {
+            await showAlert(error.message || "Falha ao gravar áudio.");
+          }
+        });
+        audioActions.appendChild(recordBtn);
+
+        if (isRecordingThisAsset) {
+          const recordingBadge = document.createElement("span");
+          recordingBadge.className = "bulk-recording-indicator";
+          recordingBadge.textContent = "Gravando...";
+          audioActions.appendChild(recordingBadge);
+        }
+
+        if (asset.file_base64) {
+          const clearFileBtn = document.createElement("button");
+          clearFileBtn.type = "button";
+          clearFileBtn.className = "btn-secondary";
+          clearFileBtn.textContent = "Excluir áudio";
+          clearFileBtn.addEventListener("click", () => {
+            clearBulkAssetFile(index, assetIndex);
+            renderBulkMessagesBuilder();
+          });
+          audioActions.appendChild(clearFileBtn);
+        }
+
+        assetCard.appendChild(audioActions);
+      } else if (asset.file_base64) {
+        const clearFileBtn = document.createElement("button");
+        clearFileBtn.type = "button";
+        clearFileBtn.className = "btn-secondary bulk-clear-file-btn";
+        clearFileBtn.textContent = asset.type === "video" ? "Excluir vídeo" : "Excluir imagem";
+        clearFileBtn.addEventListener("click", () => {
+          clearBulkAssetFile(index, assetIndex);
+          renderBulkMessagesBuilder();
+        });
+        assetCard.appendChild(clearFileBtn);
+      }
+
+      if (asset.file_base64) {
+        const preview = document.createElement("div");
+        preview.className = "bulk-asset-preview";
+
+        if (asset.type === "image") {
+          const img = document.createElement("img");
+          img.src = asset.file_base64;
+          img.alt = asset.file_name || "Imagem do disparo";
+          preview.appendChild(img);
+        } else if (asset.type === "video") {
+          const video = document.createElement("video");
+          video.src = asset.file_base64;
+          video.controls = true;
+          video.preload = "metadata";
+          preview.appendChild(video);
+        } else {
+          const audio = document.createElement("audio");
+          audio.src = asset.file_base64;
+          audio.controls = true;
+          preview.appendChild(audio);
+        }
+
+        const meta = document.createElement("small");
+        meta.textContent = `Arquivo: ${asset.file_name || "arquivo"}`;
+        preview.appendChild(meta);
+        assetCard.appendChild(preview);
+      }
+
+      if (asset.type === "image" || asset.type === "video") {
+        const captionInput = document.createElement("textarea");
+        captionInput.className = "bulk-message-input";
+        captionInput.rows = 3;
+        captionInput.placeholder = "Legenda opcional";
+        captionInput.value = String(asset.caption || "");
+        captionInput.addEventListener("input", () => {
+          bulkMessagesDraft[index].assets[assetIndex].caption = captionInput.value;
+        });
+        assetCard.appendChild(captionInput);
+      }
+
+      assetsWrap.appendChild(assetCard);
+    });
+
+    wrapper.appendChild(assetsWrap);
+
+    const actions = document.createElement("div");
+    actions.className = "bulk-message-card-actions";
+
+    const addImageBtn = document.createElement("button");
+    addImageBtn.type = "button";
+    addImageBtn.className = "btn-secondary";
+    addImageBtn.textContent = "+ Imagem";
+    addImageBtn.addEventListener("click", () => {
+      const asset = createBulkMessageAsset("image");
+      bulkMessagesDraft[index].assets.push(asset);
+      bulkMessagesDraft[index].order.push(asset.id);
+      renderBulkMessagesBuilder();
+    });
+    actions.appendChild(addImageBtn);
+
+    const addVideoBtn = document.createElement("button");
+    addVideoBtn.type = "button";
+    addVideoBtn.className = "btn-secondary";
+    addVideoBtn.textContent = "+ Vídeo";
+    addVideoBtn.addEventListener("click", () => {
+      const asset = createBulkMessageAsset("video");
+      bulkMessagesDraft[index].assets.push(asset);
+      bulkMessagesDraft[index].order.push(asset.id);
+      renderBulkMessagesBuilder();
+    });
+    actions.appendChild(addVideoBtn);
+
+    const addAudioBtn = document.createElement("button");
+    addAudioBtn.type = "button";
+    addAudioBtn.className = "btn-secondary";
+    addAudioBtn.textContent = "+ Áudio";
+    addAudioBtn.addEventListener("click", () => {
+      const asset = createBulkMessageAsset("audio");
+      bulkMessagesDraft[index].assets.push(asset);
+      bulkMessagesDraft[index].order.push(asset.id);
+      renderBulkMessagesBuilder();
+    });
+    actions.appendChild(addAudioBtn);
+
+    wrapper.appendChild(actions);
 
     if (bulkMessagesDraft.length > 1) {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "btn-danger bulk-remove-message-btn";
-      removeBtn.textContent = "Remover";
+      removeBtn.textContent = "Remover bloco";
       removeBtn.addEventListener("click", () => {
+        if (bulkAudioRecordingTarget?.blockIndex === index) {
+          stopBulkAudioRecording();
+        }
         bulkMessagesDraft.splice(index, 1);
         renderBulkMessagesBuilder();
       });
-      label.appendChild(removeBtn);
+      wrapper.appendChild(removeBtn);
     }
 
-    bulkMessagesContainerEl.appendChild(label);
+    bulkMessagesContainerEl.appendChild(wrapper);
   });
 }
 
 function collectBulkMessages() {
   normalizeBulkMessagesDraft();
-  return bulkMessagesDraft
-    .map((item) => String(item || "").trim())
-    .filter((item) => item.length > 0);
+  const normalized = [];
+  for (const block of bulkMessagesDraft) {
+    const orderedEntries = Array.isArray(block.order) ? block.order : ["text"];
+    for (const entryId of orderedEntries) {
+      if (entryId === "text") {
+        const text = String(block.text || "").trim();
+        if (text) {
+          normalized.push({ type: "text", text });
+        }
+        continue;
+      }
+      const asset = Array.isArray(block.assets) ? block.assets.find((item) => item.id === entryId) : null;
+      if (!asset || !String(asset.file_base64 || "").trim()) continue;
+      if (asset.type === "audio") {
+        normalized.push({
+          type: "audio",
+          file_base64: asset.file_base64,
+          mimetype: asset.mimetype || "audio/ogg",
+          file_name: asset.file_name || "audio",
+        });
+      } else {
+        normalized.push({
+          type: asset.type,
+          file_base64: asset.file_base64,
+          mimetype: asset.mimetype || "",
+          file_name: asset.file_name || "arquivo",
+          caption: String(asset.caption || "").trim(),
+        });
+      }
+    }
+  }
+  return normalized;
 }
 
 async function parseContactsFromRows(rows, onProgress) {
@@ -3532,11 +3952,16 @@ async function parseContactsFromExcel(file, onProgress) {
 }
 
 function updateBulkContactsMeta() {
+  if (state.bulkContactsLoading) {
+    bulkContactsCountEl.textContent = state.bulkContactsSource === "open_chats" ? "Carregando chats da empresa..." : "Carregando contatos...";
+    return;
+  }
   const selected = state.bulkContacts.filter((item) => item.selected).length;
   const total = state.bulkContacts.length;
   const filtered = getFilteredBulkContacts().length;
   const searchLabel = state.bulkContactsSearch.trim() ? ` | ${filtered} na busca` : "";
-  bulkContactsCountEl.textContent = `${selected}/${total} contatos selecionados${searchLabel}`;
+  const noun = state.bulkContactsSource === "open_chats" ? "chats" : "contatos";
+  bulkContactsCountEl.textContent = `${selected}/${total} ${noun} selecionados${searchLabel}`;
 }
 
 function getFilteredBulkContacts() {
@@ -3557,22 +3982,57 @@ function getFilteredBulkContacts() {
   });
 }
 
+function getBulkContactsPageInfo() {
+  const filteredContacts = getFilteredBulkContacts();
+  const pageSize = Math.max(1, Number(state.bulkContactsPageSize || 30));
+  const totalPages = Math.max(1, Math.ceil(filteredContacts.length / pageSize));
+  const currentPage = Math.min(Math.max(1, Number(state.bulkContactsPage || 1)), totalPages);
+  const start = (currentPage - 1) * pageSize;
+  const items = filteredContacts.slice(start, start + pageSize);
+  return {
+    filteredContacts,
+    items,
+    currentPage,
+    totalPages,
+    totalItems: filteredContacts.length,
+    pageSize,
+  };
+}
+
 function renderBulkContacts() {
+  if (bulkContactsPanelEl) {
+    bulkContactsPanelEl.hidden =
+      !state.bulkContactsLoading && state.bulkContacts.length === 0 && state.bulkContactsSource === "none";
+  }
   bulkContactsListEl.innerHTML = "";
+  if (bulkContactsPaginationEl) {
+    bulkContactsPaginationEl.innerHTML = "";
+    bulkContactsPaginationEl.hidden = true;
+  }
+  if (state.bulkContactsLoading) {
+    bulkContactsListEl.innerHTML = '<div class="empty-state">Carregando chats da empresa...</div>';
+    updateBulkContactsMeta();
+    return;
+  }
   if (!state.bulkContacts.length) {
-    bulkContactsListEl.innerHTML = '<div class="empty-state">Nenhum contato carregado.</div>';
+    const emptyLabel =
+      state.bulkContactsSource === "open_chats"
+        ? "Nenhum chat encontrado para esta empresa."
+        : "Nenhum contato carregado.";
+    bulkContactsListEl.innerHTML = `<div class="empty-state">${emptyLabel}</div>`;
     updateBulkContactsMeta();
     return;
   }
 
-  const filteredContacts = getFilteredBulkContacts();
-  if (!filteredContacts.length) {
+  const { items, currentPage, totalPages, totalItems } = getBulkContactsPageInfo();
+  state.bulkContactsPage = currentPage;
+  if (!totalItems) {
     bulkContactsListEl.innerHTML = '<div class="empty-state">Nenhum contato encontrado na busca.</div>';
     updateBulkContactsMeta();
     return;
   }
 
-  for (const contact of filteredContacts) {
+  for (const contact of items) {
     const row = document.createElement("label");
     row.className = "bulk-contact-row";
 
@@ -3586,6 +4046,14 @@ function renderBulkContacts() {
     const phoneEl = document.createElement("span");
     phoneEl.className = "bulk-contact-phone";
     phoneEl.textContent = formatPhone(contact.phone);
+
+    if (contact.meta) {
+      const metaEl = document.createElement("span");
+      metaEl.className = "bulk-contact-phone";
+      metaEl.textContent = contact.meta;
+      phoneEl.appendChild(document.createTextNode(" "));
+      phoneEl.appendChild(metaEl);
+    }
 
     const mainInfo = document.createElement("div");
     mainInfo.className = "bulk-contact-main";
@@ -3606,7 +4074,86 @@ function renderBulkContacts() {
     bulkContactsListEl.appendChild(row);
   }
 
+  if (bulkContactsPaginationEl && totalPages > 1) {
+    bulkContactsPaginationEl.hidden = false;
+
+    const info = document.createElement("span");
+    info.className = "bulk-pagination-info";
+    const startItem = (currentPage - 1) * state.bulkContactsPageSize + 1;
+    const endItem = Math.min(currentPage * state.bulkContactsPageSize, totalItems);
+    info.textContent = `Mostrando ${startItem}-${endItem} de ${totalItems}`;
+    bulkContactsPaginationEl.appendChild(info);
+
+    const controls = document.createElement("div");
+    controls.className = "bulk-pagination-actions";
+
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "btn-secondary";
+    prevBtn.textContent = "Anterior";
+    prevBtn.disabled = currentPage <= 1;
+    prevBtn.addEventListener("click", () => {
+      state.bulkContactsPage = Math.max(1, currentPage - 1);
+      renderBulkContacts();
+      bulkContactsPanelEl?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    controls.appendChild(prevBtn);
+
+    const pageLabel = document.createElement("span");
+    pageLabel.className = "bulk-pagination-page";
+    pageLabel.textContent = `Página ${currentPage} de ${totalPages}`;
+    controls.appendChild(pageLabel);
+
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "btn-secondary";
+    nextBtn.textContent = "Próxima";
+    nextBtn.disabled = currentPage >= totalPages;
+    nextBtn.addEventListener("click", () => {
+      state.bulkContactsPage = Math.min(totalPages, currentPage + 1);
+      renderBulkContacts();
+      bulkContactsPanelEl?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    controls.appendChild(nextBtn);
+
+    bulkContactsPaginationEl.appendChild(controls);
+  }
+
   updateBulkContactsMeta();
+}
+
+async function loadBulkContactsFromOpenChats() {
+  state.bulkContactsSource = "open_chats";
+  state.bulkContactsLoading = true;
+  renderBulkContacts();
+  bulkContactsPanelEl?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  try {
+    const result = await api(`/conversations/open-for-bulk?limit=500`);
+    const items = Array.isArray(result.items) ? result.items : [];
+    state.bulkContacts = items.map((item) => ({
+      name: item.display_name || item.phone || "Sem nome",
+      phone: item.phone || "",
+      selected: true,
+      conversationId: item.id || null,
+      meta:
+        String(item.service_status || "").trim() === "in_progress"
+          ? "Em atendimento"
+          : String(item.service_status || "").trim() === "pending"
+            ? "Pendente"
+            : String(item.service_status || "").trim() === "finalized"
+              ? "Finalizado"
+              : String(item.service_status || "").trim()
+                ? String(item.service_status || "").trim()
+                : "",
+    }));
+    state.bulkContactsSearch = "";
+    state.bulkContactsPage = 1;
+    bulkContactsSearchEl.value = "";
+  } finally {
+    state.bulkContactsLoading = false;
+    renderBulkContacts();
+  }
 }
 
 function renderBulkJobDetails(data) {
@@ -4029,6 +4576,87 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(new Error("Falha ao processar arquivo."));
     reader.readAsDataURL(file);
   });
+}
+
+function clearBulkAssetFile(blockIndex, assetIndex) {
+  const block = bulkMessagesDraft[blockIndex];
+  const asset = block?.assets?.[assetIndex];
+  if (!asset) return;
+  asset.file_base64 = "";
+  asset.mimetype = "";
+  asset.file_name = "";
+  asset.caption = asset.type === "audio" ? "" : asset.caption || "";
+}
+
+function stopBulkAudioStream() {
+  if (bulkAudioStream) {
+    bulkAudioStream.getTracks().forEach((track) => track.stop());
+    bulkAudioStream = null;
+  }
+}
+
+function resetBulkAudioRecorderState() {
+  bulkAudioRecorder = null;
+  bulkAudioChunks = [];
+  bulkAudioRecordingTarget = null;
+  stopBulkAudioStream();
+}
+
+async function startBulkAudioRecording(blockIndex, assetIndex) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error("Seu navegador nao suporta gravacao de audio.");
+  }
+  if (bulkAudioRecorder && bulkAudioRecorder.state === "recording") {
+    throw new Error("Ja existe uma gravacao em andamento.");
+  }
+
+  bulkAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+    ? "audio/ogg;codecs=opus"
+    : MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "";
+  bulkAudioRecorder = mimeType ? new MediaRecorder(bulkAudioStream, { mimeType }) : new MediaRecorder(bulkAudioStream);
+  bulkAudioChunks = [];
+  bulkAudioRecordingTarget = { blockIndex, assetIndex };
+
+  bulkAudioRecorder.addEventListener("dataavailable", (event) => {
+    if (event.data && event.data.size > 0) {
+      bulkAudioChunks.push(event.data);
+    }
+  });
+
+  bulkAudioRecorder.addEventListener("stop", async () => {
+    const target = bulkAudioRecordingTarget;
+    const recorder = bulkAudioRecorder;
+    const chunks = [...bulkAudioChunks];
+    resetBulkAudioRecorderState();
+    if (!target || !chunks.length) {
+      renderBulkMessagesBuilder();
+      return;
+    }
+    const blob = new Blob(chunks, { type: recorder?.mimeType || "audio/webm" });
+    const file = new File([blob], `audio-${Date.now()}.${blob.type.includes("ogg") ? "ogg" : "webm"}`, {
+      type: blob.type || "audio/webm",
+    });
+    const dataUrl = await fileToDataUrl(file);
+    const asset = bulkMessagesDraft[target.blockIndex]?.assets?.[target.assetIndex];
+    if (asset) {
+      asset.file_base64 = dataUrl;
+      asset.mimetype = file.type || blob.type || "audio/webm";
+      asset.file_name = file.name;
+    }
+    renderBulkMessagesBuilder();
+  });
+
+  bulkAudioRecorder.start();
+  renderBulkMessagesBuilder();
+}
+
+function stopBulkAudioRecording() {
+  if (bulkAudioRecorder && bulkAudioRecorder.state === "recording") {
+    bulkAudioRecorder.stop();
+  }
 }
 
 function updateComposerAction() {
@@ -6241,7 +6869,7 @@ createSectorFormEl.addEventListener("submit", handleCreateSectorSubmit);
 createCompanyFormEl?.addEventListener("submit", handleCreateCompanySubmit);
 bulkAddMessageBtnEl.addEventListener("click", () => {
   normalizeBulkMessagesDraft();
-  bulkMessagesDraft.push("");
+  bulkMessagesDraft.push(createBulkMessageBlock());
   renderBulkMessagesBuilder();
 });
 
@@ -6249,7 +6877,10 @@ bulkFileEl.addEventListener("change", async () => {
   const file = bulkFileEl.files?.[0];
   if (!file) {
     state.bulkContacts = [];
+    state.bulkContactsSource = "none";
+    state.bulkContactsLoading = false;
     state.bulkContactsSearch = "";
+    state.bulkContactsPage = 1;
     bulkContactsSearchEl.value = "";
     renderBulkContacts();
     hideBulkImportProgress();
@@ -6260,7 +6891,10 @@ bulkFileEl.addEventListener("change", async () => {
   try {
     const contacts = await parseContactsFromExcel(file, updateBulkImportProgress);
     state.bulkContacts = contacts;
+    state.bulkContactsSource = "excel";
+    state.bulkContactsLoading = false;
     state.bulkContactsSearch = "";
+    state.bulkContactsPage = 1;
     bulkContactsSearchEl.value = "";
     renderBulkContacts();
     updateBulkImportProgress(100, `${contacts.length} contatos carregados`, "Concluido com sucesso.");
@@ -6269,14 +6903,36 @@ bulkFileEl.addEventListener("change", async () => {
     }, 450);
   } catch (error) {
     state.bulkContacts = [];
+    state.bulkContactsSource = "none";
+    state.bulkContactsLoading = false;
+    state.bulkContactsPage = 1;
     renderBulkContacts();
     hideBulkImportProgress();
     await showAlert(error.message || "Falha ao ler Excel.");
   }
 });
 
+bulkLoadOpenChatsBtnEl?.addEventListener("click", async () => {
+  try {
+    await loadBulkContactsFromOpenChats();
+  } catch (error) {
+    await showAlert(error.message || "Falha ao carregar chats abertos.");
+  }
+});
+
+bulkEnableAiAgentBtnEl?.addEventListener("click", () => {
+  if (!bulkEnableAiAgentEl) return;
+  bulkEnableAiAgentEl.checked = !bulkEnableAiAgentEl.checked;
+  renderBulkAiToggleState();
+});
+
+bulkEnableAiAgentEl?.addEventListener("change", () => {
+  renderBulkAiToggleState();
+});
+
 bulkContactsSearchEl.addEventListener("input", () => {
   state.bulkContactsSearch = bulkContactsSearchEl.value || "";
+  state.bulkContactsPage = 1;
   renderBulkContacts();
 });
 
@@ -6299,8 +6955,9 @@ bulkCreateFormEl.addEventListener("submit", async (event) => {
 
   const intervalMinSeconds = Number(bulkIntervalMinEl.value || 0);
   const intervalMaxSeconds = Number(bulkIntervalMaxEl.value || 0);
-  const messages = collectBulkMessages();
-  const message = messages[0] || "";
+  const messageBlocks = collectBulkMessages();
+  const textMessages = messageBlocks.filter((item) => item.type === "text").map((item) => item.text);
+  const message = textMessages[0] || "";
   const contacts = state.bulkContacts.filter((item) => item.selected);
 
   if (!contacts.length) {
@@ -6312,8 +6969,8 @@ bulkCreateFormEl.addEventListener("submit", async (event) => {
     return;
   }
   const safeIntervalMax = Math.max(intervalMinSeconds, intervalMaxSeconds);
-  if (!message) {
-    await showAlert("Digite ao menos 1 mensagem do disparo.");
+  if (!messageBlocks.length) {
+    await showAlert("Adicione ao menos 1 bloco de mensagem no disparo.");
     return;
   }
 
@@ -6325,7 +6982,9 @@ bulkCreateFormEl.addEventListener("submit", async (event) => {
         interval_min_seconds: intervalMinSeconds,
         interval_max_seconds: safeIntervalMax,
         message,
-        messages,
+        messages: textMessages,
+        message_blocks: messageBlocks,
+        enable_ai_agent: Boolean(bulkEnableAiAgentEl?.checked),
       }),
     });
 
@@ -7429,6 +8088,7 @@ async function boot() {
   renderServiceTabs();
   renderBulkContacts();
   renderBulkMessagesBuilder();
+  renderBulkAiToggleState();
   hideBulkImportProgress();
   applyConnectedProfileAvatar();
   const micEl = composerActionBtnEl.querySelector(".icon-mic");

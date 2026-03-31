@@ -1,13 +1,25 @@
+import { spawn } from "node:child_process";
+import ffmpegPath from "ffmpeg-static";
 import { pool } from "../db/pool";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { requireActiveWhatsAppAccount } from "./whatsapp-account-context.service";
-import { getCurrentWhatsAppAccount, sendWhatsAppText } from "./whatsapp.service";
+import { saveMediaBuffer } from "./media.service";
+import { getCurrentWhatsAppAccount, sendWhatsAppAudio, sendWhatsAppMedia, sendWhatsAppText } from "./whatsapp.service";
 import { normalizePhone } from "../utils/whatsapp";
 
 interface ContactInput {
   name?: string;
   phone: string;
+}
+
+interface BulkMessageBlockInput {
+  type?: string;
+  text?: string;
+  file_base64?: string;
+  mimetype?: string;
+  file_name?: string;
+  caption?: string;
 }
 
 interface CreateBulkJobInput {
@@ -16,9 +28,16 @@ interface CreateBulkJobInput {
   contacts: ContactInput[];
   message: string;
   messages?: string[];
+  messageBlocks?: BulkMessageBlockInput[];
   intervalMinSeconds: number;
   intervalMaxSeconds: number;
+  enableAiAgent?: boolean;
 }
+
+type BulkMessageBlock =
+  | { type: "text"; text: string }
+  | { type: "image" | "video"; file_base64: string; mimetype: string; file_name: string; caption: string }
+  | { type: "audio"; file_base64: string; mimetype: string; file_name: string };
 
 type JobStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
@@ -137,6 +156,119 @@ function normalizeMessageTemplates(message: string, messages?: string[]): string
   return normalized;
 }
 
+function normalizeBulkMessageBlocks(input?: BulkMessageBlockInput[] | null, fallbackMessage?: string, fallbackMessages?: string[]): BulkMessageBlock[] {
+  const normalizedBlocks: BulkMessageBlock[] = [];
+  for (const raw of Array.isArray(input) ? input : []) {
+    const type = String(raw?.type || "").trim().toLowerCase();
+    if (type === "text") {
+      const text = String(raw?.text || "").trim();
+      if (text) {
+        normalizedBlocks.push({ type: "text", text });
+      }
+      continue;
+    }
+
+    if (type === "image" || type === "video") {
+      const fileBase64 = String(raw?.file_base64 || "").trim();
+      const mimetype = String(raw?.mimetype || "").trim();
+      if (!fileBase64 || !mimetype) continue;
+      normalizedBlocks.push({
+        type,
+        file_base64: fileBase64,
+        mimetype,
+        file_name: String(raw?.file_name || "arquivo").trim() || "arquivo",
+        caption: String(raw?.caption || "").trim(),
+      });
+      continue;
+    }
+
+    if (type === "audio") {
+      const fileBase64 = String(raw?.file_base64 || "").trim();
+      const mimetype = String(raw?.mimetype || "").trim() || "audio/ogg";
+      if (!fileBase64) continue;
+      normalizedBlocks.push({
+        type: "audio",
+        file_base64: fileBase64,
+        mimetype,
+        file_name: String(raw?.file_name || "audio").trim() || "audio",
+      });
+    }
+  }
+
+  if (normalizedBlocks.length > 0) {
+    return normalizedBlocks;
+  }
+
+  return normalizeMessageTemplates(fallbackMessage || "", fallbackMessages || []).map((text) => ({
+    type: "text",
+    text,
+  }));
+}
+
+function extractMessageBlocks(metadata: unknown, fallbackMessage: string): BulkMessageBlock[] {
+  const payload = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>) : {};
+  const rawBlocks = Array.isArray(payload.bulk_message_blocks) ? (payload.bulk_message_blocks as BulkMessageBlockInput[]) : [];
+  const rawMessages = Array.isArray(payload.bulk_messages) ? (payload.bulk_messages as string[]) : [];
+  return normalizeBulkMessageBlocks(rawBlocks, fallbackMessage, rawMessages);
+}
+
+function summarizeBulkMessageBlock(block: BulkMessageBlock): string {
+  if (block.type === "text") return block.text;
+  if (block.type === "audio") return "[audio]";
+  if (block.type === "video") return block.caption || "[video]";
+  return block.caption || "[imagem]";
+}
+
+async function transcodeToOggOpus(inputBuffer: Buffer): Promise<Buffer> {
+  const ffmpegBin = ffmpegPath as string | null;
+  if (!ffmpegBin) {
+    return inputBuffer;
+  }
+
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(
+      ffmpegBin,
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        "pipe:0",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "48k",
+        "-vbr",
+        "on",
+        "-compression_level",
+        "10",
+        "-f",
+        "ogg",
+        "pipe:1",
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const chunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+
+    ffmpeg.stdout.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    ffmpeg.stderr.on("data", (chunk: Buffer) => errChunks.push(Buffer.from(chunk)));
+    ffmpeg.on("error", (error: Error) => reject(error));
+    ffmpeg.on("close", (code: number | null) => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks));
+        return;
+      }
+      const details = Buffer.concat(errChunks).toString("utf8") || `ffmpeg exit code ${code}`;
+      reject(new Error(`Falha ao converter audio: ${details}`));
+    });
+
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
+}
+
 function extractMessageTemplates(metadata: unknown, fallbackMessage: string): string[] {
   const payload = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>) : {};
   const fromMetadata = Array.isArray(payload.bulk_messages)
@@ -215,8 +347,8 @@ async function processJob(jobId: string): Promise<void> {
       if (job.status === "stopped" || job.status === "failed" || job.status === "completed") {
         break;
       }
-      const messageTemplates = extractMessageTemplates(job.metadata, job.message_text);
-      if (!messageTemplates.length) {
+      const messageBlocks = extractMessageBlocks(job.metadata, job.message_text);
+      if (!messageBlocks.length) {
         throw new Error("Nenhuma mensagem valida encontrada para o disparo.");
       }
 
@@ -245,31 +377,134 @@ async function processJob(jobId: string): Promise<void> {
           throw new Error("Conta WhatsApp conectada nao corresponde ao disparo.");
         }
 
-        const selectedTemplate = pickRandomMessageTemplate(messageTemplates);
-        const renderedMessage = renderTemplateMessage(selectedTemplate, item.contact_name || null, item.phone);
-        const waResponse = await sendWhatsAppText({
-          to: item.phone,
-          message: renderedMessage,
-          accountJid: job.account_wa_jid,
-        });
+        let lastExternalMessageId: string | null = null;
+        for (let index = 0; index < messageBlocks.length; index += 1) {
+          const block = messageBlocks[index];
+          if (block.type === "text") {
+            const renderedMessage = renderTemplateMessage(block.text, item.contact_name || null, item.phone);
+            const waResponse = await sendWhatsAppText({
+              to: item.phone,
+              message: renderedMessage,
+              accountJid: job.account_wa_jid,
+            });
+            lastExternalMessageId = waResponse?.key?.id || null;
+            await saveOutboundMessage({
+              accountJid: job.account_wa_jid,
+              accountDisplayName: connected.displayName,
+              phone: item.phone,
+              body: renderedMessage,
+              messageType: "text",
+              status: "sent",
+              externalMessageId: lastExternalMessageId,
+              payload: waResponse,
+              metadata: {
+                bulk_dispatch: true,
+                bulk_contact_name: item.contact_name || null,
+                bulk_original_phone: item.phone,
+                bulk_used_phone: item.phone,
+                bulk_enable_ai_agent: Boolean(job.metadata?.bulk_enable_ai_agent),
+                bulk_campaign_context: String(job.metadata?.bulk_campaign_context || "").trim() || renderedMessage,
+                bulk_message_index: index,
+                bulk_message_type: "text",
+              },
+              isBulkDispatch: true,
+            });
+          } else if (block.type === "audio") {
+            const commaIndex = block.file_base64.indexOf(",");
+            const base64 = commaIndex >= 0 ? block.file_base64.slice(commaIndex + 1) : block.file_base64;
+            const sourceBuffer = Buffer.from(base64, "base64");
+            const audioBuffer = await transcodeToOggOpus(sourceBuffer);
+            const mimetype = "audio/ogg; codecs=opus";
+            const waResponse = await sendWhatsAppAudio({
+              to: item.phone,
+              audioBuffer,
+              mimetype,
+              ptt: true,
+              accountJid: job.account_wa_jid,
+            });
+            lastExternalMessageId = waResponse?.key?.id || null;
+            const audioUrl = await saveMediaBuffer({
+              buffer: audioBuffer,
+              mimeType: mimetype,
+              externalMessageId: lastExternalMessageId,
+              fileName: block.file_name || "audio",
+            });
+            await saveOutboundMessage({
+              accountJid: job.account_wa_jid,
+              accountDisplayName: connected.displayName,
+              phone: item.phone,
+              body: "[audio]",
+              messageType: "audioMessage",
+              status: "sent",
+              externalMessageId: lastExternalMessageId,
+              payload: waResponse,
+              metadata: {
+                bulk_dispatch: true,
+                bulk_contact_name: item.contact_name || null,
+                bulk_original_phone: item.phone,
+                bulk_used_phone: item.phone,
+                bulk_enable_ai_agent: Boolean(job.metadata?.bulk_enable_ai_agent),
+                bulk_campaign_context: String(job.metadata?.bulk_campaign_context || "").trim() || "[audio]",
+                bulk_message_index: index,
+                bulk_message_type: "audio",
+                audio_url: audioUrl,
+                file_name: block.file_name || null,
+              },
+              isBulkDispatch: true,
+            });
+          } else {
+            const commaIndex = block.file_base64.indexOf(",");
+            const base64 = commaIndex >= 0 ? block.file_base64.slice(commaIndex + 1) : block.file_base64;
+            const mediaBuffer = Buffer.from(base64, "base64");
+            const renderedCaption = renderTemplateMessage(block.caption || "", item.contact_name || null, item.phone);
+            const waResponse = await sendWhatsAppMedia({
+              to: item.phone,
+              mediaBuffer,
+              mimetype: block.mimetype,
+              fileName: block.file_name,
+              caption: renderedCaption,
+              accountJid: job.account_wa_jid,
+            });
+            lastExternalMessageId = waResponse?.key?.id || null;
+            const mediaUrl = await saveMediaBuffer({
+              buffer: mediaBuffer,
+              mimeType: block.mimetype,
+              externalMessageId: lastExternalMessageId,
+              fileName: block.file_name,
+            });
+            const bodyText = block.type === "video" ? renderedCaption || "[video]" : renderedCaption || "[imagem]";
+            await saveOutboundMessage({
+              accountJid: job.account_wa_jid,
+              accountDisplayName: connected.displayName,
+              phone: item.phone,
+              body: bodyText,
+              messageType: block.type === "video" ? "videoMessage" : "imageMessage",
+              status: "sent",
+              externalMessageId: lastExternalMessageId,
+              payload: waResponse,
+              metadata: {
+                bulk_dispatch: true,
+                bulk_contact_name: item.contact_name || null,
+                bulk_original_phone: item.phone,
+                bulk_used_phone: item.phone,
+                bulk_enable_ai_agent: Boolean(job.metadata?.bulk_enable_ai_agent),
+                bulk_campaign_context: String(job.metadata?.bulk_campaign_context || "").trim() || bodyText,
+                bulk_message_index: index,
+                bulk_message_type: block.type,
+                image_preview_url: block.type === "image" ? mediaUrl : null,
+                video_url: block.type === "video" ? mediaUrl : null,
+                file_url: mediaUrl,
+                file_name: block.file_name || null,
+                mime_type: block.mimetype || null,
+              },
+              isBulkDispatch: true,
+            });
+          }
 
-        await saveOutboundMessage({
-          accountJid: job.account_wa_jid,
-          accountDisplayName: connected.displayName,
-          phone: item.phone,
-          body: renderedMessage,
-          messageType: "text",
-          status: "sent",
-          externalMessageId: waResponse?.key?.id || null,
-          payload: waResponse,
-          metadata: {
-            bulk_dispatch: true,
-            bulk_contact_name: item.contact_name || null,
-            bulk_original_phone: item.phone,
-            bulk_used_phone: item.phone,
-          },
-          isBulkDispatch: true,
-        });
+          if (index < messageBlocks.length - 1) {
+            await delay(1200);
+          }
+        }
 
         await pool.query(
           `
@@ -283,7 +518,7 @@ async function processJob(jobId: string): Promise<void> {
             updated_at = NOW()
           WHERE id = $1
           `,
-          [item.id, waResponse?.key?.id || null],
+          [item.id, lastExternalMessageId],
         );
 
         await pool.query(
@@ -337,11 +572,11 @@ async function processJob(jobId: string): Promise<void> {
 
 export async function createBulkDispatchJob(input: CreateBulkJobInput): Promise<{ jobId: string; total: number }> {
   await ensureBulkDispatchSchema();
-  const messageTemplates = normalizeMessageTemplates(input.message, input.messages);
-  const message = messageTemplates[0] || "";
+  const messageBlocks = normalizeBulkMessageBlocks(input.messageBlocks, input.message, input.messages);
+  const message = summarizeBulkMessageBlock(messageBlocks[0]) || "";
   const intervalMinSeconds = Math.floor(Number(input.intervalMinSeconds || 0));
   const intervalMaxSeconds = Math.floor(Number(input.intervalMaxSeconds || 0));
-  if (!message) {
+  if (!messageBlocks.length) {
     throw new Error("Ao menos 1 mensagem obrigatoria.");
   }
   if (
@@ -418,7 +653,10 @@ export async function createBulkDispatchJob(input: CreateBulkJobInput): Promise<
         intervalMinSeconds,
         safeIntervalMaxSeconds,
         JSON.stringify({
-          bulk_messages: messageTemplates,
+          bulk_messages: messageBlocks.filter((item) => item.type === "text").map((item: any) => item.text).filter(Boolean),
+          bulk_message_blocks: messageBlocks,
+          bulk_enable_ai_agent: Boolean(input.enableAiAgent),
+          bulk_campaign_context: messageBlocks.map((item) => summarizeBulkMessageBlock(item)).join("\n\n---\n\n"),
         }),
         contacts.length,
       ],

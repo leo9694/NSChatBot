@@ -126,20 +126,40 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
 
   const markConversationBulkInitiated = async (conversationId: string): Promise<void> => {
     if (!input.isBulkDispatch) return;
+    const enableAiAgent = Boolean(cleanMetadata.bulk_enable_ai_agent);
+    const campaignContext = String(cleanMetadata.bulk_campaign_context || "").trim() || null;
     await pool.query(
       `
       UPDATE conversations
       SET
-        metadata = jsonb_set(
-          jsonb_set(COALESCE(metadata, '{}'::jsonb), '{bulk_initiated}', 'true'::jsonb, true),
-          '{bulk_started_at}',
-          to_jsonb(NOW()),
-          true
-        ) - 'bulk_replied' - 'bulk_replied_at',
+        metadata = jsonb_strip_nulls(
+          (
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(
+                  COALESCE(metadata, '{}'::jsonb),
+                  '{bulk_initiated}',
+                  'true'::jsonb,
+                  true
+                ),
+                '{ai_agent_enabled}',
+                CASE
+                  WHEN $2::boolean THEN 'true'::jsonb
+                  ELSE COALESCE(metadata->'ai_agent_enabled', 'false'::jsonb)
+                END,
+                true
+              ),
+              '{bulk_started_at}',
+              to_jsonb(NOW()),
+              true
+            )
+            || CASE WHEN $3::text IS NOT NULL THEN jsonb_build_object('bulk_campaign_context', $3::text) ELSE '{}'::jsonb END
+          ) - 'bulk_replied' - 'bulk_replied_at'
+        ),
         updated_at = NOW()
       WHERE id = $1
       `,
-      [conversationId],
+      [conversationId, enableAiAgent, campaignContext],
     );
   };
 
@@ -265,38 +285,6 @@ export async function saveOutboundMessage(input: SaveOutboundMessageInput): Prom
   );
 
   if (inserted.rows.length > 0) {
-    const inboundAt = input.sentAt || new Date();
-    // If this conversation came from bulk dispatch, mark that customer has replied.
-    await pool.query(
-      `
-      UPDATE conversations
-      SET
-        metadata = jsonb_set(
-          jsonb_set(COALESCE(metadata, '{}'::jsonb), '{bulk_replied}', 'true'::jsonb, true),
-          '{bulk_replied_at}',
-          to_jsonb($2::timestamptz),
-          true
-        ),
-        service_status = CASE
-          WHEN assigned_user_id IS NULL
-            AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
-            AND service_status = 'in_progress'
-            THEN 'in_progress'
-          WHEN assigned_user_id IS NULL THEN 'pending'
-          ELSE service_status
-        END,
-        finalized_at = CASE
-          WHEN assigned_user_id IS NULL THEN NULL
-          ELSE finalized_at
-        END,
-        updated_at = NOW()
-      WHERE id = $1
-        AND COALESCE(metadata->>'bulk_initiated', 'false') = 'true'
-        AND NULLIF(metadata->>'bulk_started_at', '') IS NOT NULL
-        AND $2::timestamptz >= (metadata->>'bulk_started_at')::timestamptz
-      `,
-      [conversation.id, inboundAt],
-    );
     publishMessageSaved({
       accountJid: input.accountJid,
       conversationId: conversation.id,
@@ -446,6 +434,37 @@ export async function saveInboundMessage(input: SaveInboundMessageInput): Promis
   );
 
   if (inserted.rows.length > 0) {
+    const inboundAt = input.sentAt || new Date();
+    await pool.query(
+      `
+      UPDATE conversations
+      SET
+        metadata = jsonb_set(
+          jsonb_set(COALESCE(metadata, '{}'::jsonb), '{bulk_replied}', 'true'::jsonb, true),
+          '{bulk_replied_at}',
+          to_jsonb($2::timestamptz),
+          true
+        ),
+        service_status = CASE
+          WHEN assigned_user_id IS NULL
+            AND COALESCE((metadata->>'ai_agent_enabled')::boolean, false) = true
+            AND service_status = 'in_progress'
+            THEN 'in_progress'
+          WHEN assigned_user_id IS NULL THEN 'pending'
+          ELSE service_status
+        END,
+        finalized_at = CASE
+          WHEN assigned_user_id IS NULL THEN NULL
+          ELSE finalized_at
+        END,
+        updated_at = NOW()
+      WHERE id = $1
+        AND COALESCE(metadata->>'bulk_initiated', 'false') = 'true'
+        AND NULLIF(metadata->>'bulk_started_at', '') IS NOT NULL
+        AND $2::timestamptz >= (metadata->>'bulk_started_at')::timestamptz
+      `,
+      [conversation.id, inboundAt],
+    );
     publishMessageSaved({
       accountJid: input.accountJid,
       conversationId: conversation.id,

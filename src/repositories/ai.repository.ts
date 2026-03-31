@@ -692,6 +692,11 @@ export async function getConversationAiContext(conversationId: string): Promise<
       c.service_status,
       c.assigned_user_id,
       COALESCE((c.metadata->>'ai_agent_enabled')::boolean, false) AS ai_agent_enabled,
+      COALESCE((c.metadata->>'bulk_initiated')::boolean, false) AS bulk_initiated,
+      COALESCE((c.metadata->>'bulk_replied')::boolean, false) AS bulk_replied,
+      NULLIF(c.metadata->>'bulk_started_at', '') AS bulk_started_at,
+      NULLIF(c.metadata->>'bulk_replied_at', '') AS bulk_replied_at,
+      NULLIF(c.metadata->>'bulk_campaign_context', '') AS bulk_campaign_context,
       wa.wa_jid AS account_wa_jid,
       mem.memory_summary,
       mem.customer_profile,
@@ -947,21 +952,32 @@ export async function updatePendingAiSchedule(input: {
   notes?: string | null;
 }): Promise<AiScheduleRow | null> {
   await ensureAiSchema();
-  const resolvedAccountId =
-    String(input.accountId || "").trim() ||
-    String(
-      (
-        await pool.query<{ account_id: string | null }>(
+  const existingScheduleRow = await pool.query<{ account_id: string | null; conversation_id: string | null }>(
+    `
+    SELECT account_id, conversation_id
+    FROM ai_service_schedules
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [input.scheduleId],
+  );
+  const existingSchedule = existingScheduleRow.rows[0] || null;
+  const conversationAccountRow =
+    existingSchedule?.conversation_id
+      ? await pool.query<{ account_id: string | null }>(
           `
           SELECT account_id
-          FROM ai_service_schedules
+          FROM conversations
           WHERE id = $1
           LIMIT 1
           `,
-          [input.scheduleId],
+          [existingSchedule.conversation_id],
         )
-      ).rows[0]?.account_id || "",
-    ).trim() ||
+      : { rows: [] as Array<{ account_id: string | null }> };
+  const resolvedAccountId =
+    String(input.accountId || "").trim() ||
+    String(existingSchedule?.account_id || "").trim() ||
+    String(conversationAccountRow.rows[0]?.account_id || "").trim() ||
     null;
 
   await ensureScheduleWithinAccountHours({
@@ -990,13 +1006,14 @@ export async function updatePendingAiSchedule(input: {
     `
     UPDATE ai_service_schedules
     SET
-      customer_name = $2,
-      service_product_id = $3,
-      service_name = $4,
-      scheduled_date = $5::date,
-      scheduled_time = $6,
-      duration_minutes = $7,
-      notes = $8,
+      account_id = COALESCE($2, account_id),
+      customer_name = $3,
+      service_product_id = $4,
+      service_name = $5,
+      scheduled_date = $6::date,
+      scheduled_time = $7,
+      duration_minutes = $8,
+      notes = $9,
       customer_confirmed_at = NOW(),
       updated_at = NOW()
     WHERE id = $1
@@ -1026,6 +1043,7 @@ export async function updatePendingAiSchedule(input: {
     `,
     [
       input.scheduleId,
+      resolvedAccountId,
       input.customerName || null,
       input.serviceProductId || null,
       input.serviceName,
@@ -1056,6 +1074,21 @@ export async function rescheduleAiSchedule(input: {
   const resolvedAccountId =
     String(input.accountId || "").trim() ||
     String(existing.account_id || "").trim() ||
+    String(
+      (
+        existing.conversation_id
+          ? await pool.query<{ account_id: string | null }>(
+              `
+              SELECT account_id
+              FROM conversations
+              WHERE id = $1
+              LIMIT 1
+              `,
+              [existing.conversation_id],
+            )
+          : { rows: [] as Array<{ account_id: string | null }> }
+      ).rows[0]?.account_id || "",
+    ).trim() ||
     null;
 
   await ensureScheduleWithinAccountHours({
@@ -1085,27 +1118,28 @@ export async function rescheduleAiSchedule(input: {
     `
     UPDATE ai_service_schedules
     SET
-      scheduled_date = $2::date,
-      scheduled_time = $3,
-      duration_minutes = $4,
+      account_id = COALESCE($2, account_id),
+      scheduled_date = $3::date,
+      scheduled_time = $4,
+      duration_minutes = $5,
       status = CASE
-        WHEN $5::boolean = true AND status = 'confirmed' THEN 'pending_confirmation'
+        WHEN $6::boolean = true AND status = 'confirmed' THEN 'pending_confirmation'
         ELSE status
       END,
       customer_confirmed_at = CASE
-        WHEN $5::boolean = true AND status = 'confirmed' THEN NOW()
+        WHEN $6::boolean = true AND status = 'confirmed' THEN NOW()
         ELSE customer_confirmed_at
       END,
       confirmed_at = CASE
-        WHEN $5::boolean = true AND status = 'confirmed' THEN NULL
+        WHEN $6::boolean = true AND status = 'confirmed' THEN NULL
         ELSE confirmed_at
       END,
       confirmed_by_user_id = CASE
-        WHEN $5::boolean = true AND status = 'confirmed' THEN NULL
+        WHEN $6::boolean = true AND status = 'confirmed' THEN NULL
         ELSE confirmed_by_user_id
       END,
       confirmation_note = CASE
-        WHEN $5::boolean = true AND status = 'confirmed' THEN NULL
+        WHEN $6::boolean = true AND status = 'confirmed' THEN NULL
         ELSE confirmation_note
       END,
       reminder_sent_at = NULL,
@@ -1141,6 +1175,7 @@ export async function rescheduleAiSchedule(input: {
     `,
     [
       input.scheduleId,
+      resolvedAccountId,
       input.scheduledDate,
       input.scheduledTime,
       Number.isFinite(Number(input.durationMinutes))
@@ -1167,14 +1202,27 @@ export async function createAiSchedule(input: {
   notes?: string | null;
 }): Promise<AiScheduleRow> {
   await ensureAiSchema();
+  const conversationAccountRow = await pool.query<{ account_id: string | null }>(
+    `
+    SELECT account_id
+    FROM conversations
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [input.conversationId],
+  );
+  const resolvedAccountId =
+    String(input.accountId || "").trim() ||
+    String(conversationAccountRow.rows[0]?.account_id || "").trim() ||
+    null;
   await ensureScheduleWithinAccountHours({
-    accountId: input.accountId || null,
+    accountId: resolvedAccountId,
     scheduledDate: input.scheduledDate,
     scheduledTime: input.scheduledTime,
     durationMinutes: input.durationMinutes,
   });
   const conflict = await findAiScheduleConflict({
-    accountId: input.accountId || null,
+    accountId: resolvedAccountId,
     scheduledDate: input.scheduledDate,
     scheduledTime: input.scheduledTime,
     durationMinutes: input.durationMinutes,
@@ -1267,7 +1315,7 @@ export async function createAiSchedule(input: {
       updated_at::text
     `,
     [
-      input.accountId,
+      resolvedAccountId,
       input.conversationId,
       input.customerPhone || null,
       input.customerName || null,
@@ -1292,7 +1340,7 @@ export async function listAiSchedules(
     `
     SELECT
       s.id,
-      s.account_id,
+      COALESCE(s.account_id, c.account_id) AS account_id,
       s.conversation_id,
       s.customer_phone,
       s.customer_name,
@@ -1318,8 +1366,8 @@ export async function listAiSchedules(
       wa.phone AS account_phone
     FROM ai_service_schedules s
     LEFT JOIN conversations c ON c.id = s.conversation_id
-    LEFT JOIN whatsapp_accounts wa ON wa.id = s.account_id
-    WHERE ($1::uuid IS NULL OR s.account_id = $1)
+    LEFT JOIN whatsapp_accounts wa ON wa.id = COALESCE(s.account_id, c.account_id)
+    WHERE ($1::uuid IS NULL OR COALESCE(s.account_id, c.account_id) = $1)
       AND ($2::uuid IS NULL OR wa.company_id = $2)
       AND s.scheduled_date >= to_date($3 || '-01', 'YYYY-MM-DD')
       AND s.scheduled_date < (to_date($3 || '-01', 'YYYY-MM-DD') + INTERVAL '1 month')
@@ -1337,7 +1385,7 @@ export async function getAiScheduleById(scheduleId: string): Promise<AiScheduleR
     `
     SELECT
       s.id,
-      s.account_id,
+      COALESCE(s.account_id, c.account_id) AS account_id,
       s.conversation_id,
       s.customer_phone,
       s.customer_name,
@@ -1363,7 +1411,7 @@ export async function getAiScheduleById(scheduleId: string): Promise<AiScheduleR
       wa.phone AS account_phone
     FROM ai_service_schedules s
     LEFT JOIN conversations c ON c.id = s.conversation_id
-    LEFT JOIN whatsapp_accounts wa ON wa.id = s.account_id
+    LEFT JOIN whatsapp_accounts wa ON wa.id = COALESCE(s.account_id, c.account_id)
     WHERE s.id = $1
     LIMIT 1
     `,

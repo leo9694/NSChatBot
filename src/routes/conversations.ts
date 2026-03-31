@@ -211,6 +211,39 @@ router.get("/", async (req, res) => {
   });
 });
 
+router.get("/open-for-bulk", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const limit = Math.min(parsePositiveInt(req.query.limit, 200), 500);
+
+  const result = await pool.query(
+    `
+    SELECT
+      c.id,
+      c.phone,
+      c.display_name,
+      c.service_status,
+      COALESCE(last_msg.sent_at, last_msg.created_at, c.last_message_at, c.updated_at) AS last_message_at
+    FROM conversations c
+    LEFT JOIN whatsapp_accounts wa ON wa.id = c.account_id
+    LEFT JOIN LATERAL (
+      SELECT m.body, m.created_at, m.sent_at
+      FROM messages m
+      WHERE m.conversation_id = c.id
+        AND m.message_type <> 'protocolMessage'
+      ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.created_at DESC
+      LIMIT 1
+    ) last_msg ON true
+    WHERE ($1::uuid IS NULL OR wa.company_id = $1)
+      AND COALESCE(c.phone, '') <> ''
+    ORDER BY COALESCE(last_msg.sent_at, last_msg.created_at, c.last_message_at, c.updated_at) DESC NULLS LAST, c.created_at DESC
+    LIMIT $2
+    `,
+    [authReq.authUser?.company_id || null, limit],
+  );
+
+  return res.status(200).json({ items: result.rows });
+});
+
 router.get("/summary", async (req, res) => {
   const authReq = req as AuthRequest;
   const accountJid = (req.query.account_jid as string | undefined)?.trim() || "";

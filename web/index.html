@@ -232,48 +232,129 @@
           </header>
           <section class="bulk-create-body">
             <div class="bulk-card">
-              <h3>Configurar envio</h3>
+              <div class="bulk-create-hero">
+                <div class="bulk-create-hero-copy">
+                  <span class="bulk-section-kicker">Campanha</span>
+                  <h3>Configurar envio</h3>
+                  <p>Monte o disparo por etapas: escolha os destinatários, ajuste o ritmo de envio e crie a sequência de mensagens que cada chat vai receber.</p>
+                </div>
+                <div class="bulk-create-hero-stats">
+                  <div class="bulk-hero-stat">
+                    <strong>1</strong>
+                    <span>Escolha contatos por Excel ou chats abertos</span>
+                  </div>
+                  <div class="bulk-hero-stat">
+                    <strong>2</strong>
+                    <span>Monte blocos com texto, imagem, vídeo e áudio</span>
+                  </div>
+                  <div class="bulk-hero-stat">
+                    <strong>3</strong>
+                    <span>Ative o agente para continuar o atendimento</span>
+                  </div>
+                </div>
+              </div>
               <form id="bulkCreateForm" class="bulk-form" novalidate>
-                <label>
-                  Lista de contatos (Excel .xlsx)
-                  <input id="bulkFile" type="file" accept=".xlsx,.xls,.csv" required />
-                  <small>Colunas aceitas: nome/name e telefone/phone/número.</small>
-                </label>
-                <label>
-                  Intervalo inicial (segundos)
-                  <input id="bulkIntervalMin" type="number" max="3600" value="40" required />
-                </label>
-                <label>
-                  Intervalo final (segundos)
-                  <input id="bulkIntervalMax" type="number" max="3600" value="60" required />
-                </label>
-                <div class="bulk-messages-block">
-                  <div class="bulk-messages-head">
-                    <span>Mensagens do disparo</span>
-                    <button id="bulkAddMessageBtn" type="button" class="btn-secondary">+ Adicionar mensagem</button>
+                <section class="bulk-form-section">
+                  <div class="bulk-form-section-head">
+                    <span class="bulk-section-kicker">Etapa 1</span>
+                    <h4>Escolha os destinatários</h4>
+                    <p>Você pode importar uma planilha ou selecionar os chats já abertos na conta ativa.</p>
                   </div>
-                  <div id="bulkMessagesContainer" class="bulk-messages-container">
-                    <label class="bulk-message-item">
-                      Mensagem 1
-                      <textarea class="bulk-message-input" rows="4" placeholder="Digite a mensagem do disparo"></textarea>
+                  <div class="bulk-sources-grid">
+                    <label class="bulk-source-card">
+                      <span class="bulk-source-title">Lista de contatos (Excel .xlsx)</span>
+                      <input id="bulkFile" type="file" accept=".xlsx,.xls,.csv" />
+                      <small>Colunas aceitas: nome/name e telefone/phone/número.</small>
                     </label>
-                  </div>
-                  <small>Variaveis: {{nome}}, {{telefone}}</small>
-                </div>
-                <div class="bulk-meta">
-                  <span id="bulkContactsCount">0 contatos carregados</span>
-                </div>
-                <button class="btn-primary" type="submit">Iniciar disparo</button>
-                <div class="bulk-contacts-panel">
-                  <div class="bulk-contacts-toolbar">
-                    <input id="bulkContactsSearch" type="text" placeholder="Buscar contato por nome ou número" />
-                    <div class="bulk-contacts-actions">
-                      <button id="bulkSelectAllBtn" type="button" class="btn-secondary">Marcar todos</button>
-                      <button id="bulkClearAllBtn" type="button" class="btn-secondary">Desmarcar</button>
+                    <div class="bulk-source-block bulk-source-card">
+                      <div class="bulk-source-head">
+                        <span class="bulk-source-title">Selecionar chats da empresa</span>
+                        <button id="bulkLoadOpenChatsBtn" type="button" class="btn-secondary">Selecionar chats</button>
+                      </div>
+                      <small>Carrega todos os chats cadastrados nesta empresa, incluindo pendentes, em atendimento e finalizados.</small>
                     </div>
                   </div>
-                  <div id="bulkContactsList" class="bulk-contacts-list"></div>
-                </div>
+                  <div id="bulkContactsPanel" class="bulk-contacts-panel" hidden>
+                    <div class="bulk-contacts-toolbar">
+                      <input id="bulkContactsSearch" type="text" placeholder="Buscar contato por nome ou número" />
+                      <div class="bulk-contacts-actions">
+                        <button id="bulkSelectAllBtn" type="button" class="btn-secondary">Marcar todos</button>
+                        <button id="bulkClearAllBtn" type="button" class="btn-secondary">Desmarcar</button>
+                      </div>
+                    </div>
+                    <div id="bulkContactsList" class="bulk-contacts-list"></div>
+                    <div id="bulkContactsPagination" class="bulk-contacts-pagination" hidden></div>
+                  </div>
+                </section>
+
+                <section class="bulk-form-section">
+                  <div class="bulk-form-section-head">
+                    <span class="bulk-section-kicker">Etapa 2</span>
+                    <h4>Defina o ritmo do disparo</h4>
+                    <p>Use um intervalo seguro para reduzir risco de bloqueio e deixar o envio mais natural.</p>
+                  </div>
+                  <div class="bulk-timing-grid">
+                    <label class="bulk-inline-field">
+                      <span>Intervalo inicial (segundos)</span>
+                      <input id="bulkIntervalMin" type="number" max="3600" value="40" required />
+                    </label>
+                    <label class="bulk-inline-field">
+                      <span>Intervalo final (segundos)</span>
+                      <input id="bulkIntervalMax" type="number" max="3600" value="60" required />
+                    </label>
+                  </div>
+                </section>
+
+                <section class="bulk-form-section bulk-form-section-composer">
+                  <div class="bulk-form-section-head">
+                    <span class="bulk-section-kicker">Etapa 3</span>
+                    <h4>Monte a sequência de mensagens</h4>
+                    <p>Cada bloco representa uma etapa do envio para o mesmo chat. Dentro dele você pode combinar texto e várias mídias.</p>
+                  </div>
+                  <div class="bulk-messages-block">
+                    <div class="bulk-messages-head">
+                      <span>Mensagens do disparo</span>
+                      <button id="bulkAddMessageBtn" type="button" class="btn-secondary">+ Adicionar bloco</button>
+                    </div>
+                    <div id="bulkMessagesContainer" class="bulk-messages-container">
+                      <label class="bulk-message-item">
+                        Mensagem 1
+                        <textarea class="bulk-message-input" rows="4" placeholder="Digite a mensagem do disparo"></textarea>
+                      </label>
+                    </div>
+                    <small>Voce pode combinar texto, imagem, video e audio no mesmo disparo. Variaveis em texto/legenda: {{nome}}, {{telefone}}</small>
+                  </div>
+                </section>
+
+                <section class="bulk-form-section">
+                  <div class="bulk-form-section-head">
+                    <span class="bulk-section-kicker">Etapa 4</span>
+                    <h4>Revisar e iniciar</h4>
+                    <p>Confirme a quantidade de contatos e escolha se o agente deve assumir os chats iniciados por esse disparo.</p>
+                  </div>
+                  <div class="bulk-review-panel">
+                    <div class="bulk-meta">
+                      <input id="bulkEnableAiAgent" type="checkbox" hidden />
+                      <button id="bulkEnableAiAgentBtn" type="button" class="bulk-ai-toggle-button" aria-pressed="false">
+                        <span class="bulk-ai-toggle-icon">
+                          <i class="bi bi-robot"></i>
+                        </span>
+                        <span class="bulk-ai-toggle-copy">
+                          <strong>Agente IA no pós-disparo</strong>
+                          <small>Quando ligado, o agente assume automaticamente os chats iniciados por esta campanha.</small>
+                        </span>
+                        <span class="bulk-ai-toggle-switch" aria-hidden="true">
+                          <span class="bulk-ai-toggle-track">
+                            <span class="bulk-ai-toggle-thumb"></span>
+                          </span>
+                          <span id="bulkEnableAiAgentState" class="bulk-ai-toggle-state">Desligado</span>
+                        </span>
+                      </button>
+                      <span id="bulkContactsCount">0 contatos carregados</span>
+                    </div>
+                    <button class="btn-primary bulk-submit-btn" type="submit">Iniciar disparo</button>
+                  </div>
+                </section>
               </form>
             </div>
           </section>

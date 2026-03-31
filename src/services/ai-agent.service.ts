@@ -6,6 +6,7 @@ import {
   findAiScheduleConflict,
   getAiAccountSettings,
   getAiOrderById,
+  getAiScheduleById,
   getConversationAiContext,
   listActiveAiSchedulesForConversation,
   listAiSchedulesForDate,
@@ -1489,6 +1490,28 @@ async function verifyPersistedOrderId(
   }
 }
 
+async function verifyPersistedScheduleId(
+  scheduleId: string | null | undefined,
+  conversationId?: string | null,
+): Promise<string | null> {
+  const normalizedId = String(scheduleId || "").trim();
+  if (!normalizedId) return null;
+  try {
+    const persisted = await getAiScheduleById(normalizedId);
+    if (!persisted?.id) return null;
+    if (conversationId && String(persisted.conversation_id || "").trim() !== String(conversationId || "").trim()) {
+      return null;
+    }
+    if (String(persisted.status || "").trim() !== "pending_confirmation") {
+      return null;
+    }
+    return String(persisted.id || "").trim() || null;
+  } catch (error) {
+    console.error("Falha ao verificar agendamento persistido no banco:", error);
+    return null;
+  }
+}
+
 function buildScheduleFallbackReply(input: {
   mood: "amigavel" | "informal" | "formal";
   updatedPendingSchedule: boolean;
@@ -1521,6 +1544,16 @@ function buildScheduleFallbackReply(input: {
     return "Perfeito. Seu agendamento foi registrado e ficou pendente de confirmação interna. Assim que houver a confirmação, informarei por aqui.";
   }
   return "Perfeito. Registrei seu agendamento e ele ficou pendente de confirmação interna. Assim que for confirmado, eu te aviso por aqui.";
+}
+
+function buildSchedulePersistenceFailureReply(mood: "amigavel" | "informal" | "formal") {
+  if (mood === "amigavel") {
+    return "Recebi sua confirmação, mas tive um problema para registrar o agendamento internamente agora. Vou revisar isso e te atualizar por aqui.";
+  }
+  if (mood === "formal") {
+    return "Recebi sua confirmação, porém ocorreu uma falha ao registrar o agendamento internamente neste momento. Vou verificar e retornar por aqui.";
+  }
+  return "Recebi sua confirmação, mas tive um problema para registrar o agendamento internamente agora. Vou revisar isso e te atualizar por aqui.";
 }
 
 function buildScheduleCancellationFallbackReply(input: {
@@ -4023,6 +4056,17 @@ export async function buildConversationAiPromptDebug(
     groundingNotes.push(`O cliente perguntou sobre disponibilidade de agenda. Base factual para responder: ${formatIsoDatesInText(deterministicScheduleAvailabilityReply)}`);
   }
 
+  if (context.bulk_initiated && context.bulk_campaign_context) {
+    groundingNotes.push(
+      `Esta conversa foi iniciada por um disparo em massa da empresa. Mensagem/campanha enviada: ${String(
+        context.bulk_campaign_context || "",
+      ).trim()}. Se o cliente estiver respondendo a esse disparo, continue a conversa a partir desse contexto, sem tratar como um assunto novo.`,
+    );
+    if (context.bulk_replied) {
+      groundingNotes.push("O cliente respondeu ao disparo em massa. Trate a mensagem atual como continuação direta dessa campanha.");
+    }
+  }
+
   const payload = await buildAiSalesPromptPayload({
     accountId: context.account_id || null,
     companyName: null,
@@ -4055,6 +4099,7 @@ export async function buildConversationAiPromptDebug(
         : useConfirmedScheduleContext
           ? context.confirmed_schedule_status || null
           : null,
+    bulkCampaignContext: context.bulk_campaign_context || null,
     groundingNotes,
     messages: effectiveMessages.map((item) => ({
       from_me: Boolean(item.from_me),
@@ -4361,7 +4406,11 @@ export async function handleInboundAiAutomation(
     });
 
     if (deterministicScheduleAvailabilityReply) {
-      groundingNotes.push(`O cliente perguntou sobre disponibilidade de agenda. Base factual para responder: ${formatIsoDatesInText(deterministicScheduleAvailabilityReply)}`);
+      groundingNotes.push(
+        `O cliente perguntou sobre disponibilidade de agenda. Use estes fatos para responder com suas palavras, sem inventar horários nem conflito: ${formatIsoDatesInText(
+          deterministicScheduleAvailabilityReply,
+        )}`,
+      );
     }
 
     const [aiResult, transferIntentResult] = await Promise.all([
@@ -4452,21 +4501,13 @@ export async function handleInboundAiAutomation(
       }),
     ]);
 
-    const shouldForceDeterministicScheduleAvailabilityReply =
+    const hasDeterministicScheduleAvailabilityFacts =
       Boolean(deterministicScheduleAvailabilityReply) &&
       isScheduleAvailabilityQuestion(lastCustomerTurnBody, quotedBody) &&
       !aiResult.schedule.shouldCreate &&
       !aiResult.schedule.shouldCancel &&
       !customerScheduleCancellationRequest &&
       !customerRescheduleRequest;
-
-    if (shouldForceDeterministicScheduleAvailabilityReply) {
-      aiResult.shouldReply = true;
-      aiResult.reply = deterministicScheduleAvailabilityReply;
-      aiResult.handoff = { shouldTransfer: false, reason: "" };
-      aiResult.schedule.shouldCreate = false;
-      aiResult.schedule.shouldCancel = false;
-    }
 
     let shouldRequestHumanTransfer = shouldTriggerHumanTransfer({
       evaluatedTransfer: Boolean(transferIntentResult?.shouldTransfer),
@@ -4489,7 +4530,7 @@ export async function handleInboundAiAutomation(
       awaitingScheduleConfirmation,
     });
 
-    if (shouldForceDeterministicScheduleAvailabilityReply) {
+    if (hasDeterministicScheduleAvailabilityFacts) {
       shouldRequestHumanTransfer = false;
     }
 
@@ -4680,6 +4721,14 @@ export async function handleInboundAiAutomation(
       Boolean(aiResult.order.paymentMethod) ||
       Boolean(aiResult.order.notes);
 
+    const scheduleIntentDetectedByAi =
+      Boolean(aiResult.schedule.shouldCreate) ||
+      Boolean(aiResult.schedule.shouldCancel) ||
+      Boolean(aiResult.schedule.customerConfirmedDetails) ||
+      Boolean(String(aiResult.schedule.serviceName || "").trim()) ||
+      isValidScheduleDate(String(aiResult.schedule.scheduledDate || "").trim()) ||
+      isValidScheduleTime(String(aiResult.schedule.scheduledTime || "").trim());
+
     const scheduleFlowRequested =
       awaitingScheduleConfirmation ||
       customerRescheduleRequest ||
@@ -4687,7 +4736,8 @@ export async function handleInboundAiAutomation(
       customerScheduleCancellationRequest ||
       customerExplicitScheduleIntent ||
       customerDirectScheduleSelection ||
-      customerDirectConfirmation;
+      customerDirectConfirmation ||
+      scheduleIntentDetectedByAi;
 
     const schedulableService = scheduleFlowRequested
       ? findSchedulableServiceMatch(
@@ -4852,14 +4902,10 @@ export async function handleInboundAiAutomation(
     const hasCompleteScheduleProposal =
       scheduleFlowRequested &&
       Boolean(mergedSchedule.serviceName) &&
-      (Boolean(mergedSchedule.serviceProductId) || hasExistingScheduleTarget) &&
       isValidScheduleDate(mergedSchedule.scheduledDate) &&
       isValidScheduleTime(mergedSchedule.scheduledTime);
-    const scheduleCustomerAcceptedProposal =
-      customerDirectConfirmation ||
-      customerDirectScheduleSelection ||
-      canReopenConfirmedSchedule ||
-      ((aiRescheduleActive || customerRescheduleRequest) && hasCustomerSuggestedReschedule);
+    const aiConfirmedScheduleDetails = Boolean(aiResult.schedule.customerConfirmedDetails);
+    const scheduleCustomerAcceptedProposal = aiConfirmedScheduleDetails;
     const hasRequiredScheduleData =
       hasCompleteScheduleProposal &&
       scheduleWindowValidation.ok &&
@@ -4933,7 +4979,8 @@ export async function handleInboundAiAutomation(
         console.error("Falha ao verificar conflito de agendamento:", error);
       }
     }
-    if (hasRequiredScheduleData && !scheduleConflict) {
+    const shouldPersistSchedule = hasRequiredScheduleData && !scheduleConflict;
+    if (shouldPersistSchedule) {
       try {
         if (shouldReuseOpenPendingSchedule && String(context.open_schedule_id || "").trim()) {
           const updatedSchedule = await updatePendingAiSchedule({
@@ -4987,7 +5034,8 @@ export async function handleInboundAiAutomation(
           });
           createdScheduleId = String(createdSchedule.id || "").trim() || null;
         }
-        } catch (error: any) {
+        createdScheduleId = await verifyPersistedScheduleId(createdScheduleId, id);
+      } catch (error: any) {
         if (error?.code === "AI_SCHEDULE_CONFLICT") {
           scheduleConflict = error?.conflict || null;
         } else if (error?.code === "AI_SCHEDULE_TOO_SOON_OR_PAST") {
@@ -5079,6 +5127,8 @@ export async function handleInboundAiAutomation(
             updatedPendingSchedule,
             reopenedConfirmedSchedule,
           })
+        : shouldPersistSchedule
+        ? buildSchedulePersistenceFailureReply(mood)
         : hasCompleteScheduleProposal && scheduleWindowValidation.ok && !createdScheduleId
         ? buildScheduleConfirmationPrompt({
             serviceName: mergedSchedule.serviceName,
@@ -5162,14 +5212,15 @@ export async function handleInboundAiAutomation(
       normalizedReplyText.includes("pedido foi confirmado") ||
       normalizedReplyText.includes("pedido confirmado");
     if (hasCompleteScheduleProposal && !createdScheduleId && !scheduleConflict && scheduleWindowValidation.ok && scheduleClaimedAsCreated) {
-      replyText =
-        fallbackReply ||
-        buildScheduleConfirmationPrompt({
-          serviceName: mergedSchedule.serviceName,
-          scheduledDate: mergedSchedule.scheduledDate,
-          scheduledTime: mergedSchedule.scheduledTime,
-          durationMinutes: mergedSchedule.durationMinutes,
-        });
+      replyText = shouldPersistSchedule
+        ? buildSchedulePersistenceFailureReply(mood)
+        : fallbackReply ||
+          buildScheduleConfirmationPrompt({
+            serviceName: mergedSchedule.serviceName,
+            scheduledDate: mergedSchedule.scheduledDate,
+            scheduledTime: mergedSchedule.scheduledTime,
+            durationMinutes: mergedSchedule.durationMinutes,
+          });
     }
     if (aiResult.schedule.shouldCancel && !cancelledScheduleId && scheduleClaimedAsCancelled) {
       replyText = fallbackReply || buildUnknownSalesReply(mood);
@@ -5191,6 +5242,16 @@ export async function handleInboundAiAutomation(
         }) || replyText;
     } else if (shouldPersistOrder) {
       replyText = buildOrderPersistenceFailureReply(mood);
+    }
+    if (createdScheduleId) {
+      replyText =
+        buildScheduleFallbackReply({
+          mood,
+          updatedPendingSchedule,
+          reopenedConfirmedSchedule,
+        }) || replyText;
+    } else if (shouldPersistSchedule) {
+      replyText = buildSchedulePersistenceFailureReply(mood);
     } else if (orderClaimedAsCreated) {
       replyText =
         buildOrderConfirmationPrompt({

@@ -90,6 +90,7 @@ export type AiSalesReplyInput = {
   lastOrderStatus?: string | null;
   lastScheduleSummary?: string | null;
   lastScheduleStatus?: string | null;
+  bulkCampaignContext?: string | null;
   groundingNotes?: Array<string> | null;
   messages: Array<{ from_me: boolean; body: string; sent_at?: string | null; message_type?: string | null; quoted_body?: string | null }>;
 };
@@ -566,6 +567,7 @@ export async function buildAiSalesPromptPayload(
           `Status do pedido pendente atual: ${String(input.lastOrderStatus || "").trim() || "Nenhum"}\n\n` +
           `Agendamento pendente atual: ${String(input.lastScheduleSummary || "").trim() || "Nenhum"}\n\n` +
           `Status do agendamento pendente atual: ${String(input.lastScheduleStatus || "").trim() || "Nenhum"}\n\n` +
+          `Contexto de disparo em massa: ${String(input.bulkCampaignContext || "").trim() || "Nenhum"}\n\n` +
           `Notas determinísticas do sistema:\n${groundingContext}\n\n` +
           `Informações da loja:\n${storeContext}\n\n` +
           `Catálogo de produtos:\n${productCatalog}\n\n` +
