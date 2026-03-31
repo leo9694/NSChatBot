@@ -2781,10 +2781,9 @@ function detectRequestedSchedulePeriod(body: string, quotedBody?: string | null)
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
-  if (text.includes("manha") || rawText.includes("manh\u00E3")) return "manha";
-  if (text.includes("tarde") || rawText.includes("tarde")) return "tarde";
-  if (text.includes("noite") || rawText.includes("noite")) return "noite";
-  if (text.includes("noite") || rawText.includes("noite")) return "noite";
+  if (/\bmanha\b/.test(text) || /\bmanhã\b/.test(rawText)) return "manha";
+  if (/\btarde\b/.test(text) || /\btarde\b/.test(rawText)) return "tarde";
+  if (/\bnoite\b/.test(text) || /\bnoite\b/.test(rawText)) return "noite";
   return null;
 }
 
@@ -3057,11 +3056,26 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
   openScheduleServiceName?: string | null;
   baseDate?: Date;
 }): Promise<string> {
-  if (!isScheduleAvailabilityQuestion(input.body, input.quotedBody)) {
+  const baseDate = input.baseDate || new Date();
+  const directRequestedTimes = extractScheduleTimesFromText([input.body, input.quotedBody].filter(Boolean).join(" "));
+  const previousCompanyContext = normalizeText(input.previousCompanyBody || "");
+  const isFollowUpTimeAvailabilityQuestion =
+    directRequestedTimes.length > 0 &&
+    (/\bhorario\b/.test(previousCompanyContext) ||
+      /\bhorarios\b/.test(previousCompanyContext) ||
+      /\bdisponivel\b/.test(previousCompanyContext) ||
+      /\bdisponiveis\b/.test(previousCompanyContext) ||
+      /\bconfirmar\b/.test(previousCompanyContext));
+  const followUpInheritedDate =
+    isFollowUpTimeAvailabilityQuestion
+      ? getTargetScheduleDateForAvailability(input.previousCompanyBody || "", null, baseDate) ||
+        (/\bamanha\b/.test(previousCompanyContext) ? addDaysToIsoDate(getCurrentCuiabaDateIso(baseDate), 1) : null) ||
+        (/\bhoje\b/.test(previousCompanyContext) ? getCurrentCuiabaDateIso(baseDate) : null)
+      : null;
+
+  if (!isScheduleAvailabilityQuestion(input.body, input.quotedBody) && !isFollowUpTimeAvailabilityQuestion) {
     return "";
   }
-
-  const baseDate = input.baseDate || new Date();
   const referenceText = [input.body, input.quotedBody, input.previousCompanyBody, input.openScheduleServiceName]
     .filter(Boolean)
     .join(" ");
@@ -3101,6 +3115,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
 
   const targetDate =
     getTargetScheduleDateForAvailability(input.body, input.quotedBody, baseDate) ||
+    followUpInheritedDate ||
     getCurrentCuiabaDateIso(baseDate);
 
   const targetWeekday = new Date(`${targetDate}T12:00:00Z`).getUTCDay();
@@ -3135,6 +3150,7 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
     }
     return !hasScheduleConflictAtTime(monthSchedules, slot, durationMinutes, intervalMinutes);
   });
+  const requestedTimes = directRequestedTimes;
 
   const periods = buildSchedulePeriods(dayConfig);
   const automaticLunchBreak = getAutomaticLunchBreak(dayConfig);
@@ -3168,6 +3184,55 @@ async function buildDeterministicScheduleAvailabilityReply(input: {
 
   if (requestedPeriod && !filteredPeriods.length) {
     return `Nesse dia eu nÃ£o tenho horÃ¡rio disponÃ­vel na ${requestedPeriod === "manha" ? "manhÃ£" : requestedPeriod}. Consigo te atender em ${formatPeriodWindow(periods)}. Se quiser, me fala outro horÃ¡rio dentro desses perÃ­odos.`;
+  }
+
+  if (requestedTimes.length) {
+    const requestedTime = requestedTimes[0];
+    const requestedWindowValidation = validateScheduleWithinWorkingHours({
+      settings: input.settings,
+      scheduledDate: targetDate,
+      scheduledTime: requestedTime,
+      durationMinutes,
+      now: baseDate,
+    });
+
+    if (!requestedWindowValidation.ok) {
+      return buildScheduleOutsideWorkingHoursReply({
+        mood: "informal",
+        dayConfig: requestedWindowValidation.dayConfig,
+        dayUnavailable: requestedWindowValidation.reason === "day_unavailable",
+        insideLunchBreak: requestedWindowValidation.reason === "inside_lunch_break",
+        timeAlreadyPassed: requestedWindowValidation.reason === "time_already_passed",
+      });
+    }
+
+    const specificDateLabel = formatShortBrDate(targetDate);
+    const specificWeekdayLabel = formatWeekdayBr(targetDate);
+    const requestedHasConflict = hasScheduleConflictAtTime(monthSchedules, requestedTime, durationMinutes, intervalMinutes);
+
+    if (!requestedHasConflict && validSlots.includes(requestedTime)) {
+      return [
+        `Sim, ${specificWeekdayLabel}, ${specificDateLabel}, às ${requestedTime} está disponível para ${service.name}.`,
+        "Se quiser, posso confirmar esse horário para você.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    const alternativeSlots = validSlots.filter((slot) => slot !== requestedTime);
+    if (alternativeSlots.length) {
+      return [
+        `Não tenho ${specificWeekdayLabel}, ${specificDateLabel}, às ${requestedTime} para ${service.name}.`,
+        "Neste dia eu consigo nestes horários:",
+        ...alternativeSlots.slice(0, 8).map((slot) => `- ${slot}`),
+        "",
+        "Se algum desses servir, eu sigo com você por aqui.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    return `Não tenho ${specificWeekdayLabel}, ${specificDateLabel}, às ${requestedTime} para ${service.name}. Se quiser, me fala outro dia ou horário que eu verifico certinho.`;
   }
 
   if (!validSlots.length) {
@@ -4387,6 +4452,22 @@ export async function handleInboundAiAutomation(
       }),
     ]);
 
+    const shouldForceDeterministicScheduleAvailabilityReply =
+      Boolean(deterministicScheduleAvailabilityReply) &&
+      isScheduleAvailabilityQuestion(lastCustomerTurnBody, quotedBody) &&
+      !aiResult.schedule.shouldCreate &&
+      !aiResult.schedule.shouldCancel &&
+      !customerScheduleCancellationRequest &&
+      !customerRescheduleRequest;
+
+    if (shouldForceDeterministicScheduleAvailabilityReply) {
+      aiResult.shouldReply = true;
+      aiResult.reply = deterministicScheduleAvailabilityReply;
+      aiResult.handoff = { shouldTransfer: false, reason: "" };
+      aiResult.schedule.shouldCreate = false;
+      aiResult.schedule.shouldCancel = false;
+    }
+
     let shouldRequestHumanTransfer = shouldTriggerHumanTransfer({
       evaluatedTransfer: Boolean(transferIntentResult?.shouldTransfer),
       aiRequestedTransfer: Boolean(aiResult.handoff?.shouldTransfer) || Boolean(transferIntentResult?.shouldTransfer),
@@ -4407,6 +4488,10 @@ export async function handleInboundAiAutomation(
       customerDirectScheduleSelection,
       awaitingScheduleConfirmation,
     });
+
+    if (shouldForceDeterministicScheduleAvailabilityReply) {
+      shouldRequestHumanTransfer = false;
+    }
 
     await upsertConversationAiMemory({
       conversationId: id,
