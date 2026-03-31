@@ -1467,12 +1467,22 @@ function buildOrderPersistenceFailureReply(mood: "amigavel" | "informal" | "form
   return "Recebi sua confirmação, mas tive um problema para registrar o pedido internamente agora. Vou revisar isso e te atualizar por aqui.";
 }
 
-async function verifyPersistedOrderId(orderId: string | null | undefined): Promise<string | null> {
+async function verifyPersistedOrderId(
+  orderId: string | null | undefined,
+  conversationId?: string | null,
+): Promise<string | null> {
   const normalizedId = String(orderId || "").trim();
   if (!normalizedId) return null;
   try {
     const persisted = await getAiOrderById(normalizedId);
-    return persisted?.id ? String(persisted.id || "").trim() || null : null;
+    if (!persisted?.id) return null;
+    if (conversationId && String(persisted.conversation_id || "").trim() !== String(conversationId || "").trim()) {
+      return null;
+    }
+    if (String(persisted.status || "").trim() !== "pending_confirmation") {
+      return null;
+    }
+    return String(persisted.id || "").trim() || null;
   } catch (error) {
     console.error("Falha ao verificar pedido persistido no banco:", error);
     return null;
@@ -3628,7 +3638,6 @@ function extractRequestedProductNames(input: {
   const requestedNames = input.productNames.map((item) => normalizeName(item)).filter(Boolean);
   const customerText = normalizeText(input.lastCustomerMessage);
   const customerTextForMatch = normalizeMatchText(input.lastCustomerMessage);
-  const broadImageRequest = shouldSendMultipleImages(input.lastCustomerMessage, input.productNames);
   const rankedMatches = input.catalog
     .map((product) => {
     if (!String(product.image_url || "").trim()) return false;
@@ -3690,13 +3699,8 @@ function extractRequestedProductNames(input: {
     .sort((a, b) => Number((b as any).score) - Number((a as any).score));
 
   const bestScore = rankedMatches.length ? Number((rankedMatches[0] as any).score) : 0;
-  const minimumBroadScore = broadImageRequest ? 20 : bestScore;
   return rankedMatches
-    .filter((entry) =>
-      broadImageRequest
-        ? Number((entry as any).score) >= minimumBroadScore
-        : Number((entry as any).score) === bestScore,
-    )
+    .filter((entry) => Number((entry as any).score) === bestScore)
     .map((entry) => (entry as any).product);
 }
 
@@ -4816,7 +4820,7 @@ export async function handleInboundAiAutomation(
         createdOrderId = String(createdOrder.id || "").trim() || null;
       }
 
-      createdOrderId = await verifyPersistedOrderId(createdOrderId);
+      createdOrderId = await verifyPersistedOrderId(createdOrderId, id);
     }
 
     let createdScheduleId: string | null = null;
@@ -5161,53 +5165,17 @@ export async function handleInboundAiAutomation(
 
     const normalizedLastMessageBody = String(lastMessage.body || "");
 
-    if (!shouldAttemptImage && isExplicitImageRequest(normalizedLastMessageBody)) {
-      const askGroupFirst =
-        isBroadCatalogImageRequest(normalizedLastMessageBody) &&
-        hasMultipleProductGroups(catalog) &&
-        shouldAskGroupBeforeSendingAllProductPhotos(accountSettings?.agent_guidelines);
-
-      if (askGroupFirst) {
-        replyText = buildAskPhotoGroupReply(mood);
-      } else {
-        sendMultipleImages = shouldSendMultipleImages(normalizedLastMessageBody, []);
-        const fallbackMatches = extractRequestedProductNames({
-          catalog,
-          productNames: aiResult.media.productNames,
-          lastCustomerMessage: normalizedLastMessageBody,
-        });
-
-        if (fallbackMatches.length > 0) {
-          if (fallbackMatches.length > 1 && /\b(fotos|imagens)\b/i.test(normalizedLastMessageBody)) {
-            sendMultipleImages = true;
-          }
-          shouldAttemptImage = true;
-          matchedProducts = sendMultipleImages ? fallbackMatches.slice(0, 10) : fallbackMatches.slice(0, 1);
-          replyText = buildImageNoticeReply(mood, sendMultipleImages);
-        }
-      }
-    }
-
     if (shouldAttemptImage && matchedProducts.length === 0) {
-      sendMultipleImages = shouldSendMultipleImages(normalizedLastMessageBody, aiResult.media.productNames);
       matchedProducts = extractRequestedProductNames({
         catalog,
         productNames: aiResult.media.productNames,
         lastCustomerMessage: normalizedLastMessageBody,
       });
+      sendMultipleImages =
+        matchedProducts.length > 1 ||
+        aiResult.media.productNames.length > 1;
 
-      if (!sendMultipleImages && matchedProducts.length > 1 && /\b(fotos|imagens)\b/i.test(normalizedLastMessageBody)) {
-        sendMultipleImages = true;
-      }
-
-      if (sendMultipleImages) {
-        if (!matchedProducts.length && /\btodos\b|\btodas\b|\bcatalogo\b|\bprodutos\b/.test(normalizeText(normalizedLastMessageBody))) {
-          matchedProducts = catalog.filter((product) => String(product.image_url || "").trim());
-        }
-        matchedProducts = matchedProducts.slice(0, 10);
-      } else {
-        matchedProducts = matchedProducts.slice(0, 1);
-      }
+      matchedProducts = sendMultipleImages ? matchedProducts.slice(0, 10) : matchedProducts.slice(0, 1);
 
       if (!matchedProducts.length) {
         const requestedName =
