@@ -358,17 +358,46 @@ function buildCustomerTurnContext(messages: any[]): {
   };
 }
 
+function isOrderFinalCheckMessage(body: string | null | undefined): boolean {
+  const normalized = normalizeText(String(body || ""));
+  if (!normalized) return false;
+
+  if (
+    /(antes de gerar o pedido|quer que eu confirme|posso confirmar|se estiver certo[, ]*posso confirmar|se estiver tudo certo|se voce confirmar[, ]*eu gero|se vocï¿½ confirmar[, ]*eu gero|confirma que eu gero|pode confirmar o pedido|quer confirmar o pedido|preciso da sua confirmacao final|me responda com uma confirmacao|pode gerar)/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  const hasOrderSummaryContext =
+    normalized.includes("resumo do pedido") ||
+    normalized.includes("resumo do seu pedido") ||
+    normalized.includes("total:") ||
+    normalized.includes("total estimado");
+  const asksForFinalCheck =
+    /est.? tudo certo/.test(normalized) ||
+    /ta tudo certo/.test(normalized) ||
+    /est.? correto/.test(normalized) ||
+    /ta correto/.test(normalized) ||
+    /est.? certo/.test(normalized) ||
+    /ta certo/.test(normalized) ||
+    normalized.includes("posso gerar o pedido");
+
+  return hasOrderSummaryContext && asksForFinalCheck;
+}
+
 function wasAwaitingOrderConfirmation(messages: any[]): boolean {
   const recentOutbound = messages
     .filter((item) => item?.from_me)
     .slice(-4)
-    .map((item) => normalizeText(String(item?.body || "")));
+    .map((item) => String(item?.body || ""));
 
-  return recentOutbound.some((body) =>
-    /(antes de gerar o pedido|quer que eu confirme|posso confirmar|se estiver certo[, ]*posso confirmar|se estiver tudo certo|se voce confirmar[, ]*eu gero|se vocï¿½ confirmar[, ]*eu gero|confirma que eu gero|pode confirmar o pedido|quer confirmar o pedido|preciso da sua confirmacao final|me responda com uma confirmacao|pode gerar)/.test(
-      body,
-    ),
-  );
+  return recentOutbound.some((body) => isOrderFinalCheckMessage(body));
+}
+
+export function __wasAwaitingOrderConfirmationForTests(messages: any[]): boolean {
+  return wasAwaitingOrderConfirmation(messages);
 }
 
 function hasDirectOrderConfirmation(body: string, quotedBody?: string | null, awaitingConfirmation = false): boolean {
@@ -3601,7 +3630,8 @@ export async function buildConversationAiPromptDebug(
   const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
   const previousCompanyMessage = findLastCompanyMessageBeforeTurn(effectiveMessages, customerTurn.turnMessages);
   const previousCompanyBody = String(previousCompanyMessage?.body || "").trim() || null;
-  const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
+  const awaitingOrderConfirmation =
+    wasAwaitingOrderConfirmation(effectiveMessages) || isOrderFinalCheckMessage(previousCompanyBody);
   const awaitingScheduleConfirmation = wasAwaitingScheduleConfirmation(effectiveMessages);
   const customerRescheduleRequest = isScheduleRescheduleRequest(lastCustomerTurnBody, quotedBody);
   const customerScheduleCancellationRequest = isScheduleCancellationRequest(lastCustomerTurnBody, quotedBody, previousCompanyBody);
@@ -4410,8 +4440,8 @@ export async function handleInboundAiAutomation(
       Boolean(mergedOrder.paymentMethod) &&
       Boolean(mergedOrder.fulfillmentType) &&
       hasUsableDeliveryAddress;
-    const aiConfirmedOrderDetails = Boolean(aiResult.order.customerConfirmedDetails) && awaitingOrderConfirmation;
-    const orderCustomerAcceptedProposal = customerDirectConfirmation || aiConfirmedOrderDetails;
+    const aiConfirmedOrderDetails = Boolean(aiResult.order.customerConfirmedDetails);
+    const orderCustomerAcceptedProposal = aiConfirmedOrderDetails;
     const hasRequiredOrderData = hasOrderDataReadyForConfirmation && orderCustomerAcceptedProposal;
     const hasOrderDraftCandidate =
       Boolean(aiResult.order.summary) ||
@@ -4610,7 +4640,7 @@ export async function handleInboundAiAutomation(
     let createdOrderId: string | null = null;
     let updatedPendingOrder = false;
     const shouldPersistOrder =
-      (aiResult.order.shouldCreate || (awaitingOrderConfirmation && orderCustomerAcceptedProposal)) && hasRequiredOrderData;
+      (aiResult.order.shouldCreate || orderCustomerAcceptedProposal) && hasRequiredOrderData;
     if (shouldPersistOrder) {
       if (shouldReuseOpenPendingOrder && String(context.open_order_id || "").trim()) {
         const updatedOrder = await updatePendingAiOrder({
@@ -4986,6 +5016,13 @@ export async function handleInboundAiAutomation(
           fulfillmentType: mergedOrder.fulfillmentType,
           paymentMethod: mergedOrder.paymentMethod,
         }) || buildUnknownSalesReply(mood);
+    }
+    if (createdOrderId && !orderClaimedAsCreated) {
+      replyText =
+        buildOrderFallbackReply({
+          mood,
+          updatedPendingOrder,
+        }) || replyText;
     }
     if (hasUnsupportedCapabilityClaim(replyText, discountAllowed)) {
       replyText = buildUnknownSalesReply(mood);
