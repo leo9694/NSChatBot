@@ -4,16 +4,6 @@ export function normalizePhone(phone: string): string {
 
 export function normalizePhoneForWhats(phone: string): string {
   const phoneDigits = normalizePhone(phone);
-  if (!phoneDigits.startsWith("55")) {
-    return phoneDigits;
-  }
-
-  const national = phoneDigits.slice(2);
-  // BR celular com nono digito: 55 + DDD(2) + 9 + numero(8)
-  if (national.length === 11 && national[2] === "9") {
-    return `55${national.slice(0, 2)}${national.slice(3)}`;
-  }
-
   return phoneDigits;
 }
 

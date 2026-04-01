@@ -59,13 +59,7 @@ function parsePositiveInt(value: unknown, fallback: number): number {
 function normalizeBrazilPhone(rawPhone: string): string {
   const digits = normalizePhone(rawPhone);
   if (!digits) return "";
-
-  const withCountry = digits.startsWith("55") ? digits : `55${digits}`;
-  const national = withCountry.slice(2);
-  if (national.length === 11 && national[2] === "9") {
-    return `55${national.slice(0, 2)}${national.slice(3)}`;
-  }
-  return withCountry;
+  return digits.startsWith("55") ? digits : `55${digits}`;
 }
 
 function buildSignedTextMessage(message: string, attendantName: string): string {

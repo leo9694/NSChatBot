@@ -717,12 +717,17 @@ function profileLabel(name, phone) {
 function normalizeBrazilPhoneInput(rawPhone) {
   const digits = String(rawPhone || "").replace(/\D/g, "");
   if (!digits) return "";
-  const withCountry = digits.startsWith("55") ? digits : `55${digits}`;
-  const national = withCountry.slice(2);
-  if (national.length === 11 && national[2] === "9") {
-    return `55${national.slice(0, 2)}${national.slice(3)}`;
+  return digits.startsWith("55") ? digits : `55${digits}`;
+}
+
+function getConversationPhone(conv) {
+  if (!conv) return "";
+  const waJid = String(conv.wa_jid || "").trim();
+  if (waJid.endsWith("@s.whatsapp.net")) {
+    const digits = waJid.replace(/@s\.whatsapp\.net$/i, "").replace(/\D/g, "");
+    if (digits) return digits;
   }
-  return withCountry;
+  return String(conv.phone || "").replace(/\D/g, "");
 }
 
 function conversationDisplayName(conv) {
@@ -734,7 +739,7 @@ function conversationDisplayName(conv) {
     return "Contato WhatsApp";
   }
 
-  return conv.phone || "Contato";
+  return getConversationPhone(conv) || "Contato";
 }
 
 function applyAvatar(el, conv) {
@@ -1033,7 +1038,7 @@ function getMobileTopbarCopy() {
   if (state.mobileChatPane === "conversation" && state.selectedConversation) {
     return {
       title: "Conversa",
-      subtitle: formatPhone(state.selectedConversation.phone) || "Voltar para os chats",
+      subtitle: formatPhone(getConversationPhone(state.selectedConversation)) || "Voltar para os chats",
     };
   }
   return { title: getCompanyDisplayName(), subtitle: "Conversas" };
@@ -3085,7 +3090,7 @@ async function sendCompanyMediaAsset(assetId) {
     method: "POST",
     body: JSON.stringify({
       conversation_id: state.selectedConversation.id,
-      phone: state.selectedConversation.phone,
+      phone: getConversationPhone(state.selectedConversation),
       client_id: state.selectedConversation.client_id || null,
       asset_id: asset.id,
     }),
@@ -5215,7 +5220,7 @@ async function sendMediaFile(file) {
       method: "POST",
       body: JSON.stringify({
         conversation_id: state.selectedConversation.id,
-        phone: state.selectedConversation.phone,
+        phone: getConversationPhone(state.selectedConversation),
         client_id: state.selectedConversation.client_id || null,
         file_base64: dataUrl,
         mimetype: file.type || "application/octet-stream",
@@ -5582,7 +5587,8 @@ function renderHeader() {
   }
 
   const name = conversationDisplayName(state.selectedConversation);
-  const phone = formatPhone(state.selectedConversation.phone) || state.selectedConversation.phone || "-";
+  const resolvedConversationPhone = getConversationPhone(state.selectedConversation);
+  const phone = formatPhone(resolvedConversationPhone) || resolvedConversationPhone || "-";
   chatHeaderEl.innerHTML = "";
 
   const wrap = document.createElement("div");
@@ -6626,7 +6632,7 @@ async function sendCurrentText() {
       method: "POST",
       body: JSON.stringify({
         conversation_id: state.selectedConversation.id,
-        phone: state.selectedConversation.phone,
+          phone: getConversationPhone(state.selectedConversation),
         message: text,
         client_id: state.selectedConversation.client_id || null,
       }),
@@ -6657,7 +6663,7 @@ async function sendAudioBlob(blob, fileName = "gravacao.webm") {
       method: "POST",
       body: JSON.stringify({
         conversation_id: state.selectedConversation.id,
-        phone: state.selectedConversation.phone,
+          phone: getConversationPhone(state.selectedConversation),
         client_id: state.selectedConversation.client_id || null,
         audio_base64: dataUrl,
         mimetype: blob.type || "audio/webm",
