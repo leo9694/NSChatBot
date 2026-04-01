@@ -2,6 +2,7 @@ import { pool } from "../db/pool";
 
 export interface AiAccountSettingsRow {
   account_id: string;
+  company_id?: string | null;
   agent_name: string | null;
   company_name: string | null;
   mood: string | null;
@@ -132,6 +133,10 @@ export async function ensureAiSchema(): Promise<void> {
 
       await pool.query(`
         ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE
+      `);
+      await pool.query(`
+        ALTER TABLE ai_account_settings
         ADD COLUMN IF NOT EXISTS mood VARCHAR(20)
       `);
       await pool.query(`
@@ -181,6 +186,16 @@ export async function ensureAiSchema(): Promise<void> {
       await pool.query(`
         ALTER TABLE ai_account_settings
         ADD COLUMN IF NOT EXISTS schedule_reminder_rules JSONB NOT NULL DEFAULT '[]'::jsonb
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_ai_account_settings_company_id ON ai_account_settings(company_id)
+      `);
+      await pool.query(`
+        UPDATE ai_account_settings cfg
+        SET company_id = wa.company_id
+        FROM whatsapp_accounts wa
+        WHERE wa.id = cfg.account_id
+          AND cfg.company_id IS NULL
       `);
 
       await pool.query(`
@@ -330,35 +345,80 @@ export async function ensureAiSchema(): Promise<void> {
 
 export async function getAiAccountSettings(accountId: string): Promise<AiAccountSettingsRow | null> {
   await ensureAiSchema();
+  const normalizedAccountId = String(accountId || "").trim();
+  if (!normalizedAccountId) return null;
   const result = await pool.query<AiAccountSettingsRow>(
     `
     SELECT
-      account_id,
-      agent_name,
-      company_name,
-      mood,
-      COALESCE(agent_guidelines, '[]'::jsonb) AS agent_guidelines,
-      store_name,
-      store_description,
-      store_cnpj,
-      store_address,
-      COALESCE(store_payment_methods, '[]'::jsonb) AS store_payment_methods,
-      COALESCE(store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
-      COALESCE(schedule_working_days, '[]'::jsonb) AS schedule_working_days,
-      schedule_interval_minutes,
-      COALESCE(schedule_reminder_enabled, false) AS schedule_reminder_enabled,
-      schedule_reminder_minutes,
-      COALESCE(schedule_reminder_rules, '[]'::jsonb) AS schedule_reminder_rules,
-      created_at::text,
-      updated_at::text
-    FROM ai_account_settings
-    WHERE account_id = $1
+      cfg.account_id,
+      COALESCE(cfg.company_id, target.company_id) AS company_id,
+      cfg.agent_name,
+      COALESCE(NULLIF(cfg.company_name, ''), company.name) AS company_name,
+      cfg.mood,
+      COALESCE(cfg.agent_guidelines, '[]'::jsonb) AS agent_guidelines,
+      COALESCE(NULLIF(cfg.store_name, ''), company.name) AS store_name,
+      cfg.store_description,
+      COALESCE(NULLIF(cfg.store_cnpj, ''), company.cnpj) AS store_cnpj,
+      cfg.store_address,
+      COALESCE(cfg.store_payment_methods, '[]'::jsonb) AS store_payment_methods,
+      COALESCE(cfg.store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
+      COALESCE(cfg.schedule_working_days, '[]'::jsonb) AS schedule_working_days,
+      cfg.schedule_interval_minutes,
+      COALESCE(cfg.schedule_reminder_enabled, false) AS schedule_reminder_enabled,
+      cfg.schedule_reminder_minutes,
+      COALESCE(cfg.schedule_reminder_rules, '[]'::jsonb) AS schedule_reminder_rules,
+      cfg.created_at::text,
+      cfg.updated_at::text
+    FROM whatsapp_accounts target
+    LEFT JOIN app_companies company
+      ON company.id = target.company_id
+    JOIN whatsapp_accounts owner
+      ON owner.company_id = target.company_id
+    JOIN ai_account_settings cfg
+      ON cfg.account_id = owner.id
+    WHERE target.id = $1
+    ORDER BY CASE WHEN cfg.account_id = target.id THEN 0 ELSE 1 END, cfg.updated_at DESC
     LIMIT 1
     `,
-    [accountId],
+    [normalizedAccountId],
   );
 
-  return result.rows[0] || null;
+  if (result.rows[0]) {
+    return result.rows[0];
+  }
+
+  const directFallback = await pool.query<AiAccountSettingsRow>(
+    `
+    SELECT
+      cfg.account_id,
+      COALESCE(cfg.company_id, wa.company_id) AS company_id,
+      cfg.agent_name,
+      COALESCE(NULLIF(cfg.company_name, ''), company.name) AS company_name,
+      cfg.mood,
+      COALESCE(cfg.agent_guidelines, '[]'::jsonb) AS agent_guidelines,
+      COALESCE(NULLIF(cfg.store_name, ''), company.name) AS store_name,
+      cfg.store_description,
+      COALESCE(NULLIF(cfg.store_cnpj, ''), company.cnpj) AS store_cnpj,
+      cfg.store_address,
+      COALESCE(cfg.store_payment_methods, '[]'::jsonb) AS store_payment_methods,
+      COALESCE(cfg.store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
+      COALESCE(cfg.schedule_working_days, '[]'::jsonb) AS schedule_working_days,
+      cfg.schedule_interval_minutes,
+      COALESCE(cfg.schedule_reminder_enabled, false) AS schedule_reminder_enabled,
+      cfg.schedule_reminder_minutes,
+      COALESCE(cfg.schedule_reminder_rules, '[]'::jsonb) AS schedule_reminder_rules,
+      cfg.created_at::text,
+      cfg.updated_at::text
+    FROM ai_account_settings cfg
+    LEFT JOIN whatsapp_accounts wa ON wa.id = cfg.account_id
+    LEFT JOIN app_companies company ON company.id = wa.company_id
+    WHERE cfg.account_id = $1
+    LIMIT 1
+    `,
+    [normalizedAccountId],
+  );
+
+  return directFallback.rows[0] || null;
 }
 
 function parseScheduleTimeToMinutes(timeText: string | null | undefined): number | null {
@@ -580,87 +640,116 @@ export async function upsertAiAccountSettings(input: {
   scheduleReminderRules?: Array<Record<string, unknown>>;
 }): Promise<AiAccountSettingsRow> {
   await ensureAiSchema();
-  const result = await pool.query<AiAccountSettingsRow>(
+  const normalizedAccountId = String(input.accountId || "").trim();
+  const accountResult = await pool.query<{ id: string; company_id: string | null; company_name: string | null; company_cnpj: string | null }>(
     `
-    INSERT INTO ai_account_settings (
-      account_id,
-      agent_name,
-      company_name,
-      mood,
-      agent_guidelines,
-      store_name,
-      store_description,
-      store_cnpj,
-      store_address,
-      store_payment_methods,
-      store_delivery_fees,
-      schedule_working_days,
-      schedule_interval_minutes,
-      schedule_reminder_enabled,
-      schedule_reminder_minutes,
-      schedule_reminder_rules
-    )
-    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16::jsonb)
-    ON CONFLICT (account_id) DO UPDATE
-      SET agent_name = EXCLUDED.agent_name,
-          company_name = EXCLUDED.company_name,
-          mood = EXCLUDED.mood,
-          agent_guidelines = EXCLUDED.agent_guidelines,
-          store_name = EXCLUDED.store_name,
-          store_description = EXCLUDED.store_description,
-          store_cnpj = EXCLUDED.store_cnpj,
-          store_address = EXCLUDED.store_address,
-          store_payment_methods = EXCLUDED.store_payment_methods,
-          store_delivery_fees = EXCLUDED.store_delivery_fees,
-          schedule_working_days = EXCLUDED.schedule_working_days,
-          schedule_interval_minutes = EXCLUDED.schedule_interval_minutes,
-          schedule_reminder_enabled = EXCLUDED.schedule_reminder_enabled,
-          schedule_reminder_minutes = EXCLUDED.schedule_reminder_minutes,
-          schedule_reminder_rules = EXCLUDED.schedule_reminder_rules,
-          updated_at = NOW()
-    RETURNING
-      account_id,
-      agent_name,
-      company_name,
-      mood,
-      COALESCE(agent_guidelines, '[]'::jsonb) AS agent_guidelines,
-      store_name,
-      store_description,
-      store_cnpj,
-      store_address,
-      COALESCE(store_payment_methods, '[]'::jsonb) AS store_payment_methods,
-      COALESCE(store_delivery_fees, '[]'::jsonb) AS store_delivery_fees,
-      COALESCE(schedule_working_days, '[]'::jsonb) AS schedule_working_days,
-      schedule_interval_minutes,
-      COALESCE(schedule_reminder_enabled, false) AS schedule_reminder_enabled,
-      schedule_reminder_minutes,
-      COALESCE(schedule_reminder_rules, '[]'::jsonb) AS schedule_reminder_rules,
-      created_at::text,
-      updated_at::text
+    SELECT wa.id, wa.company_id, c.name AS company_name, c.cnpj AS company_cnpj
+    FROM whatsapp_accounts wa
+    LEFT JOIN app_companies c ON c.id = wa.company_id
+    WHERE wa.id = $1
+    LIMIT 1
     `,
-    [
-      input.accountId,
-      input.agentName || null,
-      input.companyName || null,
-      input.mood || null,
-      JSON.stringify(Array.isArray(input.agentGuidelines) ? input.agentGuidelines : []),
-      input.storeName || null,
-      input.storeDescription || null,
-      input.storeCnpj || null,
-      input.storeAddress || null,
-      JSON.stringify(Array.isArray(input.storePaymentMethods) ? input.storePaymentMethods : []),
-      JSON.stringify(Array.isArray(input.storeDeliveryFees) ? input.storeDeliveryFees : []),
-      JSON.stringify(Array.isArray(input.scheduleWorkingDays) ? input.scheduleWorkingDays : []),
-      Number.isFinite(Number(input.scheduleIntervalMinutes)) ? Math.max(0, Math.round(Number(input.scheduleIntervalMinutes))) : null,
-      Boolean(input.scheduleReminderEnabled),
-      Boolean(input.scheduleReminderEnabled) && Number.isFinite(Number(input.scheduleReminderMinutes))
-        ? Math.max(1, Math.round(Number(input.scheduleReminderMinutes)))
-        : null,
-      JSON.stringify(Array.isArray(input.scheduleReminderRules) ? input.scheduleReminderRules : []),
-    ],
+    [normalizedAccountId],
+  );
+  const account = accountResult.rows[0];
+  if (!account) {
+    throw new Error("WHATSAPP_ACCOUNT_NOT_FOUND");
+  }
+
+  const companyId = String(account.company_id || "").trim() || null;
+  const companyAccountsResult = companyId
+    ? await pool.query<{ id: string }>(
+        `
+        SELECT id
+        FROM whatsapp_accounts
+        WHERE company_id = $1
+        `,
+        [companyId],
+      )
+    : { rows: [{ id: normalizedAccountId }] };
+
+  const targetAccountIds = Array.from(
+    new Set(
+      companyAccountsResult.rows
+        .map((row) => String(row.id || "").trim())
+        .filter(Boolean)
+        .concat(normalizedAccountId),
+    ),
   );
 
-  return result.rows[0];
+  const sharedValues = [
+    input.agentName || null,
+    input.companyName || account.company_name || null,
+    input.mood || null,
+    JSON.stringify(Array.isArray(input.agentGuidelines) ? input.agentGuidelines : []),
+    input.storeName || account.company_name || null,
+    input.storeDescription || null,
+    input.storeCnpj || account.company_cnpj || null,
+    input.storeAddress || null,
+    JSON.stringify(Array.isArray(input.storePaymentMethods) ? input.storePaymentMethods : []),
+    JSON.stringify(Array.isArray(input.storeDeliveryFees) ? input.storeDeliveryFees : []),
+    JSON.stringify(Array.isArray(input.scheduleWorkingDays) ? input.scheduleWorkingDays : []),
+    Number.isFinite(Number(input.scheduleIntervalMinutes)) ? Math.max(0, Math.round(Number(input.scheduleIntervalMinutes))) : null,
+    Boolean(input.scheduleReminderEnabled),
+    Boolean(input.scheduleReminderEnabled) && Number.isFinite(Number(input.scheduleReminderMinutes))
+      ? Math.max(1, Math.round(Number(input.scheduleReminderMinutes)))
+      : null,
+    JSON.stringify(Array.isArray(input.scheduleReminderRules) ? input.scheduleReminderRules : []),
+    companyId,
+  ];
+
+  for (const targetAccountId of targetAccountIds) {
+    await pool.query(
+      `
+      INSERT INTO ai_account_settings (
+        account_id,
+        company_id,
+        agent_name,
+        company_name,
+        mood,
+        agent_guidelines,
+        store_name,
+        store_description,
+        store_cnpj,
+        store_address,
+        store_payment_methods,
+        store_delivery_fees,
+        schedule_working_days,
+        schedule_interval_minutes,
+        schedule_reminder_enabled,
+        schedule_reminder_minutes,
+        schedule_reminder_rules
+      )
+      VALUES ($1, $17::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16::jsonb)
+      ON CONFLICT (account_id) DO UPDATE
+        SET company_id = EXCLUDED.company_id,
+            agent_name = EXCLUDED.agent_name,
+            company_name = EXCLUDED.company_name,
+            mood = EXCLUDED.mood,
+            agent_guidelines = EXCLUDED.agent_guidelines,
+            store_name = EXCLUDED.store_name,
+            store_description = EXCLUDED.store_description,
+            store_cnpj = EXCLUDED.store_cnpj,
+            store_address = EXCLUDED.store_address,
+            store_payment_methods = EXCLUDED.store_payment_methods,
+            store_delivery_fees = EXCLUDED.store_delivery_fees,
+            schedule_working_days = EXCLUDED.schedule_working_days,
+            schedule_interval_minutes = EXCLUDED.schedule_interval_minutes,
+            schedule_reminder_enabled = EXCLUDED.schedule_reminder_enabled,
+            schedule_reminder_minutes = EXCLUDED.schedule_reminder_minutes,
+            schedule_reminder_rules = EXCLUDED.schedule_reminder_rules,
+            updated_at = NOW()
+      `,
+      [targetAccountId, ...sharedValues],
+    );
+  }
+
+  const settings = await getAiAccountSettings(normalizedAccountId);
+  if (!settings) {
+    throw new Error("AI_ACCOUNT_SETTINGS_NOT_FOUND");
+  }
+
+  return settings;
 }
 
 export async function setConversationAiAgentEnabled(conversationId: string, enabled: boolean): Promise<boolean> {

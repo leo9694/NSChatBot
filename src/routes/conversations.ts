@@ -25,6 +25,7 @@ type AuthRequest = Request & {
     name: string;
     username: string;
     role: "ceo" | "administrador" | "operador";
+    auto_sign_messages?: boolean;
     company_id?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
@@ -75,6 +76,13 @@ function buildSignedTextMessage(message: string, attendantName: string): string 
     return cleanMessage;
   }
   return `*${cleanName}*:\n${cleanMessage}`;
+}
+
+function applyUserSignaturePreference(message: string, attendantName: string, autoSignMessages?: boolean): string {
+  if (!Boolean(autoSignMessages)) {
+    return String(message || "").trim();
+  }
+  return buildSignedTextMessage(message, attendantName);
 }
 
 async function conversationBelongsToCompany(conversationId: string, companyId?: string | null) {
@@ -530,9 +538,25 @@ router.patch("/:conversationId/transfer", async (req, res) => {
     return res.status(404).json({ error: "Conversa nao encontrada." });
   }
 
+  const aiInChargeResult = await pool.query<{ ai_in_charge: boolean }>(
+    `
+    SELECT (
+      c.service_status = 'in_progress'
+      AND c.assigned_user_id IS NULL
+      AND COALESCE((c.metadata->>'ai_agent_enabled')::boolean, false) = true
+    ) AS ai_in_charge
+    FROM conversations c
+    WHERE c.id = $1
+    LIMIT 1
+    `,
+    [conversationId],
+  );
+  const aiInCharge = Boolean(aiInChargeResult.rows[0]?.ai_in_charge);
+
   const canTransfer =
     userRole === "administrador" ||
     access.assigned_user_id === userId ||
+    aiInCharge ||
     access.service_status === "pending" ||
     access.service_status === "finalized";
   if (!canTransfer) {
@@ -864,7 +888,7 @@ router.post("/start", async (req, res) => {
     }
 
     if (firstMessage) {
-      const signedFirstMessage = buildSignedTextMessage(firstMessage, authReq.authUser?.name || "");
+      const signedFirstMessage = applyUserSignaturePreference(firstMessage, authReq.authUser?.name || "", authReq.authUser?.auto_sign_messages);
       const waResponse = await sendWhatsAppText({
         to: phone,
         message: signedFirstMessage,

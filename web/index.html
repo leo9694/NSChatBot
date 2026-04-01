@@ -192,6 +192,7 @@
                   <div id="attachMenu" class="attach-menu">
                     <button id="attachPhotoBtn" type="button"><i class="bi bi-image"></i>Fotos e videos</button>
                     <button id="attachFileBtn" type="button"><i class="bi bi-file-earmark"></i>Documento</button>
+                    <button id="attachLibraryBtn" type="button"><i class="bi bi-collection-play"></i>Biblioteca da empresa</button>
                   </div>
                   <input id="attachPhotoInput" type="file" accept="image/*,video/*" hidden />
                   <input id="attachFileInput" type="file" hidden />
@@ -468,13 +469,16 @@
           </header>
           <section class="products-body">
             <div class="products-shell">
-              <aside class="products-nav">
-                <button id="productsTabStoreInfo" type="button" class="products-nav-item active">
-                  <i class="bi bi-shop"></i> Informações da loja
-                </button>
-                <button id="productsTabCreate" type="button" class="products-nav-item">
-                  <i class="bi bi-box2-heart-fill"></i> Cadastro de produtos
-                </button>
+                <aside class="products-nav">
+                  <button id="productsTabStoreInfo" type="button" class="products-nav-item active">
+                    <i class="bi bi-shop"></i> Informações da loja
+                  </button>
+                  <button id="productsTabMedia" type="button" class="products-nav-item">
+                    <i class="bi bi-collection-play-fill"></i> Mídias da empresa
+                  </button>
+                  <button id="productsTabCreate" type="button" class="products-nav-item">
+                    <i class="bi bi-box2-heart-fill"></i> Cadastro de produtos
+                  </button>
                 <button id="productsTabList" type="button" class="products-nav-item">
                   <i class="bi bi-grid-1x2-fill"></i> Lista de produtos
                 </button>
@@ -614,6 +618,54 @@
                       </button>
                     </div>
                   </form>
+                </div>
+
+                <div id="productsPanelMedia" class="bulk-card products-panel">
+                  <div class="agent-card-head">
+                    <div>
+                      <h3>Biblioteca de mídias</h3>
+                      <p>Cadastre catálogos, PDFs, vídeos, áudios e materiais de apoio para o agente e os atendentes enviarem no chat.</p>
+                    </div>
+                  </div>
+
+                    <form id="companyMediaForm" class="new-chat-form products-form company-media-form">
+                      <input id="companyMediaEditId" type="hidden" />
+                      <div class="products-form-grid">
+                        <label>
+                          Nome da mídia
+                          <input id="companyMediaTitle" type="text" placeholder="Ex.: Catálogo de produtos 2026" />
+                        </label>
+                        <label>
+                          Arquivo
+                          <input id="companyMediaFile" type="file" />
+                        </label>
+                        <label>
+                          Nome do arquivo exibido
+                          <input id="companyMediaFileName" type="text" placeholder="Ex.: catalogo-2026.pdf" />
+                        </label>
+                      </div>
+                      <label>
+                        Descrição para o agente
+                        <textarea id="companyMediaDescription" rows="4" placeholder="Explique do que se trata essa mídia e em quais pedidos do cliente faz sentido enviar."></textarea>
+                      </label>
+                      <div id="companyMediaUploadPreview" class="company-media-upload-preview" hidden></div>
+                      <div class="products-form-actions">
+                        <button id="companyMediaSubmitBtn" type="submit" class="btn-primary">
+                          <i class="bi bi-cloud-arrow-up"></i> Salvar mídia
+                        </button>
+                        <button id="companyMediaCancelEditBtn" type="button" class="btn-secondary" hidden>
+                          Cancelar edição
+                        </button>
+                      </div>
+                    </form>
+
+                  <div class="agent-card-head company-media-list-head">
+                    <div>
+                      <h3>Mídias cadastradas</h3>
+                      <p id="companyMediaMeta">Nenhuma mídia cadastrada.</p>
+                    </div>
+                  </div>
+                  <div id="companyMediaList" class="company-media-list"></div>
                 </div>
 
                 <div id="productsPanelCreate" class="bulk-card products-panel">
@@ -877,7 +929,7 @@
                     <i class="bi bi-buildings-fill"></i> Empresas
                   </button>
                   <button id="settingsTabAccounts" type="button" class="settings-nav-item">
-                    <i class="bi bi-phone-fill"></i> Gerência de perfis
+                    <i class="bi bi-phone-fill"></i> Múltiplos números
                   </button>
                 </div>
                 <button id="settingsLogoutBtn" type="button" class="settings-nav-item settings-nav-logout">
@@ -887,7 +939,15 @@
 
               <div class="settings-content">
                 <div id="settingsPanelPerfil" class="bulk-card settings-panel active">
-                  <h3>Perfil do usuário</h3>
+                  <div class="settings-profile-hero">
+                    <div class="settings-profile-hero-main">
+                      <div id="settingsProfileAvatar" class="settings-profile-avatar">NS</div>
+                      <div class="settings-profile-hero-copy">
+                        <h3>Perfil do usuário</h3>
+                        <p id="settingsProfileSubtitle">Preferências do seu atendimento e dados da sua conta.</p>
+                      </div>
+                    </div>
+                  </div>
                   <div id="settingsHeader" class="settings-header"></div>
                   <div class="settings-profile-grid">
                     <div class="settings-profile-item">
@@ -909,6 +969,19 @@
                     <div class="settings-profile-item">
                       <span class="profile-label">Empresa</span>
                       <strong id="settingsProfileCompany">-</strong>
+                    </div>
+                  </div>
+                  <div class="settings-profile-preferences">
+                    <div class="settings-preference-card">
+                      <div class="settings-preference-copy">
+                        <span class="settings-preference-kicker">Assinatura</span>
+                        <strong>Assinar mensagens automaticamente</strong>
+                        <p>Quando estiver ligado, suas mensagens manuais serão enviadas com sua assinatura no início.</p>
+                      </div>
+                      <button id="settingsSignatureToggleBtn" type="button" class="settings-signature-toggle" aria-pressed="true">
+                        <i class="bi bi-pen-fill"></i>
+                        <span id="settingsSignatureToggleLabel">Ligado</span>
+                      </button>
                     </div>
                   </div>
                   <div id="settingsAdminActions" class="settings-footer-actions" hidden>
@@ -1007,14 +1080,46 @@
                 </div>
 
                 <div id="settingsPanelAccounts" class="bulk-card settings-panel">
-                  <h3>Gerência de perfis</h3>
+                  <div class="settings-accounts-hero">
+                    <div class="settings-accounts-hero-copy">
+                      <span class="settings-preference-kicker">Canais do WhatsApp</span>
+                      <h3>Configurar mais de um número</h3>
+                      <p>Visualize os números vinculados à empresa, veja quais estão conectados agora e troque rapidamente o número de trabalho usado no atendimento.</p>
+                    </div>
+                    <div class="settings-accounts-summary">
+                      <div class="settings-account-stat">
+                        <strong id="settingsAccountsTotal">0</strong>
+                        <span>Números vinculados</span>
+                      </div>
+                      <div class="settings-account-stat">
+                        <strong id="settingsAccountsConnected">0</strong>
+                        <span>Conectados agora</span>
+                      </div>
+                    </div>
+                  </div>
                   <div class="settings-account-actions">
-                    <button id="settingsSwitchNumberBtn" type="button" class="btn-secondary">Trocar número</button>
-                    <button id="settingsAddNumberBtn" type="button" class="btn-secondary" hidden>Adicionar número</button>
-                    <button id="settingsRemoveNumberBtn" type="button" class="btn-danger" hidden>Remover número</button>
+                    <button id="settingsSwitchNumberBtn" type="button" class="btn-secondary">
+                      <i class="bi bi-arrow-repeat"></i>
+                      Trocar número ativo
+                    </button>
+                    <button id="settingsAddNumberBtn" type="button" class="btn-secondary" hidden>
+                      <i class="bi bi-plus-circle"></i>
+                      Adicionar número
+                    </button>
+                    <button id="settingsRemoveNumberBtn" type="button" class="btn-danger" hidden>
+                      <i class="bi bi-trash3"></i>
+                      Remover número
+                    </button>
                   </div>
                   <div class="settings-account-note">
-                    Selecione o número de trabalho do atendente e gerencie os números vinculados ao app.
+                    O número marcado como ativo é o que o atendente usa no painel. Você pode manter vários números vinculados na mesma empresa.
+                  </div>
+                  <div class="settings-accounts-list-wrap">
+                    <div class="settings-accounts-list-head">
+                      <strong>Telefones vinculados</strong>
+                      <span id="settingsAccountsListMeta">Nenhum número carregado</span>
+                    </div>
+                    <div id="settingsAccountsList" class="settings-accounts-list"></div>
                   </div>
                 </div>
               </div>

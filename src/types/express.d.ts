@@ -9,6 +9,7 @@ declare global {
         name: string;
         username: string;
         role: AppUserRole;
+        auto_sign_messages?: boolean;
         company_id?: string | null;
         company_name?: string | null;
         company_cnpj?: string | null;

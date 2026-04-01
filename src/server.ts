@@ -13,6 +13,7 @@ import conversationRoutes from "./routes/conversations";
 import healthRoutes from "./routes/health";
 import bulkDispatchRoutes from "./routes/bulk-dispatch";
 import messageRoutes from "./routes/messages";
+import companyMediaRoutes from "./routes/company-media";
 import productRoutes from "./routes/products";
 import realtimeRoutes from "./routes/realtime";
 import whatsappRoutes from "./routes/whatsapp";
@@ -64,6 +65,7 @@ app.get("/", (_, res) => {
 app.use(requireAuth);
 app.use("/ai", aiRoutes);
 app.use("/messages", messageRoutes);
+app.use("/company-media", companyMediaRoutes);
 app.use("/products", productRoutes);
 app.use("/conversations", conversationRoutes);
 app.use("/bulk-dispatch", bulkDispatchRoutes);

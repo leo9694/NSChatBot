@@ -49,8 +49,11 @@ function extFromMime(mimeType: string): string {
   if (mime.includes("json")) return "json";
   if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
   if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("webm")) return "webm";
   if (mime.includes("wav")) return "wav";
   if (mime.includes("aac")) return "aac";
+  if (mime.includes("m4a") || mime.includes("mp4a")) return "m4a";
+  if (mime.includes("opus")) return "opus";
   if (mime.includes("mp4")) return "mp4";
   if (mime.includes("png")) return "png";
   if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
@@ -150,12 +153,22 @@ export async function syncLocalMediaDirectoryToDatabase(): Promise<{ synced: num
             ? "image/webp"
             : ext === "gif"
               ? "image/gif"
-              : ext === "mp4"
-                ? "video/mp4"
-                : ext === "ogg"
-                  ? "audio/ogg"
-                  : ext === "mp3"
-                    ? "audio/mpeg"
+                : ext === "mp4"
+                  ? "video/mp4"
+                  : ext === "ogg"
+                    ? "audio/ogg"
+                    : ext === "mp3"
+                      ? "audio/mpeg"
+                      : ext === "webm"
+                        ? "audio/webm"
+                        : ext === "wav"
+                          ? "audio/wav"
+                          : ext === "aac"
+                            ? "audio/aac"
+                            : ext === "m4a"
+                              ? "audio/mp4"
+                              : ext === "opus"
+                                ? "audio/ogg; codecs=opus"
                     : ext === "pdf"
                       ? "application/pdf"
                       : "application/octet-stream";
@@ -188,6 +201,20 @@ export async function loadMediaBufferFromUrl(
               ? "image/webp"
               : ext === "gif"
                 ? "image/gif"
+                : ext === "ogg"
+                  ? "audio/ogg"
+                  : ext === "mp3"
+                    ? "audio/mpeg"
+                    : ext === "wav"
+                      ? "audio/wav"
+                      : ext === "aac"
+                        ? "audio/aac"
+                        : ext === "m4a"
+                          ? "audio/mp4"
+                          : ext === "opus"
+                            ? "audio/ogg; codecs=opus"
+                            : ext === "webm"
+                              ? "audio/webm"
                 : ext === "mp4"
                   ? "video/mp4"
                   : "application/octet-stream";

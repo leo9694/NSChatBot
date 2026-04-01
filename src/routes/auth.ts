@@ -12,6 +12,7 @@ import {
   listSectors,
   listUsers,
   revokeSessionByToken,
+  updateMyMessageSignaturePreference,
   updateCompanyBranding,
   updateUser,
 } from "../repositories/auth.repository";
@@ -32,6 +33,7 @@ type AuthRequest = Parameters<typeof requireAuth>[0] & {
     name: string;
     username: string;
     role: "ceo" | "administrador" | "operador";
+    auto_sign_messages?: boolean;
     company_id?: string | null;
     company_name?: string | null;
     company_cnpj?: string | null;
@@ -82,6 +84,27 @@ router.get("/me", requireAuth, async (req, res) => {
   return res.status(200).json({
     user: authReq.authUser,
   });
+});
+
+router.put("/me/signature", requireAuth, async (req, res) => {
+  const authReq = req as AuthRequest;
+  const userId = String(authReq.authUser?.id || "").trim();
+  if (!userId) {
+    return res.status(401).json({ error: "Sessao invalida." });
+  }
+
+  const autoSignMessages = Boolean(req.body?.auto_sign_messages);
+  const user = await updateMyMessageSignaturePreference({
+    userId,
+    autoSignMessages,
+  });
+
+  if (!user) {
+    return res.status(404).json({ error: "Usuario nao encontrado." });
+  }
+
+  authReq.authUser = user;
+  return res.status(200).json({ status: "ok", user });
 });
 
 router.get("/company-branding", requireAuth, async (req, res) => {

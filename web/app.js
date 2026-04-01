@@ -42,6 +42,7 @@
   settingsTab: "perfil",
   realtimeCheckpointToken: "",
   products: [],
+  companyMediaAssets: [],
   productsSearch: "",
   productOrders: [],
   productSchedules: [],
@@ -98,6 +99,7 @@ const attachBtnEl = document.getElementById("attachBtn");
 const attachMenuEl = document.getElementById("attachMenu");
 const attachPhotoBtnEl = document.getElementById("attachPhotoBtn");
 const attachFileBtnEl = document.getElementById("attachFileBtn");
+const attachLibraryBtnEl = document.getElementById("attachLibraryBtn");
 const attachPhotoInputEl = document.getElementById("attachPhotoInput");
 const attachFileInputEl = document.getElementById("attachFileInput");
 const messageInputEl = document.getElementById("messageInput");
@@ -249,16 +251,23 @@ const settingsPanelListEl = document.getElementById("settingsPanelList");
 const settingsPanelSectorsEl = document.getElementById("settingsPanelSectors");
 const settingsPanelCompaniesEl = document.getElementById("settingsPanelCompanies");
 const settingsPanelAccountsEl = document.getElementById("settingsPanelAccounts");
+const settingsProfileAvatarEl = document.getElementById("settingsProfileAvatar");
 const settingsProfileNameEl = document.getElementById("settingsProfileName");
 const settingsProfileUsernameEl = document.getElementById("settingsProfileUsername");
 const settingsProfileRoleEl = document.getElementById("settingsProfileRole");
 const settingsProfileSectorEl = document.getElementById("settingsProfileSector");
 const settingsProfileCompanyEl = document.getElementById("settingsProfileCompany");
+const settingsSignatureToggleBtnEl = document.getElementById("settingsSignatureToggleBtn");
+const settingsSignatureToggleLabelEl = document.getElementById("settingsSignatureToggleLabel");
 const settingsAdminActionsEl = document.getElementById("settingsAdminActions");
 const settingsFinalizePendingBtnEl = document.getElementById("settingsFinalizePendingBtn");
 const settingsSwitchNumberBtnEl = document.getElementById("settingsSwitchNumberBtn");
 const settingsAddNumberBtnEl = document.getElementById("settingsAddNumberBtn");
 const settingsRemoveNumberBtnEl = document.getElementById("settingsRemoveNumberBtn");
+const settingsAccountsTotalEl = document.getElementById("settingsAccountsTotal");
+const settingsAccountsConnectedEl = document.getElementById("settingsAccountsConnected");
+const settingsAccountsListMetaEl = document.getElementById("settingsAccountsListMeta");
+const settingsAccountsListEl = document.getElementById("settingsAccountsList");
 const createUserFormEl = document.getElementById("createUserForm");
 const newUserNameEl = document.getElementById("newUserName");
 const newUserUsernameEl = document.getElementById("newUserUsername");
@@ -348,17 +357,30 @@ const storeDeliveryFeesListEl = document.getElementById("storeDeliveryFeesList")
 const storeAddDeliveryFeeBtnEl = document.getElementById("storeAddDeliveryFeeBtn");
 const storeInfoSaveBtnEl = document.getElementById("storeInfoSaveBtn");
 const productsTabStoreInfoEl = document.getElementById("productsTabStoreInfo");
+const productsTabMediaEl = document.getElementById("productsTabMedia");
 const productsTabCreateEl = document.getElementById("productsTabCreate");
 const productsTabListEl = document.getElementById("productsTabList");
 const productsTabOrdersEl = document.getElementById("productsTabOrders");
 const productsTabSchedulesEl = document.getElementById("productsTabSchedules");
 const productsTabScheduleSettingsEl = document.getElementById("productsTabScheduleSettings");
 const productsPanelStoreInfoEl = document.getElementById("productsPanelStoreInfo");
+const productsPanelMediaEl = document.getElementById("productsPanelMedia");
 const productsPanelCreateEl = document.getElementById("productsPanelCreate");
 const productsPanelListEl = document.getElementById("productsPanelList");
 const productsPanelOrdersEl = document.getElementById("productsPanelOrders");
 const productsPanelSchedulesEl = document.getElementById("productsPanelSchedules");
 const productsPanelScheduleSettingsEl = document.getElementById("productsPanelScheduleSettings");
+const companyMediaFormEl = document.getElementById("companyMediaForm");
+const companyMediaEditIdEl = document.getElementById("companyMediaEditId");
+const companyMediaTitleEl = document.getElementById("companyMediaTitle");
+const companyMediaFileEl = document.getElementById("companyMediaFile");
+const companyMediaFileNameEl = document.getElementById("companyMediaFileName");
+const companyMediaDescriptionEl = document.getElementById("companyMediaDescription");
+const companyMediaUploadPreviewEl = document.getElementById("companyMediaUploadPreview");
+const companyMediaSubmitBtnEl = document.getElementById("companyMediaSubmitBtn");
+const companyMediaCancelEditBtnEl = document.getElementById("companyMediaCancelEditBtn");
+const companyMediaMetaEl = document.getElementById("companyMediaMeta");
+const companyMediaListEl = document.getElementById("companyMediaList");
 const schedulePrevMonthBtnEl = document.getElementById("schedulePrevMonthBtn");
 const scheduleNextMonthBtnEl = document.getElementById("scheduleNextMonthBtn");
 const scheduleCurrentMonthLabelEl = document.getElementById("scheduleCurrentMonthLabel");
@@ -608,6 +630,66 @@ function formatWhatsAppAccountMeta(account) {
     return "Número ainda não vinculado. Clique em Conectar para ler o QR code.";
   }
   return String(account.wa_jid || "").trim();
+}
+
+function formatWhatsAppConnectionStatus(account) {
+  if (!account) return "Indisponível";
+  if (isPendingWhatsAppAccount(account)) return "Aguardando conexão";
+  return account.connected ? "Conectado" : "Desconectado";
+}
+
+function renderSettingsAccountsPanel() {
+  if (!settingsAccountsListEl) return;
+  const items = Array.isArray(state.whatsappAccounts) ? state.whatsappAccounts : [];
+  const connectedItems = items.filter((item) => Boolean(item?.connected));
+
+  if (settingsAccountsTotalEl) settingsAccountsTotalEl.textContent = String(items.length);
+  if (settingsAccountsConnectedEl) settingsAccountsConnectedEl.textContent = String(connectedItems.length);
+
+  if (settingsAccountsListMetaEl) {
+    settingsAccountsListMetaEl.textContent = items.length
+      ? `${connectedItems.length} conectado(s) de ${items.length} número(s)`
+      : "Nenhum número vinculado";
+  }
+
+  settingsAccountsListEl.innerHTML = "";
+
+  if (!items.length) {
+    settingsAccountsListEl.innerHTML = '<div class="empty-state">Nenhum número vinculado à empresa ainda.</div>';
+    return;
+  }
+
+  for (const account of items) {
+    const card = document.createElement("div");
+    const isSelected = account.id === state.selectedWhatsAppAccountId;
+    const isConnected = Boolean(account.connected);
+    const accountTitle = escapeHtml(formatWhatsAppAccountTitle(account));
+    const phone = escapeHtml(formatPhone(account.phone || "") || "Número não identificado");
+    const meta = escapeHtml(formatWhatsAppAccountMeta(account) || "Sem identificador");
+    const status = escapeHtml(formatWhatsAppConnectionStatus(account));
+    card.className = `settings-account-card${isSelected ? " is-selected" : ""}${isConnected ? " is-connected" : ""}${
+      isPendingWhatsAppAccount(account) ? " is-pending" : ""
+    }`;
+    card.innerHTML = `
+      <div class="settings-account-card-top">
+        <div class="settings-account-card-id">
+          <span class="settings-account-card-icon"><i class="bi bi-phone"></i></span>
+          <div class="settings-account-card-copy">
+            <strong>${accountTitle}</strong>
+            <span>${phone}</span>
+          </div>
+        </div>
+        <div class="settings-account-card-badges">
+          <span class="settings-account-chip ${isConnected ? "is-online" : isPendingWhatsAppAccount(account) ? "is-pending" : "is-offline"}">${status}</span>
+          ${isSelected ? '<span class="settings-account-chip is-selected">Ativo no painel</span>' : ""}
+        </div>
+      </div>
+      <div class="settings-account-card-meta">
+        <span><i class="bi bi-hash"></i> ${meta}</span>
+      </div>
+    `;
+    settingsAccountsListEl.appendChild(card);
+  }
 }
 
 function getActiveAccountJid() {
@@ -887,9 +969,10 @@ function openConversationMenu(conversationId, x, y) {
   const conv = state.conversations.find((item) => item.id === conversationId) || null;
   const status = String(conv?.service_status || "pending");
   const isMine = canCurrentUserSendInConversation(conv);
+  const aiInCharge = isAiInChargeConversation(conv);
   const canTransfer =
     Boolean(state.currentUser) &&
-    (isAdmin() || isMine || status === "pending" || status === "finalized");
+    (isAdmin() || isMine || aiInCharge || status === "pending" || status === "finalized");
   transferConversationBtnEl.style.display = canTransfer ? "" : "none";
   finalizeConversationMenuBtnEl.style.display = isMine ? "" : "none";
   conversationAIAgentToggleEl.checked = Boolean(conv?.ai_agent_enabled);
@@ -933,10 +1016,11 @@ function getMobileTopbarCopy() {
     return { title: "Agente IA", subtitle: "Configuração e status" };
   }
   if (state.currentView === "products") {
-    const subtitleMap = {
-      "store-info": "Loja",
-      create: "Cadastro",
-      list: "Produtos",
+      const subtitleMap = {
+        "store-info": "Loja",
+        media: "Mídias",
+        create: "Cadastro",
+        list: "Produtos",
       orders: "Pedidos",
       schedules: "Agendamento",
       "schedule-settings": "Configuração",
@@ -1025,12 +1109,13 @@ function switchView(view) {
     loadBulkJobs().catch((error) => console.error(error));
   } else if (view === "agent") {
     loadAgentStatus().catch((error) => console.error(error));
-  } else if (view === "products") {
-    setProductsTab(state.productsTab || "store-info");
-    loadAgentStatus().catch((error) => console.error(error));
-    loadProducts().catch((error) => console.error(error));
-    loadAiOrders().catch((error) => console.error(error));
-    loadAiSchedules().catch((error) => console.error(error));
+    } else if (view === "products") {
+      setProductsTab(state.productsTab || "store-info");
+      loadAgentStatus().catch((error) => console.error(error));
+      loadProducts().catch((error) => console.error(error));
+      loadCompanyMediaAssets().catch((error) => console.error(error));
+      loadAiOrders().catch((error) => console.error(error));
+      loadAiSchedules().catch((error) => console.error(error));
   } else if (view === "settings") {
     renderSettingsHeader();
     setSettingsTab(state.settingsTab || "perfil");
@@ -1590,12 +1675,14 @@ async function saveCompanyBranding() {
 function setProductsTab(tab) {
   state.productsTab = tab;
   productsTabStoreInfoEl.classList.toggle("active", tab === "store-info");
+  productsTabMediaEl.classList.toggle("active", tab === "media");
   productsTabCreateEl.classList.toggle("active", tab === "create");
   productsTabListEl.classList.toggle("active", tab === "list");
   productsTabOrdersEl.classList.toggle("active", tab === "orders");
   productsTabSchedulesEl.classList.toggle("active", tab === "schedules");
   productsTabScheduleSettingsEl.classList.toggle("active", tab === "schedule-settings");
   productsPanelStoreInfoEl.classList.toggle("active", tab === "store-info");
+  productsPanelMediaEl.classList.toggle("active", tab === "media");
   productsPanelCreateEl.classList.toggle("active", tab === "create");
   productsPanelListEl.classList.toggle("active", tab === "list");
   productsPanelOrdersEl.classList.toggle("active", tab === "orders");
@@ -2780,6 +2867,237 @@ async function loadProducts() {
   renderProducts();
 }
 
+function getCompanyMediaKindLabel(kind) {
+  if (kind === "image") return "Imagem";
+  if (kind === "video") return "Vídeo";
+  if (kind === "audio") return "Áudio";
+  return "Documento";
+}
+
+function renderCompanyMediaUploadPreview(file) {
+  if (!companyMediaUploadPreviewEl) return;
+  if (!file) {
+    companyMediaUploadPreviewEl.hidden = true;
+    companyMediaUploadPreviewEl.innerHTML = "";
+    return;
+  }
+
+  const url = URL.createObjectURL(file);
+  const kind = String(file.type || "").startsWith("image/")
+    ? "image"
+    : String(file.type || "").startsWith("video/")
+      ? "video"
+      : String(file.type || "").startsWith("audio/")
+        ? "audio"
+        : "document";
+
+  companyMediaUploadPreviewEl.hidden = false;
+  companyMediaUploadPreviewEl.innerHTML = "";
+
+  const card = document.createElement("div");
+  card.className = "company-media-upload-card";
+
+  const mediaWrap = document.createElement("div");
+  mediaWrap.className = "company-media-upload-thumb";
+  if (kind === "image") {
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = file.name || "Midia";
+    mediaWrap.appendChild(img);
+  } else if (kind === "video") {
+    const video = document.createElement("video");
+    video.src = url;
+    video.controls = true;
+    video.muted = true;
+    mediaWrap.appendChild(video);
+  } else if (kind === "audio") {
+    const audio = document.createElement("audio");
+    audio.src = url;
+    audio.controls = true;
+    mediaWrap.appendChild(audio);
+  } else {
+    mediaWrap.innerHTML = `<div class="company-media-file-badge"><i class="bi bi-file-earmark-text"></i></div>`;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "company-media-upload-meta";
+  meta.innerHTML = `
+    <strong>${file.name || "Arquivo"}</strong>
+    <span>${getCompanyMediaKindLabel(kind)}</span>
+    <small>${Math.max(1, Math.round((Number(file.size || 0) / 1024) * 10) / 10)} KB</small>
+  `;
+
+  card.appendChild(mediaWrap);
+  card.appendChild(meta);
+  companyMediaUploadPreviewEl.appendChild(card);
+}
+
+function resetCompanyMediaForm() {
+  if (!companyMediaFormEl) return;
+  companyMediaFormEl.reset();
+  if (companyMediaEditIdEl) companyMediaEditIdEl.value = "";
+  if (companyMediaFileEl) companyMediaFileEl.disabled = false;
+  if (companyMediaSubmitBtnEl) {
+    companyMediaSubmitBtnEl.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Salvar mídia';
+  }
+  if (companyMediaCancelEditBtnEl) {
+    companyMediaCancelEditBtnEl.hidden = true;
+  }
+  renderCompanyMediaUploadPreview(null);
+}
+
+function startCompanyMediaEdit(asset) {
+  if (!asset) return;
+  if (companyMediaEditIdEl) companyMediaEditIdEl.value = String(asset.id || "");
+  if (companyMediaTitleEl) companyMediaTitleEl.value = String(asset.title || "");
+  if (companyMediaFileNameEl) companyMediaFileNameEl.value = String(asset.file_name || "");
+  if (companyMediaDescriptionEl) companyMediaDescriptionEl.value = String(asset.description || "");
+  if (companyMediaFileEl) {
+    companyMediaFileEl.value = "";
+    companyMediaFileEl.disabled = true;
+  }
+  if (companyMediaSubmitBtnEl) {
+    companyMediaSubmitBtnEl.innerHTML = '<i class="bi bi-pencil-square"></i> Atualizar mídia';
+  }
+  if (companyMediaCancelEditBtnEl) {
+    companyMediaCancelEditBtnEl.hidden = false;
+  }
+  renderCompanyMediaUploadPreview(null);
+  companyMediaTitleEl?.focus();
+}
+
+function renderCompanyMediaAssets() {
+  if (!companyMediaListEl) return;
+  companyMediaListEl.innerHTML = "";
+  const items = Array.isArray(state.companyMediaAssets) ? state.companyMediaAssets : [];
+  companyMediaMetaEl.textContent =
+    items.length === 0 ? "Nenhuma mídia cadastrada." : `${items.length} mídia(s) disponível(is) para o agente e os atendentes.`;
+
+  if (!items.length) {
+    companyMediaListEl.innerHTML = '<div class="empty-state">Nenhuma mídia cadastrada ainda.</div>';
+    return;
+  }
+
+  for (const asset of items) {
+    const card = document.createElement("article");
+    card.className = "company-media-card";
+
+    const preview = document.createElement("div");
+    preview.className = `company-media-card-preview is-${asset.media_kind || "document"}`;
+    const mediaUrl = String(asset.media_url || "").trim();
+    if ((asset.media_kind || "") === "image" && mediaUrl) {
+      preview.innerHTML = `<img src="${mediaUrl}" alt="${asset.title || "Midia"}" />`;
+    } else if ((asset.media_kind || "") === "video" && mediaUrl) {
+      preview.innerHTML = `<video src="${mediaUrl}" controls preload="metadata"></video>`;
+    } else if ((asset.media_kind || "") === "audio" && mediaUrl) {
+      preview.innerHTML = `<audio src="${mediaUrl}" controls preload="metadata"></audio>`;
+    } else {
+      preview.innerHTML = `<div class="company-media-file-badge"><i class="bi bi-file-earmark-richtext"></i></div>`;
+    }
+
+    const body = document.createElement("div");
+    body.className = "company-media-card-body";
+    body.innerHTML = `
+      <div class="company-media-card-top">
+        <strong>${asset.title || "Sem título"}</strong>
+        <span class="company-media-kind">${getCompanyMediaKindLabel(asset.media_kind)}</span>
+      </div>
+      <div class="company-media-card-file">${asset.file_name || "Arquivo sem nome"}</div>
+      <p>${asset.description || "Sem descrição."}</p>
+    `;
+
+    const actions = document.createElement("div");
+    actions.className = "company-media-card-actions";
+    actions.innerHTML = `
+      <button type="button" class="btn-secondary" data-action="preview-company-media" data-id="${asset.id}">
+        <i class="bi bi-eye"></i> Visualizar
+      </button>
+      <button type="button" class="btn-secondary" data-action="edit-company-media" data-id="${asset.id}">
+        <i class="bi bi-pencil-square"></i> Editar
+      </button>
+      <button type="button" class="btn-danger" data-action="delete-company-media" data-id="${asset.id}">
+        <i class="bi bi-trash3"></i> Excluir
+      </button>
+    `;
+
+    card.appendChild(preview);
+    card.appendChild(body);
+    card.appendChild(actions);
+    companyMediaListEl.appendChild(card);
+  }
+}
+
+async function loadCompanyMediaAssets() {
+  const result = await api("/company-media");
+  state.companyMediaAssets = Array.isArray(result?.items) ? result.items : [];
+  renderCompanyMediaAssets();
+}
+
+function openCompanyMediaPicker() {
+  const items = Array.isArray(state.companyMediaAssets) ? state.companyMediaAssets : [];
+  mediaModalBodyEl.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "company-media-picker";
+  shell.innerHTML = `
+    <div class="company-media-picker-head">
+      <h3>Biblioteca da empresa</h3>
+      <p>Escolha uma mídia já cadastrada para enviar nesta conversa.</p>
+    </div>
+  `;
+
+  const list = document.createElement("div");
+  list.className = "company-media-picker-list";
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">Nenhuma mídia cadastrada para esta empresa.</div>';
+  } else {
+    items.forEach((asset) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "company-media-picker-item";
+      item.dataset.assetId = asset.id;
+      item.innerHTML = `
+        <div class="company-media-picker-item-main">
+          <strong>${asset.title || "Sem título"}</strong>
+          <span>${getCompanyMediaKindLabel(asset.media_kind)} • ${asset.file_name || "Arquivo"}</span>
+        </div>
+        <small>${asset.description || "Sem descrição."}</small>
+      `;
+      list.appendChild(item);
+    });
+  }
+
+  shell.appendChild(list);
+  mediaModalBodyEl.appendChild(shell);
+  mediaModalOverlayEl.hidden = false;
+}
+
+async function sendCompanyMediaAsset(assetId) {
+  const asset = (state.companyMediaAssets || []).find((item) => item.id === assetId);
+  if (!asset) {
+    await showAlert("Mídia não encontrada.");
+    return;
+  }
+  if (!(await ensureConversationReadyForCompose())) {
+    return;
+  }
+
+  await api("/messages/send-library-media", {
+    method: "POST",
+    body: JSON.stringify({
+      conversation_id: state.selectedConversation.id,
+      phone: state.selectedConversation.phone,
+      client_id: state.selectedConversation.client_id || null,
+      asset_id: asset.id,
+    }),
+  });
+
+  closeMediaModal();
+  invalidateConversationCache();
+  invalidateConversationSummaryCache();
+  await loadMessages({ refreshLatest: true });
+  await loadConversations();
+}
+
 async function loadAiOrders() {
   const result = await api("/ai/orders");
   state.productOrders = Array.isArray(result?.items) ? result.items : [];
@@ -2825,21 +3143,31 @@ function renderSettingsHeader() {
   const user = state.currentUser;
   if (!user) {
     settingsHeaderEl.textContent = "";
+    settingsProfileAvatarEl.textContent = "NS";
     settingsProfileNameEl.textContent = "-";
     settingsProfileUsernameEl.textContent = "-";
     settingsProfileRoleEl.textContent = "-";
     settingsProfileSectorEl.textContent = "-";
     settingsProfileCompanyEl.textContent = "-";
+    settingsSignatureToggleBtnEl?.classList.remove("is-enabled");
+    settingsSignatureToggleBtnEl?.setAttribute("aria-pressed", "false");
+    if (settingsSignatureToggleLabelEl) settingsSignatureToggleLabelEl.textContent = "Desligado";
     settingsAdminActionsEl.hidden = true;
     settingsTabCompaniesEl.hidden = true;
+    renderSettingsAccountsPanel();
     return;
   }
   settingsHeaderEl.textContent = `Logado como ${user.name} (${user.role})`;
+  settingsProfileAvatarEl.textContent = profileLabel(user.name || "", "");
   settingsProfileNameEl.textContent = user.name || "-";
   settingsProfileUsernameEl.textContent = user.username || "-";
   settingsProfileRoleEl.textContent = user.role || "-";
   settingsProfileSectorEl.textContent = user.sector_name || "-";
   settingsProfileCompanyEl.textContent = user.company_name || "-";
+  const autoSignEnabled = Boolean(user.auto_sign_messages);
+  settingsSignatureToggleBtnEl?.classList.toggle("is-enabled", autoSignEnabled);
+  settingsSignatureToggleBtnEl?.setAttribute("aria-pressed", autoSignEnabled ? "true" : "false");
+  if (settingsSignatureToggleLabelEl) settingsSignatureToggleLabelEl.textContent = autoSignEnabled ? "Ligado" : "Desligado";
   settingsAdminActionsEl.hidden = !isAdmin();
   settingsAddNumberBtnEl.hidden = !isAdmin();
   settingsRemoveNumberBtnEl.hidden = !isAdmin();
@@ -2850,6 +3178,32 @@ function renderSettingsHeader() {
   }
   renderRoleOptions(newUserRoleEl, newUserRoleEl.value || "operador");
   renderRoleOptions(editUserRoleEl, editUserRoleEl.value || "operador");
+  renderSettingsAccountsPanel();
+}
+
+async function toggleCurrentUserMessageSignature() {
+  if (!state.currentUser) return;
+  const nextValue = !Boolean(state.currentUser.auto_sign_messages);
+  settingsSignatureToggleBtnEl.disabled = true;
+  try {
+    const result = await api("/auth/me/signature", {
+      method: "PUT",
+      body: JSON.stringify({
+        auto_sign_messages: nextValue,
+      }),
+    });
+    state.currentUser = result.user || {
+      ...state.currentUser,
+      auto_sign_messages: nextValue,
+    };
+    renderSettingsHeader();
+    showToast(nextValue ? "Assinatura automatica ativada." : "Assinatura automatica desativada.");
+  } catch (error) {
+    console.error(error);
+    showToast("Nao foi possivel salvar a preferencia de assinatura.", "error");
+  } finally {
+    settingsSignatureToggleBtnEl.disabled = false;
+  }
 }
 
 function renderWhatsAppAccountOptions() {
@@ -3123,6 +3477,7 @@ async function loadWhatsAppAccounts() {
     state.selectedWhatsAppAccountId = String(result?.selected_account_id || "").trim();
 
     renderWhatsAppAccountOptions();
+    renderSettingsAccountsPanel();
     renderSettingsHeader();
     syncProfilePanel();
   } catch (error) {
@@ -3130,6 +3485,7 @@ async function loadWhatsAppAccounts() {
     state.whatsappAccounts = [];
     state.selectedWhatsAppAccountId = "";
     renderWhatsAppAccountOptions();
+    renderSettingsAccountsPanel();
     syncProfilePanel();
   }
 }
@@ -3211,6 +3567,7 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
       await loadBulkJobs();
     } else if (state.currentView === "products") {
       await loadProducts();
+      await loadCompanyMediaAssets();
       await loadAiOrders();
       await loadAiSchedules();
     } else if (state.currentView === "agent") {
@@ -3226,6 +3583,7 @@ async function switchSelectedWhatsAppAccount(accountId, options = {}) {
     await loadConversations();
     if (state.currentView === "products") {
       await loadProducts().catch(() => undefined);
+      await loadCompanyMediaAssets().catch(() => undefined);
       await loadAiOrders().catch(() => undefined);
       await loadAiSchedules().catch(() => undefined);
     }
@@ -4346,10 +4704,11 @@ function resetAppAfterLogout() {
   state.whatsappAccounts = [];
   state.selectedWhatsAppAccountId = "";
   state.search = "";
-  state.agents = [];
-  state.companies = [];
-  state.products = [];
-  state.productOrders = [];
+    state.agents = [];
+    state.companies = [];
+    state.products = [];
+    state.companyMediaAssets = [];
+    state.productOrders = [];
   state.productSchedules = [];
   state.productsTab = "store-info";
   state.editingProductId = "";
@@ -4938,6 +5297,7 @@ function patchConversationNode(node, conv) {
 
   const oldAttendant = node.querySelector(".conversation-attendant");
   if (oldAttendant) oldAttendant.remove();
+  node.classList.remove("conversation-item-ai", "conversation-item-human");
 
   const aiInCharge =
     Boolean(conv.ai_agent_enabled) &&
@@ -4948,8 +5308,12 @@ function patchConversationNode(node, conv) {
     const attendant = document.createElement("div");
     attendant.className = "conversation-attendant";
     attendant.innerHTML = aiInCharge
-      ? '<i class="bi bi-robot"></i><span>Em atendimento: Agente IA</span>'
+      ? '<i class="bi bi-robot"></i><span>Agente IA</span>'
       : `<i class="bi bi-person-workspace"></i><span>${attendantName}</span>`;
+    attendant.classList.toggle("is-ai", aiInCharge);
+    attendant.classList.toggle("is-human", !aiInCharge);
+    node.classList.toggle("conversation-item-ai", aiInCharge);
+    node.classList.toggle("conversation-item-human", !aiInCharge && String(conv.service_status || "") === "in_progress");
     node.querySelector(".conversation-body").appendChild(attendant);
   }
 
@@ -5145,6 +5509,15 @@ function canCurrentUserSendInConversation(conv) {
   return conv.service_status === "in_progress" && conv.assigned_user_id === state.currentUser.id;
 }
 
+function isAiInChargeConversation(conv) {
+  if (!conv) return false;
+  return (
+    String(conv.service_status || "pending") === "in_progress" &&
+    Boolean(conv.ai_agent_enabled) &&
+    !String(conv.assigned_user_id || "").trim()
+  );
+}
+
 function updateComposerLock() {
   const canSend = canCurrentUserSendInConversation(state.selectedConversation);
   const disabled = !canSend;
@@ -5175,6 +5548,14 @@ async function ensureConversationReadyForCompose() {
 
   const status = String(state.selectedConversation.service_status || "pending");
   if (status === "in_progress") {
+    if (isAiInChargeConversation(state.selectedConversation)) {
+      await maybeClaimSelectedConversation();
+      const refreshedAfterClaim =
+        state.conversations.find((item) => item.id === state.selectedConversationId) || state.selectedConversation;
+      state.selectedConversation = refreshedAfterClaim;
+      renderHeader();
+      return canCurrentUserSendInConversation(state.selectedConversation);
+    }
     const responsible =
       state.selectedConversation.ai_agent_enabled && !state.selectedConversation.assigned_user_id
         ? "Agente IA"
@@ -5240,16 +5621,13 @@ function renderHeader() {
   actions.className = "chat-header-actions";
 
   const status = String(state.selectedConversation.service_status || "pending");
-  const aiInCharge =
-    Boolean(state.selectedConversation.ai_agent_enabled) &&
-    status === "in_progress" &&
-    !String(state.selectedConversation.assigned_user_id || "").trim();
+  const aiInCharge = isAiInChargeConversation(state.selectedConversation);
   const assignedName = aiInCharge ? "Agente IA" : state.selectedConversation.assigned_user_name || "";
   const isMobileHeader = isMobileViewport();
   const isMine = canCurrentUserSendInConversation(state.selectedConversation);
   const canTransfer = Boolean(
     state.currentUser &&
-      (isAdmin() || isMine) &&
+      (isAdmin() || isMine || aiInCharge) &&
       status === "in_progress",
   );
 
@@ -6179,13 +6557,15 @@ async function maybeClaimSelectedConversation() {
   const isMine = canCurrentUserSendInConversation(conv);
   if (isMine) return;
 
-  const canClaim = status === "pending" || status === "finalized";
+  const canClaim = status === "pending" || status === "finalized" || isAiInChargeConversation(conv);
   if (!canClaim) return;
 
   const confirmed = await showConfirm(
-    "Deseja iniciar este atendimento agora?",
-    "Iniciar atendimento",
-    "Atender",
+    isAiInChargeConversation(conv)
+      ? "Esta conversa está com o Agente IA. Deseja assumir o atendimento agora?"
+      : "Deseja iniciar este atendimento agora?",
+    isAiInChargeConversation(conv) ? "Assumir atendimento" : "Iniciar atendimento",
+    isAiInChargeConversation(conv) ? "Assumir" : "Atender",
     "Cancelar",
   );
   if (!confirmed) return;
@@ -7085,6 +7465,9 @@ settingsAddNumberBtnEl.addEventListener("click", () => {
 settingsRemoveNumberBtnEl.addEventListener("click", () => {
   openAccountSwitchModal("remove");
 });
+settingsSignatureToggleBtnEl?.addEventListener("click", () => {
+  toggleCurrentUserMessageSignature().catch((error) => console.error(error));
+});
 agentTestBtnEl.addEventListener("click", async () => {
   agentTestBtnEl.disabled = true;
   agentTestResultEl.textContent = "Testando conexão com a OpenAI...";
@@ -7175,6 +7558,120 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
     storeInfoSaveBtnEl.disabled = false;
   }
 });
+
+companyMediaFileEl?.addEventListener("change", () => {
+  const file = companyMediaFileEl.files?.[0] || null;
+  if (file && companyMediaFileNameEl && !String(companyMediaFileNameEl.value || "").trim()) {
+    companyMediaFileNameEl.value = file.name || "";
+  }
+  renderCompanyMediaUploadPreview(file);
+});
+
+companyMediaFormEl?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const editId = String(companyMediaEditIdEl?.value || "").trim();
+  const title = String(companyMediaTitleEl?.value || "").trim();
+  const fileName = String(companyMediaFileNameEl?.value || "").trim();
+  const description = String(companyMediaDescriptionEl?.value || "").trim();
+  const file = companyMediaFileEl?.files?.[0] || null;
+
+  if (!title) {
+    await showAlert("Informe o nome da mídia.");
+    return;
+  }
+  if (!description) {
+    await showAlert("Informe a descrição da mídia.");
+    return;
+  }
+  if (!fileName) {
+    await showAlert("Informe o nome do arquivo exibido.");
+    return;
+  }
+  if (!editId && !file) {
+    await showAlert("Selecione o arquivo da mídia.");
+    return;
+  }
+
+  companyMediaSubmitBtnEl.disabled = true;
+  companyMediaCancelEditBtnEl && (companyMediaCancelEditBtnEl.disabled = true);
+  try {
+    if (editId) {
+      await api(`/company-media/${encodeURIComponent(editId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title,
+          description,
+          file_name: fileName,
+        }),
+      });
+    } else {
+      const form = new FormData();
+      form.append("title", title);
+      form.append("description", description);
+      form.append("file_name", fileName);
+      form.append("file", file);
+      await api("/company-media", {
+        method: "POST",
+        body: form,
+      });
+    }
+    resetCompanyMediaForm();
+    await loadCompanyMediaAssets();
+    await showAlert(editId ? "Mídia atualizada com sucesso." : "Mídia cadastrada com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || (editId ? "Falha ao atualizar a mídia." : "Falha ao cadastrar a mídia."));
+  } finally {
+    companyMediaSubmitBtnEl.disabled = false;
+    companyMediaCancelEditBtnEl && (companyMediaCancelEditBtnEl.disabled = false);
+  }
+});
+
+companyMediaCancelEditBtnEl?.addEventListener("click", () => {
+  resetCompanyMediaForm();
+});
+
+companyMediaListEl?.addEventListener("click", async (event) => {
+  const actionTarget = event.target.closest("[data-action]");
+  if (!actionTarget) return;
+  const action = String(actionTarget.dataset.action || "");
+  const assetId = String(actionTarget.dataset.id || "");
+  const asset = (state.companyMediaAssets || []).find((item) => item.id === assetId);
+  if (!asset) return;
+
+  if (action === "preview-company-media") {
+    if (asset.media_kind === "image" || asset.media_kind === "video") {
+      openMediaModal(asset.media_kind, asset.media_url, asset.mime_type || "");
+      return;
+    }
+    if (asset.media_kind === "audio") {
+      mediaModalBodyEl.innerHTML = `<div class="company-media-audio-preview"><h3>${asset.title}</h3><audio src="${asset.media_url}" controls autoplay></audio><p>${asset.description || ""}</p></div>`;
+      mediaModalOverlayEl.hidden = false;
+      return;
+    }
+    window.open(asset.media_url, "_blank", "noopener");
+    return;
+  }
+
+  if (action === "edit-company-media") {
+    startCompanyMediaEdit(asset);
+    return;
+  }
+
+  if (action === "delete-company-media") {
+    const confirmed = await showConfirm("Excluir mídia", `Excluir a mídia "${asset.title}"?`);
+    if (!confirmed) return;
+    try {
+      await api(`/company-media/${asset.id}`, { method: "DELETE" });
+      if (String(companyMediaEditIdEl?.value || "").trim() === String(asset.id || "").trim()) {
+        resetCompanyMediaForm();
+      }
+      await loadCompanyMediaAssets();
+    } catch (error) {
+      await showAlert(error.message || "Falha ao excluir a mídia.");
+    }
+  }
+});
+
 companyLogoSelectBtnEl?.addEventListener("click", () => companyLogoInputEl?.click());
 companyLogoInputEl?.addEventListener("change", async (event) => {
   const file = event.target?.files?.[0];
@@ -7300,6 +7797,10 @@ scheduleSettingsFormEl.addEventListener("submit", async (event) => {
   }
 });
 productsTabStoreInfoEl.addEventListener("click", () => setProductsTab("store-info"));
+productsTabMediaEl.addEventListener("click", () => {
+  setProductsTab("media");
+  loadCompanyMediaAssets().catch((error) => console.error(error));
+});
 productsTabCreateEl.addEventListener("click", () => setProductsTab("create"));
 productsTabListEl.addEventListener("click", () => setProductsTab("list"));
 productsTabOrdersEl.addEventListener("click", () => setProductsTab("orders"));
@@ -8042,6 +8543,15 @@ mediaModalOverlayEl.addEventListener("click", (event) => {
   }
 });
 
+mediaModalBodyEl?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-asset-id]");
+  if (!button) return;
+  sendCompanyMediaAsset(String(button.dataset.assetId || "")).catch((error) => {
+    console.error(error);
+    showAlert(error.message || "Falha ao enviar a mídia.").catch(() => undefined);
+  });
+});
+
 attachBtnEl.addEventListener("click", () => {
   if (attachBtnEl.dataset.locked === "true") {
     ensureConversationReadyForCompose().catch((error) => console.error(error));
@@ -8058,6 +8568,15 @@ attachPhotoBtnEl.addEventListener("click", () => {
 attachFileBtnEl.addEventListener("click", () => {
   closeAttachMenu();
   attachFileInputEl.click();
+});
+
+attachLibraryBtnEl?.addEventListener("click", async () => {
+  closeAttachMenu();
+  if (!(await ensureConversationReadyForCompose())) {
+    return;
+  }
+  await loadCompanyMediaAssets().catch((error) => console.error(error));
+  openCompanyMediaPicker();
 });
 
 attachPhotoInputEl.addEventListener("change", async () => {

@@ -1,10 +1,17 @@
-﻿import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { env } from "../config/env";
 import { getAiAccountSettings } from "../repositories/ai.repository";
+import { listCompanyMediaAssetsForAgentContext } from "../repositories/company-media.repository";
 import { listProductsForAgentContext, listProductsForAgentDetailedContext } from "../repositories/products.repository";
 import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 
 let openaiClient: OpenAI | null = null;
+
+export type IncomingAudioTranscriptionResult = {
+  text: string | null;
+  status: "ok" | "unclear" | "error";
+  reason?: string | null;
+};
 
 function getOpenAIClient(): OpenAI {
   if (!env.openaiApiKey) {
@@ -46,6 +53,70 @@ function extractResponseText(response: any): string {
     }
   }
   return chunks.join("\n").trim();
+}
+
+function normalizeTranscriptionText(value: string): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function transcriptionLooksUsable(value: string): boolean {
+  const text = normalizeTranscriptionText(value);
+  if (!text || text.length < 2) return false;
+  const alnumCount = (text.match(/[A-Za-z0-9]/g) || []).length;
+  return alnumCount >= 2;
+}
+
+export async function transcribeIncomingAudio(input: {
+  buffer: Buffer;
+  mimeType?: string | null;
+  fileName?: string | null;
+}): Promise<IncomingAudioTranscriptionResult> {
+  const client = getOpenAIClient();
+  const mimeType = String(input.mimeType || "").trim() || "audio/ogg";
+  const fallbackExtension =
+    mimeType.includes("webm")
+      ? "webm"
+      : mimeType.includes("mpeg") || mimeType.includes("mp3")
+        ? "mp3"
+        : mimeType.includes("wav")
+          ? "wav"
+          : mimeType.includes("aac")
+            ? "aac"
+            : mimeType.includes("mp4")
+              ? "m4a"
+              : "ogg";
+  const fileName = String(input.fileName || "").trim() || `incoming-audio.${fallbackExtension}`;
+
+  try {
+    const file = await toFile(input.buffer, fileName, { type: mimeType });
+    const response = await client.audio.transcriptions.create({
+      file,
+      model: "whisper-1",
+      language: "pt",
+      response_format: "json",
+      prompt:
+        "Transcreva com foco em portugu?s do Brasil, preservando datas, hor?rios, nomes pr?prios, endere?os e valores quando estiverem aud?veis.",
+    });
+    const text = normalizeTranscriptionText(String((response as any)?.text || ""));
+    if (!transcriptionLooksUsable(text)) {
+      return {
+        text: null,
+        status: "unclear",
+        reason: "empty_or_unusable_transcription",
+      };
+    }
+    return {
+      text,
+      status: "ok",
+      reason: null,
+    };
+  } catch (error) {
+    return {
+      text: null,
+      status: "error",
+      reason: error instanceof Error ? error.message : "transcription_failed",
+    };
+  }
 }
 
 export async function testOpenAIConnection() {
@@ -195,6 +266,32 @@ export async function getAgentProductContextText(companyId?: string | null): Pro
     .join("\n");
 }
 
+export async function getAgentCompanyMediaContextText(companyId?: string | null): Promise<string> {
+  if (!companyId) {
+    return "Nenhuma mídia da empresa cadastrada.";
+  }
+
+  const items = await listCompanyMediaAssetsForAgentContext(companyId).catch(() => []);
+  if (!items.length) {
+    return "Nenhuma mídia da empresa cadastrada.";
+  }
+
+  return items
+    .map((item) => {
+      const kindLabel =
+        item.media_kind === "image"
+          ? "imagem"
+          : item.media_kind === "video"
+            ? "vídeo"
+            : item.media_kind === "audio"
+              ? "áudio"
+              : "documento";
+      const fileLabel = item.file_name ? ` | arquivo: ${item.file_name}` : "";
+      const descriptionLabel = item.description ? ` | descrição: ${item.description}` : "";
+      return `- ${item.title} | tipo: ${kindLabel}${fileLabel}${descriptionLabel}`;
+    })
+    .join("\n");
+}
 function safeJsonParse(raw: string): any {
   try {
     return JSON.parse(raw);
@@ -466,6 +563,16 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
     "- Ao enviar imagem, respeite literalmente as diretrizes da empresa sobre aviso de envio, grupo de produtos e legenda das fotos.",
     "- Ao enviar imagem, n?o cite estoque na legenda, salvo se o cliente tiver pedido isso ou se uma diretriz da empresa mandar citar.",
     "",
+    "MIDIAS DA EMPRESA",
+    "- Alem das imagens de produto, voce pode enviar midias e documentos da biblioteca da empresa quando isso fizer sentido para o pedido do cliente.",
+    "- Use a biblioteca da empresa para itens como catalogo em PDF, video institucional, video de apresentacao, tabela, documento, portfolio ou material de apoio.",
+    "- So decida enviar uma midia da biblioteca quando a descricao dela combinar claramente com o que o cliente pediu.",
+    "- Se o cliente pedir catalogo, tabela, apresentacao, video da empresa, cardapio, portfolio, documento, PDF ou material explicativo, verifique primeiro a biblioteca da empresa enviada no contexto.",
+    "- Quando decidir enviar uma midia da biblioteca, mantenha media.should_send_images=true e retorne em media.library_asset_names os titulos exatos das midias escolhidas.",
+    "- Retorne os titulos exatos cadastrados no contexto em media.library_asset_names.",
+    "- Voce pode retornar ao mesmo tempo media.product_names e media.library_asset_names se fizer sentido enviar ambos.",
+    "- Se nao houver uma midia adequada na biblioteca da empresa, nao invente; responda normalmente sem prometer envio.",
+    "",
     "ENCERRAMENTO E HANDOFF",
     "- Se o cliente encerrar com algo como 'n?o obrigado', 's? isso', 'ok obrigado' ou equivalente, encerre de forma curta e educada, sem reabrir o assunto.",
     "- Se o cliente pedir humano, atendente, gerente, suporte, financeiro ou outra pessoa da equipe, trate isso como inten??o principal e marque handoff.should_transfer=true.",
@@ -486,7 +593,7 @@ function buildAiSalesSystemPrompt(moodInstruction: string): string {
     "- Se a diretriz mandar usar linguagem natural e conduzir a conversa, priorize perguntas curtas e contexto progressivo em vez de blocos longos de coleta.",
     "",
     "RETORNO",
-    '- Retorne APENAS JSON neste formato: {"should_reply":true,"reply":"texto","memory_summary":"resumo curto","customer_profile":"perfil curto","order":{"should_create":false,"summary":"","items":[],"total_estimate":null,"responsible_name":"","fulfillment_type":"","delivery_address":"","payment_method":"","notes":"","customer_confirmed_details":false},"schedule":{"should_create":false,"should_cancel":false,"service_name":"","scheduled_date":"","scheduled_time":"","customer_name":"","notes":"","cancel_reason":"","duration_minutes":null,"customer_confirmed_details":false},"media":{"should_send_images":false,"product_names":[]},"handoff":{"should_transfer":false,"reason":""}}',
+    '- Retorne APENAS JSON neste formato: {"should_reply":true,"reply":"texto","memory_summary":"resumo curto","customer_profile":"perfil curto","order":{"should_create":false,"summary":"","items":[],"total_estimate":null,"responsible_name":"","fulfillment_type":"","delivery_address":"","payment_method":"","notes":"","customer_confirmed_details":false},"schedule":{"should_create":false,"should_cancel":false,"service_name":"","scheduled_date":"","scheduled_time":"","customer_name":"","notes":"","cancel_reason":"","duration_minutes":null,"customer_confirmed_details":false},"media":{"should_send_images":false,"product_names":[],"library_asset_names":[]},"handoff":{"should_transfer":false,"reason":""}}',
   ].join("\n");
 }
 
@@ -508,6 +615,7 @@ export async function buildAiSalesPromptPayload(
   const storeContext = buildStoreContextText(storedSettings || {});
   const detailedProducts = await listProductsForAgentDetailedContext(companyId);
   const productCatalog = await getAgentProductContextText(companyId);
+  const companyMediaCatalog = await getAgentCompanyMediaContextText(companyId);
   const productCatalogWithImages =
     detailedProducts.length > 0
       ? detailedProducts
@@ -572,6 +680,7 @@ export async function buildAiSalesPromptPayload(
           `Informações da loja:\n${storeContext}\n\n` +
           `Catálogo de produtos:\n${productCatalog}\n\n` +
           `Catálogo com disponibilidade de imagem:\n${productCatalogWithImages}\n\n` +
+          `Biblioteca de midias da empresa:\n${companyMediaCatalog}\n\n` +
           `Histórico da conversa:\n${transcript}`,
       },
     ],
@@ -625,6 +734,9 @@ export async function generateAiSalesReply(input: AiSalesReplyInput) {
       shouldSendImages: Boolean(parsed?.media?.should_send_images),
       productNames: Array.isArray(parsed?.media?.product_names)
         ? parsed.media.product_names.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+        : [],
+      libraryAssetNames: Array.isArray(parsed?.media?.library_asset_names)
+        ? parsed.media.library_asset_names.map((item: unknown) => String(item || "").trim()).filter(Boolean)
         : [],
     },
     handoff: {
@@ -731,6 +843,9 @@ export async function evaluateAiHumanTransferIntent(input: {
     raw: parsed,
   };
 }
+
+
+
 
 
 

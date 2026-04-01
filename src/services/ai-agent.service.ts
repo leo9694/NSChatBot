@@ -17,6 +17,10 @@ import {
   upsertConversationAiMemory,
 } from "../repositories/ai.repository";
 import {
+  listCompanyMediaAssetsForAgentContext,
+  type CompanyMediaAssetRow,
+} from "../repositories/company-media.repository";
+import {
   activateAiConversation,
   clearConversationAiOrderDraft,
   clearConversationAiRescheduleContext,
@@ -29,7 +33,7 @@ import { getWhatsAppAccountById } from "../repositories/accounts.repository";
 import { listProductsForAgentDetailedContext } from "../repositories/products.repository";
 import { buildAiSalesPromptPayload, evaluateAiHumanTransferIntent, generateAiSalesReply } from "./openai.service";
 import { loadMediaBufferFromUrl } from "./media.service";
-import { sendWhatsAppMedia, sendWhatsAppText, setWhatsAppTypingPresence } from "./whatsapp.service";
+import { sendWhatsAppAudio, sendWhatsAppMedia, sendWhatsAppText, setWhatsAppTypingPresence } from "./whatsapp.service";
 
 const processingConversations = new Set<string>();
 const queuedConversations = new Set<string>();
@@ -176,6 +180,48 @@ function normalizeText(value: string): string {
     .trim();
 }
 
+function getAudioTranscriptMeta(message: any): {
+  text: string | null;
+  status: string | null;
+  reason: string | null;
+} {
+  const metadata = message?.metadata || {};
+  const text = String(metadata.audio_transcript || "").trim() || null;
+  const status = String(metadata.audio_transcript_status || "").trim() || null;
+  const reason = String(metadata.audio_transcript_reason || "").trim() || null;
+  return { text, status, reason };
+}
+
+function normalizeMessagesForAi(messages: any[]): any[] {
+  return messages.map((item) => {
+    if (!item || item.from_me || String(item.message_type || "").trim() !== "audioMessage") {
+      return item;
+    }
+    const transcript = getAudioTranscriptMeta(item);
+    if (transcript.status === "ok" && transcript.text) {
+      return {
+        ...item,
+        body: transcript.text,
+        metadata: {
+          ...(item.metadata || {}),
+          audio_transcript_normalized: true,
+        },
+      };
+    }
+    return item;
+  });
+}
+
+function buildAudioRetryReply(mood: "amigavel" | "informal" | "formal"): string {
+  if (mood === "formal") {
+    return "Nao consegui compreender bem esse audio. Se puder, envie outro audio com mais clareza ou digite a mensagem por aqui.";
+  }
+  if (mood === "amigavel") {
+    return "Nao consegui entender bem esse audio. Se puder, me manda outro audio mais claro ou digita a mensagem por aqui.";
+  }
+  return "Nao consegui entender bem esse audio. Se puder, envia outro audio mais claro ou digita a mensagem por aqui.";
+}
+
 function singularizeNormalizedWord(value: string): string {
   const word = normalizeText(value);
   if (word.length <= 4) return word;
@@ -224,6 +270,38 @@ function buildImageNoticeReply(
     return sendMultipleImages ? "Vou te mandar as fotos agora." : "Vou te mandar a foto agora.";
   }
   return sendMultipleImages ? "Estou enviando as fotos agora." : "Estou enviando a foto agora.";
+}
+
+function buildLibraryMediaNoticeReply(
+  mood: "amigavel" | "informal" | "formal",
+  input: { sendMultiple: boolean; kinds: string[] },
+): string {
+  const kinds = Array.from(new Set(input.kinds.map((item) => String(item || "").trim()).filter(Boolean)));
+  const hasOnlyDocuments = kinds.length > 0 && kinds.every((item) => item === "document");
+  const hasOnlyVideos = kinds.length > 0 && kinds.every((item) => item === "video");
+  const hasOnlyAudios = kinds.length > 0 && kinds.every((item) => item === "audio");
+
+  if (hasOnlyDocuments) {
+    if (mood === "formal") return input.sendMultiple ? "Estou enviando os documentos agora." : "Estou enviando o documento agora.";
+    if (mood === "amigavel") return input.sendMultiple ? "Vou te mandar os documentos agora." : "Vou te mandar o documento agora.";
+    return input.sendMultiple ? "Estou enviando os documentos agora." : "Estou enviando o documento agora.";
+  }
+
+  if (hasOnlyVideos) {
+    if (mood === "formal") return input.sendMultiple ? "Estou enviando os vídeos agora." : "Estou enviando o vídeo agora.";
+    if (mood === "amigavel") return input.sendMultiple ? "Vou te mandar os vídeos agora." : "Vou te mandar o vídeo agora.";
+    return input.sendMultiple ? "Estou enviando os vídeos agora." : "Estou enviando o vídeo agora.";
+  }
+
+  if (hasOnlyAudios) {
+    if (mood === "formal") return input.sendMultiple ? "Estou enviando os áudios agora." : "Estou enviando o áudio agora.";
+    if (mood === "amigavel") return input.sendMultiple ? "Vou te mandar os áudios agora." : "Vou te mandar o áudio agora.";
+    return input.sendMultiple ? "Estou enviando os áudios agora." : "Estou enviando o áudio agora.";
+  }
+
+  if (mood === "formal") return input.sendMultiple ? "Estou enviando as mídias agora." : "Estou enviando a mídia agora.";
+  if (mood === "amigavel") return input.sendMultiple ? "Vou te mandar as mídias agora." : "Vou te mandar a mídia agora.";
+  return input.sendMultiple ? "Estou enviando as mídias agora." : "Estou enviando a mídia agora.";
 }
 
 export function __shouldOmitProductNamesInImageNoticeForTests(agentGuidelines?: Array<string> | null): boolean {
@@ -390,6 +468,74 @@ function buildProductImageCaption(
   }
 
   return lines.filter(Boolean).join("\n");
+}
+
+function extractRequestedCompanyMediaAssets(input: {
+  assets: CompanyMediaAssetRow[];
+  assetNames: string[];
+  lastCustomerMessage: string;
+  modelReply?: string | null;
+}): CompanyMediaAssetRow[] {
+  const requestedNames = input.assetNames.map((item) => normalizeMatchText(item)).filter(Boolean);
+  const customerText = normalizeMatchText(input.lastCustomerMessage);
+  const replyText = normalizeMatchText(String(input.modelReply || ""));
+  const customerParts = getSignificantNameParts(customerText);
+  const replyParts = getSignificantNameParts(replyText);
+
+  const rankedMatches = input.assets
+    .map((asset) => {
+      const title = normalizeMatchText(asset.title);
+      const description = normalizeMatchText(String(asset.description || ""));
+      const haystack = [title, description].filter(Boolean).join(" ");
+      const titleParts = getSignificantNameParts(title);
+      const descriptionParts = getSignificantNameParts(description);
+      const haystackParts = Array.from(new Set([...titleParts, ...descriptionParts]));
+      let score = 0;
+
+      for (const requestedName of requestedNames) {
+        if (title === requestedName) score += 100;
+        else if (title.includes(requestedName) || requestedName.includes(title)) score += 70;
+        else if (haystack.includes(requestedName)) score += 40;
+      }
+
+      if (!score && customerText) {
+        if (title && customerText.includes(title)) score += 60;
+        else if (description && customerText.includes(description)) score += 20;
+      }
+      if (!score && replyText) {
+        if (title && replyText.includes(title)) score += 55;
+        else if (description && replyText.includes(description)) score += 15;
+      }
+
+      if (customerParts.length && haystackParts.length) {
+        const customerOverlap = customerParts.filter((part) => haystackParts.includes(part)).length;
+        if (customerOverlap > 0) {
+          score += customerOverlap * 18;
+        }
+      }
+
+      if (replyParts.length && haystackParts.length) {
+        const replyOverlap = replyParts.filter((part) => haystackParts.includes(part)).length;
+        if (replyOverlap > 0) {
+          score += replyOverlap * 12;
+        }
+      }
+
+      return { asset, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return rankedMatches.map((entry) => entry.asset);
+}
+
+export function __extractRequestedCompanyMediaAssetsForTests(input: {
+  assets: CompanyMediaAssetRow[];
+  assetNames: string[];
+  lastCustomerMessage: string;
+  modelReply?: string | null;
+}): CompanyMediaAssetRow[] {
+  return extractRequestedCompanyMediaAssets(input);
 }
 
 export function __buildProductImageCaptionForTests(
@@ -1873,20 +2019,22 @@ function findSchedulableServiceInConversationText(
   return bestScore > 0 ? bestMatch : null;
 }
 
-function buildMissingImageReply(input: {
+function buildMissingMediaReply(input: {
   mood: "amigavel" | "informal" | "formal";
   requestedName?: string | null;
+  requestedKind?: "image" | "library";
 }) {
   const itemName = String(input.requestedName || "").trim();
+  const targetLabel = input.requestedKind === "library" ? "essa mídia" : "a imagem";
   const itemLabel = itemName ? ` de ${itemName}` : "";
 
   if (input.mood === "amigavel") {
-    return `Ainda nï¿½o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto `;
+    return `Ainda não tenho ${targetLabel}${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes por texto.`;
   }
   if (input.mood === "formal") {
-    return `No momento, nï¿½o hï¿½ imagem${itemLabel} cadastrada no sistema. Se desejar, posso informar os detalhes do item por mensagem.`;
+    return `No momento, não há ${targetLabel}${itemLabel} cadastrada no sistema. Se desejar, posso informar os detalhes por mensagem.`;
   }
-  return `Ainda nï¿½o tenho a imagem${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes do item por texto.`;
+  return `Ainda não tenho ${targetLabel}${itemLabel} cadastrada aqui no momento. Se quiser, posso te passar os detalhes por texto.`;
 }
 
 function catalogHasPlanLikeItems(
@@ -3841,7 +3989,7 @@ export async function buildConversationAiPromptDebug(
 
   const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
   const mood = getAgentMood(accountSettings?.mood);
-  const messages = await listConversationMessagesForAi(id, 80);
+  const messages = normalizeMessagesForAi(await listConversationMessagesForAi(id, 80));
   if (!messages.length) {
     throw new Error("NO_MESSAGES");
   }
@@ -4168,7 +4316,7 @@ export async function handleInboundAiAutomation(
     const accountSettings = context.account_id ? await getAiAccountSettings(String(context.account_id || "").trim()).catch(() => null) : null;
     const mood = getAgentMood(accountSettings?.mood);
 
-    const messages = await listConversationMessagesForAi(id, 80);
+    const messages = normalizeMessagesForAi(await listConversationMessagesForAi(id, 80));
     if (!messages.length) {
       return { ok: true, replied: false, reason: "no_messages" };
     }
@@ -4190,6 +4338,9 @@ export async function handleInboundAiAutomation(
 
     const account = context.account_id ? await getWhatsAppAccountById(String(context.account_id || "").trim(), null).catch(() => null) : null;
     const catalog = await listProductsForAgentDetailedContext(account?.company_id || null);
+    const companyMediaAssets = account?.company_id
+      ? await listCompanyMediaAssetsForAgentContext(account.company_id).catch(() => [])
+      : [];
     const customerTurn = buildCustomerTurnContext(effectiveMessages);
     const lastMessage = customerTurn.turnMessages[customerTurn.turnMessages.length - 1] || effectiveMessages[effectiveMessages.length - 1];
     if (!lastMessage || lastMessage.from_me) {
@@ -4199,6 +4350,36 @@ export async function handleInboundAiAutomation(
     const lastCustomerTurnBody = customerTurn.combinedBody || String(lastMessage.body || "");
     const previousCompanyMessage = findLastCompanyMessageBeforeTurn(effectiveMessages, customerTurn.turnMessages);
     const previousCompanyBody = String(previousCompanyMessage?.body || "").trim() || null;
+    const lastAudioTranscript = getAudioTranscriptMeta(lastMessage);
+    if (String(lastMessage.message_type || "").trim() === "audioMessage" && lastAudioTranscript.status !== "ok") {
+      const audioRetryReply = buildAudioRetryReply(mood);
+      const waResponse = await sendWhatsAppText({
+        to: context.phone,
+        message: audioRetryReply,
+        accountJid: context.account_wa_jid,
+      });
+
+      await saveOutboundMessage({
+        accountJid: context.account_wa_jid,
+        accountDisplayName: null,
+        phone: context.phone,
+        body: audioRetryReply,
+        messageType: "text",
+        externalMessageId: waResponse?.key?.id || null,
+        status: "sent",
+        payload: waResponse,
+        metadata: {
+          ai_generated: true,
+          ai_agent: true,
+          audio_retry_requested: true,
+          audio_transcript_status: lastAudioTranscript.status,
+          audio_transcript_reason: lastAudioTranscript.reason,
+        },
+      });
+
+      await activateAiConversation(id).catch(() => undefined);
+      return { ok: true, replied: true, reason: "audio_transcription_unclear" };
+    }
     const awaitingOrderConfirmation = wasAwaitingOrderConfirmation(effectiveMessages);
     const awaitingScheduleConfirmation = wasAwaitingScheduleConfirmation(effectiveMessages);
     const customerRescheduleRequest = isScheduleRescheduleRequest(lastCustomerTurnBody, quotedBody);
@@ -4251,6 +4432,11 @@ export async function handleInboundAiAutomation(
           }).catch(() => [])
         : [];
     const groundingNotes: string[] = [];
+    if (String(lastMessage.message_type || "").trim() === "audioMessage" && lastAudioTranscript.status === "ok" && lastAudioTranscript.text) {
+      groundingNotes.push(
+        `A ultima mensagem do cliente foi um audio transcrito automaticamente como: "${lastAudioTranscript.text}". Se a transcricao parecer incoerente, incompleta ou ambigua para agir com seguranca, peca gentilmente para o cliente reenviar o audio ou digitar a mensagem.`,
+      );
+    }
     if (customerPlanInquiry && !catalogHasPlanLikeItems(catalog)) {
       groundingNotes.push(`A empresa nï¿½o tem planos ou pacotes cadastrados. Base de resposta: ${buildMissingPlanReply(mood)}`);
     }
@@ -5296,7 +5482,10 @@ export async function handleInboundAiAutomation(
       );
     }
 
-    let shouldAttemptImage = aiResult.media.shouldSendImages;
+    let shouldAttemptImage =
+      Boolean(aiResult.media.shouldSendImages) ||
+      (Array.isArray(aiResult.media.productNames) && aiResult.media.productNames.length > 0) ||
+      (Array.isArray(aiResult.media.libraryAssetNames) && aiResult.media.libraryAssetNames.length > 0);
     let sendMultipleImages = false;
     let matchedProducts: Array<{
       id: string;
@@ -5308,6 +5497,7 @@ export async function handleInboundAiAutomation(
       stock: number;
       image_url: string | null;
     }> = [];
+    let matchedLibraryAssets: CompanyMediaAssetRow[] = [];
 
     const normalizedLastMessageBody = String(lastMessage.body || "");
 
@@ -5322,9 +5512,32 @@ export async function handleInboundAiAutomation(
         aiResult.media.productNames.length > 1;
 
       matchedProducts = sendMultipleImages ? matchedProducts.slice(0, 10) : matchedProducts.slice(0, 1);
+      matchedLibraryAssets = extractRequestedCompanyMediaAssets({
+        assets: companyMediaAssets.filter((item) => Boolean(String(item.media_url || "").trim()) && item.is_active),
+        assetNames: Array.isArray(aiResult.media.libraryAssetNames) ? aiResult.media.libraryAssetNames : [],
+        lastCustomerMessage: normalizedLastMessageBody,
+        modelReply: aiResult.reply,
+      });
+      if (!sendMultipleImages) {
+        matchedLibraryAssets = matchedLibraryAssets.slice(0, 1);
+      }
 
-      if (!matchedProducts.length) {
+      if (!matchedProducts.length && !matchedLibraryAssets.length) {
+        const titleMentionMatches = extractRequestedCompanyMediaAssets({
+          assets: companyMediaAssets.filter((item) => Boolean(String(item.media_url || "").trim()) && item.is_active),
+          assetNames: [],
+          lastCustomerMessage: normalizedLastMessageBody,
+          modelReply: aiResult.reply,
+        });
+        if (titleMentionMatches.length) {
+          matchedLibraryAssets = sendMultipleImages ? titleMentionMatches.slice(0, 10) : titleMentionMatches.slice(0, 1);
+        }
+      }
+
+      if (!matchedProducts.length && !matchedLibraryAssets.length) {
+        const requestedLibraryName = aiResult.media.libraryAssetNames?.[0] || null;
         const requestedName =
+          requestedLibraryName ||
           aiResult.media.productNames[0] ||
           String(lastMessage.body || "")
             .trim()
@@ -5333,19 +5546,27 @@ export async function handleInboundAiAutomation(
             .replace(/^foto da\s+/i, "")
             .trim();
 
-        replyText = buildMissingImageReply({
+        replyText = buildMissingMediaReply({
           mood,
           requestedName,
+          requestedKind: requestedLibraryName ? "library" : "image",
         });
       }
     }
 
     if (
       shouldAttemptImage &&
-      matchedProducts.length > 0 &&
+      (matchedProducts.length > 0 || matchedLibraryAssets.length > 0) &&
       shouldOmitProductNamesInImageNotice(accountSettings?.agent_guidelines)
     ) {
-      replyText = buildImageNoticeReply(mood, sendMultipleImages);
+      if (matchedLibraryAssets.length > 0 && matchedProducts.length === 0) {
+        replyText = buildLibraryMediaNoticeReply(mood, {
+          sendMultiple: matchedLibraryAssets.length > 1,
+          kinds: matchedLibraryAssets.map((item) => item.media_kind),
+        });
+      } else {
+        replyText = buildImageNoticeReply(mood, sendMultipleImages);
+      }
     }
 
     if (!aiResult.shouldReply || !replyText) {
@@ -5401,6 +5622,58 @@ export async function handleInboundAiAutomation(
 
     if (shouldClearRescheduleFlow) {
       await clearConversationAiRescheduleContext(id).catch(() => undefined);
+    }
+
+    if (shouldAttemptImage && matchedLibraryAssets.length > 0) {
+      for (const asset of matchedLibraryAssets) {
+        const media = await loadMediaBufferFromUrl(String(asset.media_url || "").trim());
+        if (!media?.buffer) continue;
+
+        const mediaResponse =
+          asset.media_kind === "audio"
+            ? await sendWhatsAppAudio({
+                to: context.phone,
+                audioBuffer: media.buffer,
+                mimetype: media.mimeType || asset.mime_type || "application/octet-stream",
+                accountJid: context.account_wa_jid,
+              })
+            : await sendWhatsAppMedia({
+                to: context.phone,
+                mediaBuffer: media.buffer,
+                mimetype: media.mimeType || asset.mime_type || "application/octet-stream",
+                fileName: asset.file_name || media.fileName || asset.title,
+                caption: asset.media_kind === "document" ? "" : String(asset.description || "").trim(),
+                accountJid: context.account_wa_jid,
+              });
+
+        await saveOutboundMessage({
+          accountJid: context.account_wa_jid,
+          accountDisplayName: null,
+          phone: context.phone,
+          body: String(asset.description || asset.title || "").trim(),
+          messageType:
+            asset.media_kind === "image"
+              ? "imageMessage"
+              : asset.media_kind === "video"
+                ? "videoMessage"
+                : asset.media_kind === "audio"
+                  ? "audioMessage"
+                  : "documentMessage",
+          externalMessageId: mediaResponse?.key?.id || null,
+          status: "sent",
+          payload: mediaResponse,
+          metadata: {
+            ai_generated: true,
+            ai_agent: true,
+            company_media_asset_id: asset.id,
+            company_media_title: asset.title,
+            media_type: asset.media_kind,
+            file_url: asset.media_url,
+            file_name: asset.file_name || media.fileName || asset.title,
+            mime_type: media.mimeType || asset.mime_type || "application/octet-stream",
+          },
+        });
+      }
     }
 
     if (shouldAttemptImage && matchedProducts.length > 0) {

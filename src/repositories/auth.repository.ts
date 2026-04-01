@@ -35,6 +35,7 @@ export interface AppUser {
   name: string;
   username: string;
   role: AppUserRole;
+  auto_sign_messages?: boolean;
   company_id?: string | null;
   company_name?: string | null;
   company_cnpj?: string | null;
@@ -57,7 +58,7 @@ export interface SessionUser {
   tokenHash: string;
   user: Pick<
     AppUser,
-    "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"
+    "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"
   >;
 }
 
@@ -94,9 +95,9 @@ async function isAuthSchemaReady(): Promise<boolean> {
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'app_users'
-          AND column_name IN ('id', 'company_id', 'sector_id', 'name', 'username', 'password_hash', 'role', 'is_active')
+          AND column_name IN ('id', 'company_id', 'sector_id', 'name', 'username', 'password_hash', 'role', 'auto_sign_messages', 'is_active')
         GROUP BY table_name
-        HAVING COUNT(DISTINCT column_name) = 8
+        HAVING COUNT(DISTINCT column_name) = 9
       ) AS users_ok,
       EXISTS (
         SELECT 1
@@ -318,6 +319,7 @@ export async function ensureAuthSchema(): Promise<void> {
           password_hash TEXT NOT NULL,
           role VARCHAR(30) NOT NULL DEFAULT 'operador',
           sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL,
+          auto_sign_messages BOOLEAN NOT NULL DEFAULT true,
           is_active BOOLEAN NOT NULL DEFAULT true,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -326,6 +328,7 @@ export async function ensureAuthSchema(): Promise<void> {
 
       await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE`);
       await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES app_sectors(id) ON DELETE SET NULL`);
+      await pool.query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS auto_sign_messages BOOLEAN NOT NULL DEFAULT true`);
       await pool.query(`ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check`);
       await pool.query(`ALTER TABLE app_users ADD CONSTRAINT app_users_role_check CHECK (role IN ('ceo', 'administrador', 'operador')) NOT VALID`);
       await pool.query(`ALTER TABLE app_users VALIDATE CONSTRAINT app_users_role_check`);
@@ -428,12 +431,12 @@ function hashSessionToken(token: string): string {
 export async function authenticateUser(
   username: string,
   password: string,
-): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"> | null> {
+): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"> | null> {
   await ensureAuthSchema();
 
-  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name">>(
+  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name">>(
     `
-    SELECT u.id, u.name, u.username, u.role,
+    SELECT u.id, u.name, u.username, u.role, u.auto_sign_messages,
            u.company_id,
            c.name AS company_name,
            c.cnpj AS company_cnpj,
@@ -490,6 +493,7 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
     name: string;
     username: string;
     role: AppUserRole;
+    auto_sign_messages: boolean;
     company_id: string | null;
     company_name: string | null;
     company_cnpj: string | null;
@@ -504,6 +508,7 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
       u.name,
       u.username,
       u.role,
+      u.auto_sign_messages,
       u.company_id,
       c.name AS company_name,
       c.cnpj AS company_cnpj,
@@ -545,6 +550,7 @@ export async function getSessionUserByToken(token: string): Promise<SessionUser 
       name: row.name,
       username: row.username,
       role: row.role,
+      auto_sign_messages: Boolean(row.auto_sign_messages),
       company_id: row.company_id,
       company_name: row.company_name,
       company_cnpj: row.company_cnpj,
@@ -570,16 +576,17 @@ export async function revokeSessionByToken(token: string): Promise<void> {
   );
 }
 
-export async function listUsers(companyId: string): Promise<Array<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>> {
+export async function listUsers(companyId: string): Promise<Array<Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>> {
   await ensureAuthSchema();
 
-  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>(
+  const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name" | "is_active" | "created_at">>(
     `
     SELECT
       u.id,
       u.name,
       u.username,
       u.role,
+      u.auto_sign_messages,
       u.company_id,
       c.name AS company_name,
       c.cnpj AS company_cnpj,
@@ -706,6 +713,40 @@ export async function updateUser(input: {
     [user.sector_id, user.company_id],
   );
   return { ...user, sector_name: meta.rows[0]?.sector_name || null, company_name: meta.rows[0]?.company_name || null, company_cnpj: meta.rows[0]?.company_cnpj || null };
+}
+
+export async function updateMyMessageSignaturePreference(input: {
+  userId: string;
+  autoSignMessages: boolean;
+}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name"> | null> {
+  await ensureAuthSchema();
+
+  await pool.query(
+    `
+    UPDATE app_users
+    SET auto_sign_messages = $2,
+        updated_at = NOW()
+    WHERE id = $1
+    `,
+    [input.userId, input.autoSignMessages],
+  );
+
+  const result = await pool.query<
+    Pick<AppUser, "id" | "name" | "username" | "role" | "auto_sign_messages" | "company_id" | "company_name" | "company_cnpj" | "sector_id" | "sector_name">
+  >(
+    `
+    SELECT u.id, u.name, u.username, u.role, u.auto_sign_messages, u.company_id,
+           c.name AS company_name, c.cnpj AS company_cnpj, u.sector_id, s.name AS sector_name
+    FROM app_users u
+    LEFT JOIN app_sectors s ON s.id = u.sector_id
+    LEFT JOIN app_companies c ON c.id = u.company_id
+    WHERE u.id = $1
+    LIMIT 1
+    `,
+    [input.userId],
+  );
+
+  return result.rows[0] || null;
 }
 
 export async function deactivateUser(userId: string, companyId: string): Promise<boolean> {

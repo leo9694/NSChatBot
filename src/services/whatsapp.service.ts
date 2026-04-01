@@ -25,7 +25,8 @@ import {
 import { getWhatsAppHistorySyncState, listWhatsAppAccounts, setWhatsAppHistorySyncBaseline, upsertWhatsAppAccount } from "../repositories/accounts.repository";
 import { saveInboundMessage, saveOutboundMessage, updateOutboundMessageStatus } from "../repositories/messages.repository";
 import { handleInboundAiAutomation, registerCustomerMessageActivity, registerCustomerTypingActivity, registerCustomerTypingStopped, scheduleInboundAiAutomation } from "./ai-agent.service";
-import { saveMediaBuffer } from "./media.service";
+import { transcribeIncomingAudio } from "./openai.service";
+import { loadMediaBufferFromUrl, saveMediaBuffer } from "./media.service";
 import { pool } from "../db/pool";
 import { publishConversationTyping } from "./realtime.service";
 
@@ -354,6 +355,30 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
   const imagePreview = await extractBestImageUrl(session, message);
   const videoInfo = await extractBestVideoInfo(session, message);
   const audioUrl = await extractBestAudioUrl(session, message);
+  let audioTranscriptText: string | null = null;
+  let audioTranscriptStatus: "ok" | "unclear" | "error" | null = null;
+  let audioTranscriptReason: string | null = null;
+  if (audioUrl) {
+    try {
+      const media = await loadMediaBufferFromUrl(audioUrl);
+      if (media?.buffer) {
+        const transcription = await transcribeIncomingAudio({
+          buffer: media.buffer,
+          mimeType: media.mimeType,
+          fileName: media.fileName,
+        });
+        audioTranscriptText = transcription.text;
+        audioTranscriptStatus = transcription.status;
+        audioTranscriptReason = transcription.reason || null;
+      } else {
+        audioTranscriptStatus = "error";
+        audioTranscriptReason = "audio_buffer_not_found";
+      }
+    } catch (error) {
+      audioTranscriptStatus = "error";
+      audioTranscriptReason = error instanceof Error ? error.message : "audio_transcription_failed";
+    }
+  }
   const documentInfo = await extractBestDocumentInfo(session, message);
   const mediaType =
     unwrapped?.imageMessage || messageType === "imageMessage"
@@ -448,6 +473,9 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
         video_url: videoInfo.url,
         video_mime_type: videoMimeType,
         audio_url: audioUrl,
+        audio_transcript: audioTranscriptText,
+        audio_transcript_status: audioTranscriptStatus,
+        audio_transcript_reason: audioTranscriptReason,
         file_url: documentInfo.url,
         file_name: documentInfo.fileName,
         mime_type: imageMimeType || videoMimeType || documentMimeType,
@@ -483,6 +511,9 @@ async function processWhatsAppMessage(session: WhatsAppSessionState, message: WA
         video_url: videoInfo.url,
         video_mime_type: videoMimeType,
         audio_url: audioUrl,
+        audio_transcript: audioTranscriptText,
+        audio_transcript_status: audioTranscriptStatus,
+        audio_transcript_reason: audioTranscriptReason,
         file_url: documentInfo.url,
         file_name: documentInfo.fileName,
         mime_type: imageMimeType || videoMimeType || documentMimeType,

@@ -1,9 +1,10 @@
 import { Request, Router } from "express";
 import { spawn } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
+import { getCompanyMediaAssetById } from "../repositories/company-media.repository";
 import { saveOutboundMessage } from "../repositories/messages.repository";
 import { getConversationAccess } from "../repositories/conversations.repository";
-import { saveMediaBuffer } from "../services/media.service";
+import { loadMediaBufferFromUrl, saveMediaBuffer } from "../services/media.service";
 import { requireActiveWhatsAppAccount, WhatsAppAccountContextError } from "../services/whatsapp-account-context.service";
 import { sendWhatsAppAudio, sendWhatsAppMedia, sendWhatsAppText } from "../services/whatsapp.service";
 
@@ -31,6 +32,14 @@ interface SendMediaBody {
   file_base64: string;
   mimetype?: string;
   file_name?: string;
+  caption?: string;
+}
+interface SendLibraryMediaBody {
+  conversation_id?: string;
+  client_id?: string;
+  campaign_id?: string;
+  phone: string;
+  asset_id: string;
   caption?: string;
 }
 
@@ -67,6 +76,13 @@ function buildSignedTextMessage(message: string, attendantName: string): string 
   }
 
   return `*${cleanName}*:\n${cleanMessage}`;
+}
+
+function applyUserSignaturePreference(message: string, attendantName: string, autoSignMessages?: boolean): string {
+  if (!Boolean(autoSignMessages)) {
+    return String(message || "").trim();
+  }
+  return buildSignedTextMessage(message, attendantName);
 }
 
 async function transcodeToOggOpus(inputBuffer: Buffer): Promise<Buffer> {
@@ -126,6 +142,7 @@ type AuthRequest = Request & {
     name: string;
     username: string;
     role: "ceo" | "administrador" | "operador";
+    auto_sign_messages?: boolean;
     company_id?: string | null;
     sector_id?: string | null;
     sector_name?: string | null;
@@ -161,7 +178,7 @@ router.post("/send", async (req, res) => {
 
   try {
     await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
-    const signedMessage = buildSignedTextMessage(body.message, authReq.authUser?.name || "");
+    const signedMessage = applyUserSignaturePreference(body.message, authReq.authUser?.name || "", authReq.authUser?.auto_sign_messages);
 
     const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
     const account = accountContext.effective!;
@@ -213,7 +230,7 @@ router.post("/send", async (req, res) => {
     };
 
     if (body.phone && body.message) {
-      const signedMessage = buildSignedTextMessage(body.message, authReq.authUser?.name || "");
+      const signedMessage = applyUserSignaturePreference(body.message, authReq.authUser?.name || "", authReq.authUser?.auto_sign_messages);
       await saveOutboundMessage({
         accountJid: "unknown@s.whatsapp.net",
         accountDisplayName: null,
@@ -332,7 +349,7 @@ router.post("/send-media", async (req, res) => {
     const mediaBuffer = parseBase64(body.file_base64);
     const mimetype = String(body.mimetype || "application/octet-stream");
     const fileName = String(body.file_name || "arquivo");
-    const caption = String(body.caption || "");
+    const caption = applyUserSignaturePreference(String(body.caption || ""), authReq.authUser?.name || "", authReq.authUser?.auto_sign_messages);
 
     const waResponse = await sendWhatsAppMedia({
       to: body.phone,
@@ -407,6 +424,109 @@ router.post("/send-media", async (req, res) => {
       return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({ error: error.message });
     }
 
+    return res.status(502).json({
+      error: "Failed to send WhatsApp media.",
+      details: { message: error?.message || "Unknown error" },
+    });
+  }
+});
+
+router.post("/send-library-media", async (req, res) => {
+  const authReq = req as AuthRequest;
+  const body = req.body as SendLibraryMediaBody;
+  if (!body.phone || !body.asset_id) {
+    return res.status(400).json({
+      error: "Fields 'phone' and 'asset_id' are required.",
+    });
+  }
+
+  try {
+    await ensureCanSend(String(body.conversation_id || "").trim(), String(authReq.authUser?.id || "").trim());
+
+    const accountContext = await requireActiveWhatsAppAccount(authReq.authUser?.id, authReq.authUser?.company_id || null);
+    const account = accountContext.effective!;
+    const asset = await getCompanyMediaAssetById(String(body.asset_id || "").trim(), authReq.authUser?.company_id || null);
+    if (!asset || !asset.is_active) {
+      return res.status(404).json({ error: "Midia nao encontrada." });
+    }
+
+    const media = await loadMediaBufferFromUrl(asset.media_url);
+    if (!media?.buffer) {
+      return res.status(404).json({ error: "Arquivo da midia nao encontrado." });
+    }
+
+    let providerResponse: any;
+    let messageType = "documentMessage";
+    const caption = String(body.caption || "").trim() || asset.description || "";
+
+    if (asset.media_kind === "audio") {
+      const transcodedAudio = await transcodeToOggOpus(media.buffer).catch(() => media.buffer);
+      providerResponse = await sendWhatsAppAudio({
+        to: body.phone,
+        audioBuffer: transcodedAudio,
+        mimetype: "audio/ogg; codecs=opus",
+        accountJid: account.waJid,
+      });
+      messageType = "audioMessage";
+    } else {
+      providerResponse = await sendWhatsAppMedia({
+        to: body.phone,
+        mediaBuffer: media.buffer,
+        mimetype: media.mimeType || asset.mime_type || "application/octet-stream",
+        fileName: asset.file_name || media.fileName || asset.title,
+        caption,
+        accountJid: account.waJid,
+      });
+      messageType =
+        asset.media_kind === "image"
+          ? "imageMessage"
+          : asset.media_kind === "video"
+            ? "videoMessage"
+            : "documentMessage";
+    }
+
+    await saveOutboundMessage({
+      accountJid: account.waJid,
+      accountDisplayName: account.displayName,
+      clientId: body.client_id || null,
+      campaignId: body.campaign_id || null,
+      phone: body.phone,
+      body: caption || asset.title,
+      messageType,
+      externalMessageId: providerResponse?.key?.id || null,
+      status: "sent",
+      payload: providerResponse,
+      metadata: {
+        media_type: asset.media_kind,
+        file_url: asset.media_url,
+        file_name: asset.file_name,
+        mime_type: asset.mime_type,
+        company_media_asset_id: asset.id,
+        company_media_title: asset.title,
+      },
+    });
+
+    return res.status(201).json({
+      status: "sent",
+      asset,
+      provider: providerResponse,
+    });
+  } catch (error: any) {
+    if (error?.message === "CONVERSATION_REQUIRED") {
+      return res.status(400).json({ error: "Informe conversation_id para enviar mensagem." });
+    }
+    if (error?.message === "UNAUTHORIZED") {
+      return res.status(401).json({ error: "Sessao invalida." });
+    }
+    if (error?.message === "CONVERSATION_NOT_FOUND") {
+      return res.status(404).json({ error: "Conversa nao encontrada." });
+    }
+    if (error?.message === "NOT_ASSIGNED") {
+      return res.status(403).json({ error: "Somente o atendente responsavel pode enviar nesta conversa." });
+    }
+    if (error instanceof WhatsAppAccountContextError) {
+      return res.status(error.code === "WHATSAPP_NOT_CONNECTED" ? 503 : 409).json({ error: error.message });
+    }
     return res.status(502).json({
       error: "Failed to send WhatsApp media.",
       details: { message: error?.message || "Unknown error" },
