@@ -5509,9 +5509,10 @@ export async function handleInboundAiAutomation(
       });
       sendMultipleImages =
         matchedProducts.length > 1 ||
-        aiResult.media.productNames.length > 1;
+        aiResult.media.productNames.length > 1 ||
+        aiResult.media.libraryAssetNames.length > 1;
 
-      matchedProducts = sendMultipleImages ? matchedProducts.slice(0, 10) : matchedProducts.slice(0, 1);
+      matchedProducts = sendMultipleImages ? matchedProducts : matchedProducts.slice(0, 1);
       matchedLibraryAssets = extractRequestedCompanyMediaAssets({
         assets: companyMediaAssets.filter((item) => Boolean(String(item.media_url || "").trim()) && item.is_active),
         assetNames: Array.isArray(aiResult.media.libraryAssetNames) ? aiResult.media.libraryAssetNames : [],
@@ -5530,7 +5531,7 @@ export async function handleInboundAiAutomation(
           modelReply: aiResult.reply,
         });
         if (titleMentionMatches.length) {
-          matchedLibraryAssets = sendMultipleImages ? titleMentionMatches.slice(0, 10) : titleMentionMatches.slice(0, 1);
+          matchedLibraryAssets = sendMultipleImages ? titleMentionMatches : titleMentionMatches.slice(0, 1);
         }
       }
 
