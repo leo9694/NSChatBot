@@ -637,10 +637,11 @@ export async function createUser(input: {
     `
     SELECT id, name, username, role, company_id, sector_id, is_active, created_at::text
     FROM app_users
-    WHERE company_id = $1
-      AND lower(username) = lower($2)
+    WHERE lower(username) = lower($2)
       AND is_active = false
-    ORDER BY updated_at DESC
+    ORDER BY
+      CASE WHEN company_id = $1 THEN 0 ELSE 1 END,
+      updated_at DESC
     LIMIT 1
     `,
     [input.companyId, input.username],
@@ -660,6 +661,7 @@ export async function createUser(input: {
       `
       UPDATE app_users
       SET
+        company_id = $2,
         name = $3,
         username = lower($4),
         password_hash = crypt($5, gen_salt('bf')),
@@ -668,7 +670,6 @@ export async function createUser(input: {
         is_active = true,
         updated_at = NOW()
       WHERE id = $1
-        AND company_id = $2
       RETURNING id, name, username, role, company_id, sector_id, is_active, created_at::text
       `,
       [
