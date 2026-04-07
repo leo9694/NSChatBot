@@ -298,6 +298,9 @@ const companyNameInputEl = document.getElementById("companyNameInput");
 const agentGuidelinesInputEl = document.getElementById("agentGuidelinesInput");
 const agentGuidelinesAddBtnEl = document.getElementById("agentGuidelinesAddBtn");
 const agentGuidelinesListEl = document.getElementById("agentGuidelinesList");
+const agentDefaultNewChatsEnabledEl = document.getElementById("agentDefaultNewChatsEnabled");
+const agentDefaultNewChatsBtnEl = document.getElementById("agentDefaultNewChatsBtn");
+const agentDefaultNewChatsStateEl = document.getElementById("agentDefaultNewChatsState");
 const agentSettingsSaveBtnEl = document.getElementById("agentSettingsSaveBtn");
 const productsFormEl = document.getElementById("productsForm");
 const productIdEl = document.getElementById("productId");
@@ -1145,6 +1148,10 @@ function renderAgentSettings() {
   agentMoodInputEl.value = String(settings.mood || "informal");
   agentNameInputEl.value = String(settings.agent_name || "");
   companyNameInputEl.value = String(settings.company_name || "");
+  if (agentDefaultNewChatsEnabledEl) {
+    agentDefaultNewChatsEnabledEl.checked = Boolean(settings.default_new_chats_ai_enabled);
+  }
+  renderAgentDefaultNewChatsToggle();
   if (agentGuidelinesInputEl) {
     agentGuidelinesInputEl.value = "";
   }
@@ -1181,6 +1188,16 @@ function renderAgentSettings() {
   updateScheduleReminderState();
   renderAppBranding();
   renderCompanyBranding();
+}
+
+function renderAgentDefaultNewChatsToggle() {
+  if (!agentDefaultNewChatsBtnEl || !agentDefaultNewChatsEnabledEl) return;
+  const enabled = Boolean(agentDefaultNewChatsEnabledEl.checked);
+  agentDefaultNewChatsBtnEl.classList.toggle("is-enabled", enabled);
+  agentDefaultNewChatsBtnEl.setAttribute("aria-pressed", enabled ? "true" : "false");
+  if (agentDefaultNewChatsStateEl) {
+    agentDefaultNewChatsStateEl.textContent = enabled ? "Ligado" : "Desligado";
+  }
 }
 
 function normalizeAgentGuidelineLine(value) {
@@ -2397,6 +2414,7 @@ async function loadAgentStatus() {
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
   if (!accountId) {
     state.agentSettings = {
+      default_new_chats_ai_enabled: false,
       agent_name: "",
       company_name: "",
       mood: "informal",
@@ -2418,6 +2436,7 @@ async function loadAgentStatus() {
   const settings = await api(`/ai/settings?account_id=${encodeURIComponent(accountId)}`, { cache: "no-store" });
   state.agentSettings = {
     ...settings,
+    default_new_chats_ai_enabled: Boolean(settings.default_new_chats_ai_enabled),
     agent_guidelines: Array.isArray(settings.agent_guidelines) ? settings.agent_guidelines : [],
   };
   renderAgentSettings();
@@ -7493,6 +7512,11 @@ agentTestBtnEl.addEventListener("click", async () => {
     agentTestBtnEl.disabled = false;
   }
 });
+agentDefaultNewChatsBtnEl?.addEventListener("click", () => {
+  if (!agentDefaultNewChatsEnabledEl) return;
+  agentDefaultNewChatsEnabledEl.checked = !agentDefaultNewChatsEnabledEl.checked;
+  renderAgentDefaultNewChatsToggle();
+});
 agentSettingsFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   const accountId = String(state.selectedWhatsAppAccountId || "").trim();
@@ -7507,6 +7531,7 @@ agentSettingsFormEl.addEventListener("submit", async (event) => {
       method: "PUT",
       body: JSON.stringify({
         account_id: accountId,
+        default_new_chats_ai_enabled: Boolean(agentDefaultNewChatsEnabledEl?.checked),
         mood: String(agentMoodInputEl.value || "informal").trim(),
         agent_name: String(agentNameInputEl.value || "").trim(),
         company_name: String(companyNameInputEl.value || "").trim(),
@@ -7542,6 +7567,7 @@ storeInfoFormEl.addEventListener("submit", async (event) => {
       method: "PUT",
       body: JSON.stringify({
         account_id: accountId,
+        default_new_chats_ai_enabled: Boolean(agentDefaultNewChatsEnabledEl?.checked),
         mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
         agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
         company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),
@@ -7759,6 +7785,7 @@ scheduleSettingsFormEl.addEventListener("submit", async (event) => {
       method: "PUT",
       body: JSON.stringify({
         account_id: accountId,
+        default_new_chats_ai_enabled: Boolean(agentDefaultNewChatsEnabledEl?.checked),
         mood: String(agentMoodInputEl.value || state.agentSettings?.mood || "informal").trim(),
         agent_name: String(agentNameInputEl.value || state.agentSettings?.agent_name || "").trim(),
         company_name: String(companyNameInputEl.value || state.agentSettings?.company_name || "").trim(),

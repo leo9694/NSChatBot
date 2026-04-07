@@ -3,6 +3,7 @@ import { pool } from "../db/pool";
 export interface AiAccountSettingsRow {
   account_id: string;
   company_id?: string | null;
+  default_new_chats_ai_enabled?: boolean;
   agent_name: string | null;
   company_name: string | null;
   mood: string | null;
@@ -112,6 +113,7 @@ export async function ensureAiSchema(): Promise<void> {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS ai_account_settings (
           account_id UUID PRIMARY KEY REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,
+          default_new_chats_ai_enabled BOOLEAN NOT NULL DEFAULT false,
           agent_name VARCHAR(160),
           company_name VARCHAR(180),
           mood VARCHAR(20),
@@ -131,6 +133,10 @@ export async function ensureAiSchema(): Promise<void> {
         )
       `);
 
+      await pool.query(`
+        ALTER TABLE ai_account_settings
+        ADD COLUMN IF NOT EXISTS default_new_chats_ai_enabled BOOLEAN NOT NULL DEFAULT false
+      `);
       await pool.query(`
         ALTER TABLE ai_account_settings
         ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES app_companies(id) ON DELETE CASCADE
@@ -352,6 +358,7 @@ export async function getAiAccountSettings(accountId: string): Promise<AiAccount
     SELECT
       cfg.account_id,
       COALESCE(cfg.company_id, target.company_id) AS company_id,
+      COALESCE(cfg.default_new_chats_ai_enabled, false) AS default_new_chats_ai_enabled,
       cfg.agent_name,
       COALESCE(NULLIF(cfg.company_name, ''), company.name) AS company_name,
       cfg.mood,
@@ -392,6 +399,7 @@ export async function getAiAccountSettings(accountId: string): Promise<AiAccount
     SELECT
       cfg.account_id,
       COALESCE(cfg.company_id, wa.company_id) AS company_id,
+      COALESCE(cfg.default_new_chats_ai_enabled, false) AS default_new_chats_ai_enabled,
       cfg.agent_name,
       COALESCE(NULLIF(cfg.company_name, ''), company.name) AS company_name,
       cfg.mood,
@@ -623,6 +631,7 @@ export async function validateAiScheduleSlot(input: {
 
 export async function upsertAiAccountSettings(input: {
   accountId: string;
+  defaultNewChatsAiEnabled?: boolean;
   agentName?: string | null;
   companyName?: string | null;
   mood?: string | null;
@@ -678,6 +687,7 @@ export async function upsertAiAccountSettings(input: {
   );
 
   const sharedValues = [
+    Boolean(input.defaultNewChatsAiEnabled),
     input.agentName || null,
     input.companyName || account.company_name || null,
     input.mood || null,
@@ -704,6 +714,7 @@ export async function upsertAiAccountSettings(input: {
       INSERT INTO ai_account_settings (
         account_id,
         company_id,
+        default_new_chats_ai_enabled,
         agent_name,
         company_name,
         mood,
@@ -720,9 +731,10 @@ export async function upsertAiAccountSettings(input: {
         schedule_reminder_minutes,
         schedule_reminder_rules
       )
-      VALUES ($1, $17::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, $15, $16::jsonb)
+      VALUES ($1, $18::uuid, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16, $17::jsonb)
       ON CONFLICT (account_id) DO UPDATE
         SET company_id = EXCLUDED.company_id,
+            default_new_chats_ai_enabled = EXCLUDED.default_new_chats_ai_enabled,
             agent_name = EXCLUDED.agent_name,
             company_name = EXCLUDED.company_name,
             mood = EXCLUDED.mood,

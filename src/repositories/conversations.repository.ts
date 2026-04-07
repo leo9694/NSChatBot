@@ -67,6 +67,21 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
   const incrementUnread = Boolean(input.incrementUnread);
   const appName = input.appName?.trim() || null;
   const waName = input.displayName?.trim() || null;
+  const aiDefaultResult = await pool.query<{ default_new_chats_ai_enabled: boolean }>(
+    `
+    SELECT COALESCE(cfg.default_new_chats_ai_enabled, false) AS default_new_chats_ai_enabled
+    FROM whatsapp_accounts target
+    JOIN whatsapp_accounts owner
+      ON owner.company_id = target.company_id
+    JOIN ai_account_settings cfg
+      ON cfg.account_id = owner.id
+    WHERE target.id = $1
+    ORDER BY CASE WHEN cfg.account_id = target.id THEN 0 ELSE 1 END, cfg.updated_at DESC
+    LIMIT 1
+    `,
+    [input.accountId],
+  );
+  const defaultAiAgentEnabled = Boolean(aiDefaultResult.rows[0]?.default_new_chats_ai_enabled);
   const existingByPhone = await pool.query<ConversationRow>(
     `
     SELECT id, phone, wa_jid
@@ -150,7 +165,7 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
     `
     INSERT INTO conversations (
       account_id, client_id, phone, wa_jid, display_name,
-      last_message_at, last_message_preview, unread_count, metadata
+      last_message_at, last_message_preview, unread_count, service_status, metadata
     )
     VALUES (
       $1, $2, $3, $4,
@@ -162,7 +177,11 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
         ELSE NULL
       END,
       NOW(), $5::text, CASE WHEN $6 THEN 1 ELSE 0 END,
-      jsonb_strip_nulls(jsonb_build_object('avatar_url', $9::text, 'app_name', $7::text, 'whatsapp_name', $8::text))
+      CASE WHEN $10 = true AND $6 = true THEN 'in_progress' ELSE 'pending' END,
+      jsonb_strip_nulls(
+        jsonb_build_object('ai_agent_enabled', $10::boolean)
+        || jsonb_build_object('avatar_url', $9::text, 'app_name', $7::text, 'whatsapp_name', $8::text)
+      )
     )
     ON CONFLICT (account_id, wa_jid) DO UPDATE SET
       phone = EXCLUDED.phone,
@@ -211,6 +230,7 @@ export async function upsertConversation(input: UpsertConversationInput): Promis
       appName,
       waName,
       input.avatarUrl || null,
+      defaultAiAgentEnabled,
     ],
   );
 

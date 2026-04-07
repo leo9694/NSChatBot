@@ -430,6 +430,24 @@
                       </div>
                       <div id="agentGuidelinesList" class="agent-guidelines-list"></div>
                     </div>
+                    <div class="agent-default-toggle-wrap">
+                      <input id="agentDefaultNewChatsEnabled" type="checkbox" hidden />
+                      <button id="agentDefaultNewChatsBtn" type="button" class="agent-default-toggle-button" aria-pressed="false">
+                        <span class="agent-default-toggle-icon">
+                          <i class="bi bi-robot"></i>
+                        </span>
+                        <span class="agent-default-toggle-copy">
+                          <strong>Ativar agente por padrão em novos chats</strong>
+                          <small>Quando ligado, toda nova conversa dessa empresa já nasce com o agente habilitado para responder.</small>
+                        </span>
+                        <span class="agent-default-toggle-switch" aria-hidden="true">
+                          <span class="agent-default-toggle-track">
+                            <span class="agent-default-toggle-thumb"></span>
+                          </span>
+                          <span id="agentDefaultNewChatsState" class="agent-default-toggle-state">Desligado</span>
+                        </span>
+                      </button>
+                    </div>
                     <button id="agentSettingsSaveBtn" type="submit" class="btn-primary">Salvar configurações do agente</button>
                   </form>
                 </div>

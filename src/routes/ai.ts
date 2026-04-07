@@ -945,6 +945,7 @@ router.get("/settings", async (req, res) => {
     const settings = await getAiAccountSettings(accountId);
     return res.status(200).json({
       account_id: accountId,
+      default_new_chats_ai_enabled: Boolean(settings?.default_new_chats_ai_enabled),
       agent_name: settings?.agent_name || "",
       company_name: settings?.company_name || "",
       mood: settings?.mood || "informal",
@@ -977,6 +978,7 @@ router.get("/settings", async (req, res) => {
 router.put("/settings", async (req, res) => {
   const authReq = req as AuthRequest;
   const accountId = String(req.body?.account_id || "").trim();
+  const defaultNewChatsAiEnabled = Boolean(req.body?.default_new_chats_ai_enabled);
   const agentName = String(req.body?.agent_name || "").trim();
   const companyName = String(req.body?.company_name || "").trim();
   const rawMood = String(req.body?.mood || "").trim().toLowerCase();
@@ -1022,6 +1024,7 @@ router.put("/settings", async (req, res) => {
     }
     const settings = await upsertAiAccountSettings({
       accountId,
+      defaultNewChatsAiEnabled,
       agentName,
       companyName,
       mood,
