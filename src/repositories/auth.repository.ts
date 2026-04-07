@@ -624,6 +624,84 @@ export async function createUser(input: {
     throw err;
   }
 
+  const inactiveExisting = await pool.query<{
+    id: string;
+    name: string;
+    username: string;
+    role: AppUserRole;
+    company_id: string;
+    sector_id: string | null;
+    is_active: boolean;
+    created_at: string;
+  }>(
+    `
+    SELECT id, name, username, role, company_id, sector_id, is_active, created_at::text
+    FROM app_users
+    WHERE company_id = $1
+      AND lower(username) = lower($2)
+      AND is_active = false
+    ORDER BY updated_at DESC
+    LIMIT 1
+    `,
+    [input.companyId, input.username],
+  );
+
+  if (inactiveExisting.rows.length > 0) {
+    const revivedResult = await pool.query<{
+      id: string;
+      name: string;
+      username: string;
+      role: AppUserRole;
+      company_id: string;
+      sector_id: string | null;
+      is_active: boolean;
+      created_at: string;
+    }>(
+      `
+      UPDATE app_users
+      SET
+        name = $3,
+        username = lower($4),
+        password_hash = crypt($5, gen_salt('bf')),
+        role = $6,
+        sector_id = $7,
+        is_active = true,
+        updated_at = NOW()
+      WHERE id = $1
+        AND company_id = $2
+      RETURNING id, name, username, role, company_id, sector_id, is_active, created_at::text
+      `,
+      [
+        inactiveExisting.rows[0].id,
+        input.companyId,
+        input.name,
+        input.username,
+        input.password,
+        input.role,
+        input.sectorId,
+      ],
+    );
+
+    const user = revivedResult.rows[0];
+    const meta = await pool.query<{ sector_name: string | null; company_name: string | null; company_cnpj: string | null }>(
+      `
+      SELECT s.name AS sector_name, c.name AS company_name, c.cnpj AS company_cnpj
+      FROM app_companies c
+      LEFT JOIN app_sectors s ON s.id = $1
+      WHERE c.id = $2
+      LIMIT 1
+      `,
+      [user.sector_id, user.company_id],
+    );
+
+    return {
+      ...user,
+      sector_name: meta.rows[0]?.sector_name || null,
+      company_name: meta.rows[0]?.company_name || null,
+      company_cnpj: meta.rows[0]?.company_cnpj || null,
+    };
+  }
+
   const result = await pool.query<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "sector_id" | "is_active" | "created_at">>(
     `
     INSERT INTO app_users (company_id, name, username, password_hash, role, sector_id)
