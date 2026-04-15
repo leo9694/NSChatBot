@@ -607,6 +607,77 @@ export async function listUsers(companyId: string): Promise<Array<Pick<AppUser, 
   return result.rows;
 }
 
+export async function listAdminUsersAcrossCompanies(): Promise<
+  Array<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "is_active" | "created_at">>
+> {
+  await ensureAuthSchema();
+
+  const result = await pool.query<
+    Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "is_active" | "created_at">
+  >(
+    `
+    SELECT
+      u.id,
+      u.name,
+      u.username,
+      u.role,
+      u.company_id,
+      c.name AS company_name,
+      c.cnpj AS company_cnpj,
+      u.is_active,
+      u.created_at
+    FROM app_users u
+    LEFT JOIN app_companies c ON c.id = u.company_id
+    WHERE u.is_active = true
+      AND u.role = 'administrador'
+    ORDER BY c.name ASC NULLS LAST, u.name ASC, u.username ASC
+    `,
+  );
+
+  return result.rows;
+}
+
+export async function resetAdminUserPassword(input: {
+  userId: string;
+  password: string;
+}): Promise<Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "company_name" | "company_cnpj" | "is_active"> | null> {
+  await ensureAuthSchema();
+
+  const result = await pool.query<
+    Pick<AppUser, "id" | "name" | "username" | "role" | "company_id" | "is_active">
+  >(
+    `
+    UPDATE app_users
+    SET password_hash = crypt($2, gen_salt('bf')),
+        updated_at = NOW()
+    WHERE id = $1
+      AND role = 'administrador'
+      AND is_active = true
+    RETURNING id, name, username, role, company_id, is_active
+    `,
+    [input.userId, input.password],
+  );
+
+  const user = result.rows[0];
+  if (!user) return null;
+
+  const company = await pool.query<{ company_name: string | null; company_cnpj: string | null }>(
+    `
+    SELECT name AS company_name, cnpj AS company_cnpj
+    FROM app_companies
+    WHERE id = $1
+    LIMIT 1
+    `,
+    [user.company_id],
+  );
+
+  return {
+    ...user,
+    company_name: company.rows[0]?.company_name || null,
+    company_cnpj: company.rows[0]?.company_cnpj || null,
+  };
+}
+
 export async function createUser(input: {
   companyId: string;
   name: string;

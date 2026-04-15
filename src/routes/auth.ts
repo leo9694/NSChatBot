@@ -9,8 +9,10 @@ import {
   ensureAuthSchema,
   getCompanyBranding,
   listCompanies,
+  listAdminUsersAcrossCompanies,
   listSectors,
   listUsers,
+  resetAdminUserPassword,
   revokeSessionByToken,
   updateMyMessageSignaturePreference,
   updateCompanyBranding,
@@ -353,6 +355,29 @@ router.post("/sectors", requireAuth, requireAdmin, async (req, res) => {
 router.get("/companies", requireAuth, requireCEO, async (_req, res) => {
   const items = await listCompanies();
   return res.status(200).json({ items });
+});
+
+router.get("/admin-users", requireAuth, requireCEO, async (_req, res) => {
+  const items = await listAdminUsersAcrossCompanies();
+  return res.status(200).json({ items });
+});
+
+router.put("/admin-users/:id/password", requireAuth, requireCEO, async (req, res) => {
+  const userId = String(req.params?.id || "").trim();
+  const password = String(req.body?.password || "").trim();
+
+  if (!userId) {
+    return res.status(400).json({ error: "Usuario invalido." });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres." });
+  }
+
+  const user = await resetAdminUserPassword({ userId, password });
+  if (!user) {
+    return res.status(404).json({ error: "Administrador nao encontrado." });
+  }
+  return res.status(200).json({ status: "ok", user });
 });
 
 router.post("/companies", requireAuth, requireCEO, async (req, res) => {

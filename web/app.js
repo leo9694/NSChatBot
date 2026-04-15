@@ -33,6 +33,7 @@
   bulkJobDetailsMap: {},
   sectors: [],
   settingsUsers: [],
+  settingsAdminUsers: [],
   agents: [],
   companies: [],
   companyBranding: null,
@@ -244,12 +245,14 @@ const settingsTabCreateEl = document.getElementById("settingsTabCreate");
 const settingsTabListEl = document.getElementById("settingsTabList");
 const settingsTabSectorsEl = document.getElementById("settingsTabSectors");
 const settingsTabCompaniesEl = document.getElementById("settingsTabCompanies");
+const settingsTabAdminUsersEl = document.getElementById("settingsTabAdminUsers");
 const settingsTabAccountsEl = document.getElementById("settingsTabAccounts");
 const settingsPanelPerfilEl = document.getElementById("settingsPanelPerfil");
 const settingsPanelCreateEl = document.getElementById("settingsPanelCreate");
 const settingsPanelListEl = document.getElementById("settingsPanelList");
 const settingsPanelSectorsEl = document.getElementById("settingsPanelSectors");
 const settingsPanelCompaniesEl = document.getElementById("settingsPanelCompanies");
+const settingsPanelAdminUsersEl = document.getElementById("settingsPanelAdminUsers");
 const settingsPanelAccountsEl = document.getElementById("settingsPanelAccounts");
 const settingsProfileAvatarEl = document.getElementById("settingsProfileAvatar");
 const settingsProfileNameEl = document.getElementById("settingsProfileName");
@@ -284,6 +287,7 @@ const companyAdminNameEl = document.getElementById("companyAdminName");
 const companyAdminUsernameEl = document.getElementById("companyAdminUsername");
 const companyAdminPasswordEl = document.getElementById("companyAdminPassword");
 const settingsCompaniesListEl = document.getElementById("settingsCompaniesList");
+const settingsAdminUsersListEl = document.getElementById("settingsAdminUsersList");
 const settingsLogoutBtnEl = document.getElementById("settingsLogoutBtn");
 const agentStatusBadgeEl = document.getElementById("agentStatusBadge");
 const agentConfiguredEl = document.getElementById("agentConfigured");
@@ -3178,6 +3182,7 @@ function renderSettingsHeader() {
     if (settingsSignatureToggleLabelEl) settingsSignatureToggleLabelEl.textContent = "Desligado";
     settingsAdminActionsEl.hidden = true;
     settingsTabCompaniesEl.hidden = true;
+    if (settingsTabAdminUsersEl) settingsTabAdminUsersEl.hidden = true;
     renderSettingsAccountsPanel();
     return;
   }
@@ -3197,7 +3202,11 @@ function renderSettingsHeader() {
   settingsRemoveNumberBtnEl.hidden = !isAdmin();
   settingsTabCompaniesEl.hidden = !isCEO();
   settingsTabCompaniesEl.style.display = isCEO() ? "inline-flex" : "none";
-  if (!isCEO() && state.settingsTab === "companies") {
+  if (settingsTabAdminUsersEl) {
+    settingsTabAdminUsersEl.hidden = !isCEO();
+    settingsTabAdminUsersEl.style.display = isCEO() ? "inline-flex" : "none";
+  }
+  if (!isCEO() && ["companies", "admin-users"].includes(state.settingsTab)) {
     state.settingsTab = "perfil";
   }
   renderRoleOptions(newUserRoleEl, newUserRoleEl.value || "operador");
@@ -3271,7 +3280,7 @@ function renderWhatsAppAccountOptions() {
 
 function setSettingsTab(tab) {
   const requestedTab = String(tab || "perfil");
-  const safeTab = requestedTab === "companies" && !isCEO() ? "perfil" : requestedTab;
+  const safeTab = ["companies", "admin-users"].includes(requestedTab) && !isCEO() ? "perfil" : requestedTab;
   state.settingsTab = safeTab;
 
   settingsTabPerfilEl.classList.toggle("active", safeTab === "perfil");
@@ -3279,6 +3288,7 @@ function setSettingsTab(tab) {
   settingsTabListEl.classList.toggle("active", safeTab === "list");
   settingsTabSectorsEl.classList.toggle("active", safeTab === "sectors");
   settingsTabCompaniesEl.classList.toggle("active", safeTab === "companies");
+  settingsTabAdminUsersEl?.classList.toggle("active", safeTab === "admin-users");
   settingsTabAccountsEl.classList.toggle("active", safeTab === "accounts");
 
   settingsPanelPerfilEl.classList.toggle("active", safeTab === "perfil");
@@ -3286,6 +3296,7 @@ function setSettingsTab(tab) {
   settingsPanelListEl.classList.toggle("active", safeTab === "list");
   settingsPanelSectorsEl.classList.toggle("active", safeTab === "sectors");
   settingsPanelCompaniesEl.classList.toggle("active", safeTab === "companies");
+  settingsPanelAdminUsersEl?.classList.toggle("active", safeTab === "admin-users");
   settingsPanelAccountsEl.classList.toggle("active", safeTab === "accounts");
   renderMobileChrome();
 }
@@ -3381,6 +3392,34 @@ function renderCompaniesList(items) {
   }
 }
 
+function renderAdminUsersList(items) {
+  if (!settingsAdminUsersListEl) return;
+  settingsAdminUsersListEl.innerHTML = "";
+  if (!items || !items.length) {
+    settingsAdminUsersListEl.innerHTML = '<div class="empty-state">Nenhum administrador cadastrado nas empresas.</div>';
+    return;
+  }
+
+  for (const user of items) {
+    const row = document.createElement("div");
+    row.className = "settings-user-item";
+    row.dataset.userId = user.id;
+    row.innerHTML = `
+      <div class="settings-user-main">
+        <strong>${user.name || "-"}</strong><br />
+        <small>Login: ${user.username || "-"} · Empresa: ${user.company_name || "-"}</small>
+      </div>
+      <div class="settings-user-right">
+        <span class="settings-user-role">administrador</span>
+        <div class="settings-user-actions">
+          <button type="button" class="btn-secondary" data-action="reset-admin-password">Redefinir senha</button>
+        </div>
+      </div>
+    `;
+    settingsAdminUsersListEl.appendChild(row);
+  }
+}
+
 function renderSectorOptions() {
   const previous = String(newUserSectorEl.value || "");
   newUserSectorEl.innerHTML = "";
@@ -3433,12 +3472,17 @@ async function loadUsersForSettings() {
     settingsTabSectorsEl.disabled = true;
     settingsTabCompaniesEl.disabled = true;
     settingsTabCompaniesEl.hidden = true;
+    if (settingsTabAdminUsersEl) {
+      settingsTabAdminUsersEl.disabled = true;
+      settingsTabAdminUsersEl.hidden = true;
+    }
     settingsTabAccountsEl.disabled = false;
     if (state.settingsTab !== "perfil") {
       setSettingsTab("perfil");
     }
     settingsUsersListEl.innerHTML = '<div class="empty-state">Somente administrador ou CEO pode ver usuários.</div>';
     renderCompaniesList([]);
+    renderAdminUsersList([]);
     return;
   }
 
@@ -3449,8 +3493,13 @@ async function loadUsersForSettings() {
   settingsTabCompaniesEl.disabled = !isCEO();
   settingsTabCompaniesEl.hidden = !isCEO();
   settingsTabCompaniesEl.style.display = isCEO() ? "inline-flex" : "none";
+  if (settingsTabAdminUsersEl) {
+    settingsTabAdminUsersEl.disabled = !isCEO();
+    settingsTabAdminUsersEl.hidden = !isCEO();
+    settingsTabAdminUsersEl.style.display = isCEO() ? "inline-flex" : "none";
+  }
   settingsTabAccountsEl.disabled = false;
-  if (!isCEO() && state.settingsTab === "companies") {
+  if (!isCEO() && ["companies", "admin-users"].includes(state.settingsTab)) {
     setSettingsTab("perfil");
   }
   renderRoleOptions(newUserRoleEl, newUserRoleEl.value || "operador");
@@ -3459,6 +3508,7 @@ async function loadUsersForSettings() {
   state.settingsUsers = result.items || [];
   renderUsersList(state.settingsUsers);
   await loadCompaniesForSettings();
+  await loadAdminUsersForSettings();
 }
 
 async function loadCompaniesForSettings() {
@@ -3471,6 +3521,18 @@ async function loadCompaniesForSettings() {
   const result = await api("/auth/companies");
   state.companies = Array.isArray(result?.items) ? result.items : [];
   renderCompaniesList(state.companies);
+}
+
+async function loadAdminUsersForSettings() {
+  if (!state.currentUser || !isCEO()) {
+    state.settingsAdminUsers = [];
+    renderAdminUsersList([]);
+    return;
+  }
+
+  const result = await api("/auth/admin-users");
+  state.settingsAdminUsers = Array.isArray(result?.items) ? result.items : [];
+  renderAdminUsersList(state.settingsAdminUsers);
 }
 
 async function loadAgents() {
@@ -3787,6 +3849,37 @@ async function handleDeleteUser(userId) {
     await showAlert("Usuário excluído com sucesso.");
   } catch (error) {
     await showAlert(error.message || "Falha ao excluir o usuário.");
+  }
+}
+
+async function handleResetAdminPassword(userId) {
+  const user = state.settingsAdminUsers.find((item) => item.id === userId);
+  if (!user || !isCEO()) return;
+
+  const nextPassword = await showPrompt(
+    `Informe a nova senha para ${user.name} (${user.company_name || "empresa sem nome"}).`,
+    "",
+    {
+      title: "Redefinir senha do administrador",
+      confirmText: "Redefinir",
+      placeholder: "Mínimo de 6 caracteres",
+    },
+  );
+  if (nextPassword === null) return;
+  if (String(nextPassword || "").trim().length < 6) {
+    await showAlert("Senha deve ter pelo menos 6 caracteres.");
+    return;
+  }
+
+  try {
+    await api(`/auth/admin-users/${encodeURIComponent(user.id)}/password`, {
+      method: "PUT",
+      body: JSON.stringify({ password: String(nextPassword || "").trim() }),
+    });
+    await loadAdminUsersForSettings();
+    await showAlert("Senha redefinida com sucesso.");
+  } catch (error) {
+    await showAlert(error.message || "Falha ao redefinir a senha.");
   }
 }
 
@@ -7222,6 +7315,7 @@ settingsTabCreateEl.addEventListener("click", () => setSettingsTab("create"));
 settingsTabListEl.addEventListener("click", () => setSettingsTab("list"));
 settingsTabSectorsEl.addEventListener("click", () => setSettingsTab("sectors"));
 settingsTabCompaniesEl.addEventListener("click", () => setSettingsTab("companies"));
+settingsTabAdminUsersEl?.addEventListener("click", () => setSettingsTab("admin-users"));
 settingsTabAccountsEl.addEventListener("click", () => setSettingsTab("accounts"));
 settingsUsersListEl.addEventListener("click", async (event) => {
   const target = event.target.closest("button[data-action]");
@@ -7238,6 +7332,14 @@ settingsUsersListEl.addEventListener("click", async (event) => {
   if (action === "delete-user") {
     await handleDeleteUser(userId);
   }
+});
+settingsAdminUsersListEl?.addEventListener("click", async (event) => {
+  const target = event.target.closest("button[data-action]");
+  if (!target) return;
+  const row = target.closest(".settings-user-item");
+  const userId = String(row?.dataset?.userId || "").trim();
+  if (!userId || target.dataset.action !== "reset-admin-password") return;
+  await handleResetAdminPassword(userId);
 });
 settingsLogoutBtnEl.addEventListener("click", async () => {
   const confirmed = await showConfirm("Deseja encerrar sua sessão neste navegador?", "Encerrar sessão", "Sair", "Cancelar");
