@@ -14,6 +14,7 @@ import healthRoutes from "./routes/health";
 import bulkDispatchRoutes from "./routes/bulk-dispatch";
 import messageRoutes from "./routes/messages";
 import companyMediaRoutes from "./routes/company-media";
+import internalChatRoutes from "./routes/internal-chat";
 import productRoutes from "./routes/products";
 import realtimeRoutes from "./routes/realtime";
 import whatsappRoutes from "./routes/whatsapp";
@@ -23,8 +24,17 @@ import { resumePendingBulkDispatchJobs } from "./services/bulk-dispatch.service"
 
 const app = express();
 const mediaDir = path.resolve(process.cwd(), "storage", "media");
+const uploadJsonLimit = "70mb";
 
-app.use(express.json({ limit: "25mb" }));
+app.use(express.json({ limit: uploadJsonLimit }));
+app.use((error: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (error?.type === "entity.too.large") {
+    return res.status(413).json({
+      error: "Arquivo muito grande. Envie arquivos de ate 40 MB.",
+    });
+  }
+  return next(error);
+});
 
 app.use(healthRoutes);
 app.use("/auth", authRoutes);
@@ -66,11 +76,20 @@ app.use(requireAuth);
 app.use("/ai", aiRoutes);
 app.use("/messages", messageRoutes);
 app.use("/company-media", companyMediaRoutes);
+app.use("/internal-chat", internalChatRoutes);
 app.use("/products", productRoutes);
 app.use("/conversations", conversationRoutes);
 app.use("/bulk-dispatch", bulkDispatchRoutes);
 app.use("/realtime", realtimeRoutes);
 app.use("/whatsapp", whatsappRoutes);
+app.use((error: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (error?.code === "LIMIT_FILE_SIZE" || error?.type === "entity.too.large") {
+    return res.status(413).json({
+      error: "Arquivo muito grande. Envie arquivos de ate 40 MB.",
+    });
+  }
+  return next(error);
+});
 
 app.listen(env.port, async () => {
   try {

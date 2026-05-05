@@ -18,6 +18,12 @@
     finalized: 0,
     bulk: 0,
   },
+  internalChatContacts: [],
+  selectedInternalContact: null,
+  selectedInternalThreadId: "",
+  internalMessages: [],
+  internalChatLoading: false,
+  internalUnreadCount: 0,
   loadingConversations: false,
   loadingMessages: false,
   contextConversationId: null,
@@ -67,6 +73,7 @@ const SESSION_TOKEN_KEY = "nschat_session_token";
 const CONVERSATION_CACHE_TTL_MS = 12_000;
 const INITIAL_MESSAGES_PAGE_SIZE = 50;
 const OLDER_MESSAGES_PAGE_SIZE = 60;
+const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
 
 const layoutEl = document.querySelector(".layout");
 const chatMainEl = document.querySelector(".chat-main");
@@ -81,6 +88,7 @@ const loginScreenEl = document.getElementById("loginScreen");
 const loginFormEl = document.getElementById("loginForm");
 const loginUsernameEl = document.getElementById("loginUsername");
 const loginPasswordEl = document.getElementById("loginPassword");
+const loginErrorEl = document.getElementById("loginError");
 const loginSubmitBtnEl = document.getElementById("loginSubmitBtn");
 const chatSidebarEl = document.getElementById("chatSidebar");
 const sidebarBrandLogoWrapEl = document.getElementById("sidebarBrandLogoWrap");
@@ -191,6 +199,7 @@ const orderConfirmNoteEl = document.getElementById("orderConfirmNote");
 const orderConfirmCancelEl = document.getElementById("orderConfirmCancel");
 const conversationItemTpl = document.getElementById("conversationItemTpl");
 const railChatsEl = document.getElementById("railChats");
+const railInternalChatEl = document.getElementById("railInternalChat");
 const railBulkCreateEl = document.getElementById("railBulkCreate");
 const railBulkMonitorEl = document.getElementById("railBulkMonitor");
 const railAgentEl = document.getElementById("railAgent");
@@ -203,6 +212,15 @@ const mobileNavAgentEl = document.getElementById("mobileNavAgent");
 const mobileNavProductsEl = document.getElementById("mobileNavProducts");
 const mobileNavSettingsEl = document.getElementById("mobileNavSettings");
 const chatViewEl = document.getElementById("chatView");
+const internalChatViewEl = document.getElementById("internalChatView");
+const internalChatContactsListEl = document.getElementById("internalChatContactsList");
+const internalChatRefreshBtnEl = document.getElementById("internalChatRefreshBtn");
+const internalChatRoomHeaderEl = document.getElementById("internalChatRoomHeader");
+const internalMessagesAreaEl = document.getElementById("internalMessagesArea");
+const internalChatFormEl = document.getElementById("internalChatForm");
+const internalMessageInputEl = document.getElementById("internalMessageInput");
+const internalAudioBtnEl = document.getElementById("internalAudioBtn");
+const internalSendBtnEl = document.getElementById("internalSendBtn");
 const bulkCreateViewEl = document.getElementById("bulkCreateView");
 const bulkMonitorViewEl = document.getElementById("bulkMonitorView");
 const agentViewEl = document.getElementById("agentView");
@@ -426,6 +444,10 @@ let recordedAudioBlob = null;
 let recordedAudioUrl = "";
 let healthTimer = null;
 let bulkMonitorTimer = null;
+let internalChatTimer = null;
+let internalAudioRecorder = null;
+let internalAudioStream = null;
+let internalAudioChunks = [];
 let editingUserId = "";
 let transferConversationId = "";
 let accountSwitchMode = "select";
@@ -1000,6 +1022,7 @@ function closeConversationMenu() {
 
 function setRailActive(view) {
   railChatsEl.classList.toggle("active", view === "chats");
+  railInternalChatEl?.classList.toggle("active", view === "internal-chat");
   railBulkCreateEl.classList.toggle("active", view === "bulk-create");
   railBulkMonitorEl.classList.toggle("active", view === "bulk-monitor");
   railAgentEl.classList.toggle("active", view === "agent");
@@ -1018,6 +1041,9 @@ function isMobileViewport() {
 }
 
 function getMobileTopbarCopy() {
+  if (state.currentView === "internal-chat") {
+    return { title: "Chat interno", subtitle: "Atendentes da empresa" };
+  }
   if (state.currentView === "bulk-create") {
     return { title: "Disparo em massa", subtitle: "Criar campanha" };
   }
@@ -1107,6 +1133,7 @@ function switchView(view) {
   setRailActive(view);
 
   chatViewEl.classList.toggle("active", view === "chats");
+  internalChatViewEl?.classList.toggle("active", view === "internal-chat");
   bulkCreateViewEl.classList.toggle("active", view === "bulk-create");
   bulkMonitorViewEl.classList.toggle("active", view === "bulk-monitor");
   agentViewEl.classList.toggle("active", view === "agent");
@@ -1119,6 +1146,9 @@ function switchView(view) {
     // Always open monitor focused on the latest dispatch.
     state.selectedBulkJobId = null;
     loadBulkJobs().catch((error) => console.error(error));
+  } else if (view === "internal-chat") {
+    loadInternalChatContacts({ showLoading: state.internalChatContacts.length === 0 }).catch((error) => console.error(error));
+    loadInternalUnreadSummary().catch((error) => console.error(error));
   } else if (view === "agent") {
     loadAgentStatus().catch((error) => console.error(error));
     } else if (view === "products") {
@@ -4876,6 +4906,9 @@ async function api(path, options = {}) {
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
+    if (response.status === 413) {
+      throw new Error(err.error || "Arquivo muito grande. Envie arquivos de ate 40 MB.");
+    }
     throw new Error(err.error || `HTTP ${response.status}`);
   }
 
@@ -5052,6 +5085,13 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(new Error("Falha ao processar arquivo."));
     reader.readAsDataURL(file);
   });
+}
+
+function validateUploadFileSize(file) {
+  if (!file) return;
+  if (Number(file.size || 0) > MAX_UPLOAD_BYTES) {
+    throw new Error("Arquivo muito grande. Envie arquivos de ate 40 MB.");
+  }
 }
 
 function clearBulkAssetFile(blockIndex, assetIndex) {
@@ -5250,7 +5290,7 @@ function createCustomAudioPlayer(messageId, audioUrl, preservedState) {
 
   playBtn.addEventListener("click", async () => {
     if (audio.paused) {
-      const allAudios = messagesAreaEl.querySelectorAll(".msg-audio-native");
+      const allAudios = document.querySelectorAll(".msg-audio-native");
       allAudios.forEach((item) => {
         if (item !== audio) {
           item.pause();
@@ -5327,6 +5367,7 @@ async function sendMediaFile(file) {
   }
 
   try {
+    validateUploadFileSize(file);
     const dataUrl = await fileToDataUrl(file);
     await api("/messages/send-media", {
       method: "POST",
@@ -6111,6 +6152,280 @@ function renderMessages(messages) {
   } else if (previousScrollHeight > 0) {
     const nextScrollTop = Math.max(0, messagesAreaEl.scrollHeight - messagesAreaEl.clientHeight - distanceFromBottom);
     messagesAreaEl.scrollTop = Number.isFinite(nextScrollTop) ? nextScrollTop : previousScrollTop;
+  }
+}
+
+function renderInternalChatContacts() {
+  if (!internalChatContactsListEl) return;
+  const contacts = Array.isArray(state.internalChatContacts) ? state.internalChatContacts : [];
+  internalChatContactsListEl.innerHTML = "";
+
+  if (state.internalChatLoading) {
+    internalChatContactsListEl.innerHTML = '<div class="empty-state">Carregando atendentes...</div>';
+    return;
+  }
+
+  if (!contacts.length) {
+    internalChatContactsListEl.innerHTML = '<div class="empty-state">Nenhum outro atendente cadastrado nesta empresa.</div>';
+    return;
+  }
+
+  for (const contact of contacts) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `internal-contact-item${contact.thread_id === state.selectedInternalThreadId ? " active" : ""}`;
+    const initials = String(contact.name || contact.username || "?")
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || "")
+      .join("") || "?";
+    const metaParts = [contact.sector_name, contact.role].filter(Boolean);
+    const preview = String(contact.last_message_preview || "").trim() || "Clique para conversar internamente";
+    item.innerHTML = `
+      <span class="internal-contact-avatar">${escapeHtml(initials)}</span>
+      <span class="internal-contact-main">
+        <strong>${escapeHtml(contact.name || contact.username || "Atendente")}</strong>
+        <small>${escapeHtml(metaParts.join(" · ") || contact.username || "Atendente")}</small>
+        <em>${escapeHtml(preview)}</em>
+      </span>
+      <span class="internal-contact-time">${escapeHtml(fmtTime(contact.last_message_at || ""))}</span>
+    `;
+    item.addEventListener("click", () => selectInternalContact(contact.user_id).catch((error) => console.error(error)));
+    internalChatContactsListEl.appendChild(item);
+  }
+}
+
+function renderInternalUnreadBadge() {
+  if (!railInternalChatEl) return;
+  let badge = railInternalChatEl.querySelector(".rail-badge");
+  const count = Number(state.internalUnreadCount || 0);
+  if (count <= 0) {
+    badge?.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "rail-badge";
+    railInternalChatEl.appendChild(badge);
+  }
+  badge.textContent = count > 99 ? "99+" : String(count);
+}
+
+async function loadInternalUnreadSummary() {
+  if (!state.isAuthenticated) return;
+  const data = await api("/internal-chat/unread-summary");
+  state.internalUnreadCount = Number(data?.unread_count || 0);
+  renderInternalUnreadBadge();
+}
+
+function renderInternalChatHeader() {
+  if (!internalChatRoomHeaderEl || !internalMessageInputEl || !internalSendBtnEl) return;
+  const contact = state.selectedInternalContact;
+  if (!contact) {
+    internalChatRoomHeaderEl.innerHTML = `
+      <div>
+        <strong>Selecione um atendente</strong>
+        <span>As mensagens ficam somente dentro da empresa.</span>
+      </div>
+    `;
+    internalMessageInputEl.disabled = true;
+    internalSendBtnEl.disabled = true;
+    if (internalAudioBtnEl) internalAudioBtnEl.disabled = true;
+    return;
+  }
+
+  internalChatRoomHeaderEl.innerHTML = `
+    <div class="internal-chat-peer">
+      <span class="internal-contact-avatar small">${escapeHtml(
+        String(contact.name || contact.username || "?")
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((part) => part[0]?.toUpperCase() || "")
+          .join("") || "?",
+      )}</span>
+      <div>
+        <strong>${escapeHtml(contact.name || contact.username || "Atendente")}</strong>
+        <span>${escapeHtml([contact.sector_name, contact.role].filter(Boolean).join(" · ") || "Chat interno")}</span>
+      </div>
+    </div>
+  `;
+  internalMessageInputEl.disabled = false;
+  internalSendBtnEl.disabled = false;
+  if (internalAudioBtnEl) internalAudioBtnEl.disabled = false;
+}
+
+function renderInternalMessages() {
+  if (!internalMessagesAreaEl) return;
+  internalMessagesAreaEl.innerHTML = "";
+
+  if (!state.selectedInternalContact) {
+    internalMessagesAreaEl.innerHTML = '<div class="empty-state">Escolha um atendente para iniciar uma conversa interna.</div>';
+    return;
+  }
+
+  const messages = Array.isArray(state.internalMessages) ? state.internalMessages : [];
+  if (!messages.length) {
+    internalMessagesAreaEl.innerHTML = '<div class="empty-state">Nenhuma mensagem interna ainda. Envie a primeira.</div>';
+    return;
+  }
+
+  let lastDateKey = "";
+  for (const message of getOrderedMessages(messages)) {
+    const normalized = {
+      ...message,
+      from_me: String(message.sender_user_id || "") === String(state.currentUser?.id || ""),
+      body: message.body || "",
+      sent_at: message.created_at,
+      metadata: message.metadata || {},
+    };
+    const messageDateKey = getMessageDateKey(normalized);
+    if (messageDateKey && messageDateKey !== lastDateKey) {
+      lastDateKey = messageDateKey;
+      internalMessagesAreaEl.appendChild(createMessageDateDivider(normalized));
+    }
+    internalMessagesAreaEl.appendChild(createMessageRow(normalized));
+  }
+  internalMessagesAreaEl.scrollTop = internalMessagesAreaEl.scrollHeight;
+  loadInternalUnreadSummary().catch((error) => console.error(error));
+}
+
+async function loadInternalChatContacts(options = {}) {
+  if (!internalChatContactsListEl) return;
+  const showLoading = options.showLoading !== false;
+  if (showLoading) {
+    state.internalChatLoading = true;
+    renderInternalChatContacts();
+  }
+  try {
+    const data = await api("/internal-chat/contacts");
+    state.internalChatContacts = Array.isArray(data.items) ? data.items : [];
+    if (state.selectedInternalThreadId) {
+      state.selectedInternalContact =
+        state.internalChatContacts.find((contact) => contact.thread_id === state.selectedInternalThreadId) || state.selectedInternalContact;
+    }
+  } finally {
+    if (showLoading) {
+      state.internalChatLoading = false;
+    }
+    renderInternalChatContacts();
+    renderInternalChatHeader();
+  }
+}
+
+async function selectInternalContact(userId) {
+  const contact = state.internalChatContacts.find((item) => item.user_id === userId);
+  if (!contact) return;
+  state.selectedInternalContact = contact;
+  const data = await api(`/internal-chat/threads/with/${encodeURIComponent(userId)}`, { method: "POST" });
+  state.selectedInternalThreadId = data.thread?.id || contact.thread_id || "";
+  state.selectedInternalContact = { ...contact, thread_id: state.selectedInternalThreadId };
+  renderInternalChatContacts();
+  renderInternalChatHeader();
+  await loadInternalMessages();
+  internalMessageInputEl?.focus();
+}
+
+async function loadInternalMessages() {
+  if (!state.selectedInternalThreadId) {
+    state.internalMessages = [];
+    renderInternalMessages();
+    return;
+  }
+  const data = await api(`/internal-chat/threads/${encodeURIComponent(state.selectedInternalThreadId)}/messages?limit=120`);
+  state.internalMessages = Array.isArray(data.items) ? data.items : [];
+  renderInternalMessages();
+}
+
+async function sendInternalMessage(body) {
+  const message = String(body || "").trim();
+  if (!message || !state.selectedInternalThreadId) return;
+  const data = await api(`/internal-chat/threads/${encodeURIComponent(state.selectedInternalThreadId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ body: message }),
+  });
+  if (data.message) {
+    state.internalMessages = [...(state.internalMessages || []), data.message];
+    renderInternalMessages();
+    await loadInternalChatContacts({ showLoading: false }).catch((error) => console.error(error));
+    await loadInternalUnreadSummary().catch((error) => console.error(error));
+  }
+}
+
+function resetInternalAudioButton() {
+  if (!internalAudioBtnEl) return;
+  internalAudioBtnEl.classList.remove("recording");
+  internalAudioBtnEl.innerHTML = '<i class="bi bi-mic-fill"></i>';
+  internalAudioBtnEl.title = "Gravar audio";
+  internalAudioBtnEl.disabled = !state.selectedInternalThreadId;
+}
+
+function stopInternalAudioTracks() {
+  if (internalAudioStream) {
+    internalAudioStream.getTracks().forEach((track) => track.stop());
+    internalAudioStream = null;
+  }
+}
+
+async function startInternalAudioRecording() {
+  if (!state.selectedInternalThreadId || !internalAudioBtnEl) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    await showAlert("Este navegador nao liberou gravacao de audio.");
+    return;
+  }
+  internalAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  internalAudioChunks = [];
+  internalAudioRecorder = new MediaRecorder(internalAudioStream);
+  internalAudioRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      internalAudioChunks.push(event.data);
+    }
+  };
+  internalAudioRecorder.onstop = () => {
+    const mimeType = internalAudioRecorder?.mimeType || "audio/webm";
+    const blob = new Blob(internalAudioChunks, { type: mimeType });
+    internalAudioChunks = [];
+    stopInternalAudioTracks();
+    resetInternalAudioButton();
+    if (blob.size > 0) {
+      sendInternalAudioBlob(blob, mimeType).catch((error) => {
+        console.error(error);
+        showAlert(error.message || "Falha ao enviar audio interno.").catch(() => undefined);
+      });
+    }
+  };
+  internalAudioRecorder.start();
+  internalAudioBtnEl.classList.add("recording");
+  internalAudioBtnEl.innerHTML = '<i class="bi bi-stop-fill"></i>';
+  internalAudioBtnEl.title = "Parar e enviar audio";
+}
+
+function stopInternalAudioRecording() {
+  if (internalAudioRecorder && internalAudioRecorder.state === "recording") {
+    internalAudioRecorder.stop();
+    return true;
+  }
+  return false;
+}
+
+async function sendInternalAudioBlob(blob, mimeType = "audio/webm") {
+  if (!blob || !state.selectedInternalThreadId) return;
+  const extension = String(mimeType || "").includes("ogg") ? "ogg" : String(mimeType || "").includes("mp4") ? "m4a" : "webm";
+  const audioBase64 = await fileToDataUrl(new File([blob], `audio-interno.${extension}`, { type: mimeType }));
+  const data = await api(`/internal-chat/threads/${encodeURIComponent(state.selectedInternalThreadId)}/audio`, {
+    method: "POST",
+    body: JSON.stringify({
+      audio_base64: audioBase64,
+      mimetype: mimeType,
+      file_name: `audio-interno.${extension}`,
+    }),
+  });
+  if (data.message) {
+    state.internalMessages = [...(state.internalMessages || []), data.message];
+    renderInternalMessages();
+    await loadInternalChatContacts({ showLoading: false }).catch((error) => console.error(error));
+    await loadInternalUnreadSummary().catch((error) => console.error(error));
   }
 }
 
@@ -7100,19 +7415,33 @@ async function refreshHealth() {
 
 async function handleLoginSubmit(event) {
   event.preventDefault();
+  if (loginErrorEl) {
+    loginErrorEl.hidden = true;
+    loginErrorEl.textContent = "";
+  }
   const username = String(loginUsernameEl.value || "").trim();
   const password = String(loginPasswordEl.value || "").trim();
   if (!username || !password) {
-    await showAlert("Informe usuário e senha.");
+    const message = "Informe usuário e senha.";
+    if (loginErrorEl) {
+      loginErrorEl.textContent = message;
+      loginErrorEl.hidden = false;
+    }
+    await showAlert(message);
     return;
   }
 
   loginSubmitBtnEl.disabled = true;
   loginSubmitBtnEl.textContent = "Entrando...";
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), 15000)
+    : null;
   try {
     const result = await api("/auth/login", {
       method: "POST",
       skipAuthRedirect: true,
+      signal: controller?.signal,
       body: JSON.stringify({ username, password }),
     });
 
@@ -7138,8 +7467,17 @@ async function handleLoginSubmit(event) {
       }
     });
   } catch (error) {
-    await showAlert(error.message || "Falha no login.");
+    const isAbort = error?.name === "AbortError";
+    const message = isAbort
+      ? "Tempo esgotado ao tentar entrar. Verifique a conexão e tente novamente."
+      : error.message || "Falha no login.";
+    if (loginErrorEl) {
+      loginErrorEl.textContent = message;
+      loginErrorEl.hidden = false;
+    }
+    showAlert(message).catch(() => undefined);
   } finally {
+    if (timeoutId) clearTimeout(timeoutId);
     loginSubmitBtnEl.disabled = false;
     loginSubmitBtnEl.textContent = "Entrar";
   }
@@ -7284,6 +7622,7 @@ messageInputEl.addEventListener("focus", async () => {
 });
 
 railChatsEl.addEventListener("click", () => switchView("chats"));
+railInternalChatEl?.addEventListener("click", () => switchView("internal-chat"));
 railBulkCreateEl.addEventListener("click", () => switchView("bulk-create"));
 railBulkMonitorEl.addEventListener("click", () => switchView("bulk-monitor"));
 railAgentEl.addEventListener("click", () => switchView("agent"));
@@ -7331,6 +7670,41 @@ settingsUsersListEl.addEventListener("click", async (event) => {
   }
   if (action === "delete-user") {
     await handleDeleteUser(userId);
+  }
+});
+
+internalChatRefreshBtnEl?.addEventListener("click", () => {
+  loadInternalChatContacts()
+    .then(() => loadInternalMessages())
+    .then(() => loadInternalUnreadSummary())
+    .catch((error) => console.error(error));
+});
+
+internalChatFormEl?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = String(internalMessageInputEl?.value || "").trim();
+  if (!message) return;
+  if (internalMessageInputEl) {
+    internalMessageInputEl.value = "";
+  }
+  try {
+    await sendInternalMessage(message);
+  } catch (error) {
+    if (internalMessageInputEl) {
+      internalMessageInputEl.value = message;
+    }
+    await showAlert(error.message || "Falha ao enviar mensagem interna.");
+  }
+});
+
+internalAudioBtnEl?.addEventListener("click", async () => {
+  if (stopInternalAudioRecording()) return;
+  try {
+    await startInternalAudioRecording();
+  } catch (error) {
+    stopInternalAudioTracks();
+    resetInternalAudioButton();
+    await showAlert(error.message || "Nao foi possivel gravar o audio interno.");
   }
 });
 settingsAdminUsersListEl?.addEventListener("click", async (event) => {
@@ -7739,6 +8113,7 @@ companyMediaFormEl?.addEventListener("submit", async (event) => {
         }),
       });
     } else {
+      validateUploadFileSize(file);
       const form = new FormData();
       form.append("title", title);
       form.append("description", description);
@@ -8756,6 +9131,7 @@ async function boot() {
     await loadAgents();
     await refreshHealth();
     await loadConversations();
+    await loadInternalUnreadSummary().catch((error) => console.error(error));
   }
 
   if (!healthTimer) {
@@ -8770,6 +9146,15 @@ async function boot() {
         loadBulkJobs().catch((error) => console.error(error));
       }
     }, 3000);
+  }
+  if (!internalChatTimer) {
+    internalChatTimer = setInterval(() => {
+      if (!state.isAuthenticated) return;
+      loadInternalUnreadSummary().catch((error) => console.error(error));
+      if (state.currentView === "internal-chat" && state.selectedInternalThreadId) {
+        loadInternalMessages().catch((error) => console.error(error));
+      }
+    }, 5000);
   }
 }
 

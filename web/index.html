@@ -21,6 +21,7 @@
             Senha
             <input id="loginPassword" type="password" autocomplete="current-password" required />
           </label>
+          <div id="loginError" class="login-error" role="alert" hidden></div>
           <button id="loginSubmitBtn" type="submit" class="btn-primary">Entrar</button>
         </form>
       </div>
@@ -115,6 +116,9 @@
           </button>
         </div>
         <div class="rail-bottom">
+          <button id="railInternalChat" class="rail-icon" type="button" title="Chat interno">
+            <i class="bi bi-people-fill"></i>
+          </button>
           <button id="settingsBtn" class="rail-icon" type="button" title="Configurações">
             <i class="bi bi-gear-fill"></i>
           </button>
@@ -225,6 +229,56 @@
               </div>
             </form>
           </footer>
+        </div>
+
+        <div id="internalChatView" class="view view-internal-chat">
+          <header class="chat-header">
+            <div class="chat-contact">
+              <div class="internal-chat-title">
+                <span class="internal-chat-title-icon"><i class="bi bi-people-fill"></i></span>
+                <div>
+                  <strong>Chat interno</strong>
+                  <small>Comunicação entre atendentes da empresa</small>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <section class="internal-chat-shell">
+            <aside class="internal-chat-contacts">
+              <div class="internal-chat-contacts-head">
+                <strong>Atendentes</strong>
+                <button id="internalChatRefreshBtn" type="button" class="btn-secondary">
+                  <i class="bi bi-arrow-clockwise"></i>
+                  Atualizar
+                </button>
+              </div>
+              <div id="internalChatContactsList" class="internal-chat-contacts-list">
+                <div class="empty-state">Carregando atendentes...</div>
+              </div>
+            </aside>
+
+            <section class="internal-chat-room">
+              <div id="internalChatRoomHeader" class="internal-chat-room-header">
+                <div>
+                  <strong>Selecione um atendente</strong>
+                  <span>As mensagens ficam somente dentro da empresa.</span>
+                </div>
+              </div>
+              <div id="internalMessagesArea" class="messages-area internal-messages-area">
+                <div class="empty-state">Escolha um atendente para iniciar uma conversa interna.</div>
+              </div>
+              <form id="internalChatForm" class="internal-chat-composer">
+                <input id="internalMessageInput" type="text" placeholder="Digite uma mensagem interna" autocomplete="off" disabled />
+                <button id="internalAudioBtn" type="button" class="composer-action internal-audio-btn" disabled title="Gravar audio">
+                  <i class="bi bi-mic-fill"></i>
+                </button>
+                <button id="internalSendBtn" type="submit" class="composer-action" disabled>
+                  <i class="bi bi-send-fill"></i>
+                </button>
+              </form>
+            </section>
+          </section>
         </div>
 
         <div id="bulkCreateView" class="view view-bulk">

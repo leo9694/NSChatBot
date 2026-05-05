@@ -91,6 +91,9 @@ router.post("/", upload.single("file"), async (req, res) => {
 
     return res.status(201).json({ status: "ok", asset });
   } catch (error) {
+    if ((error as any)?.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "Arquivo muito grande. Envie arquivos de ate 40 MB." });
+    }
     return res.status(400).json({
       error: error instanceof Error ? error.message : "Falha ao cadastrar midia.",
     });
