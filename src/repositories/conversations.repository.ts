@@ -707,6 +707,43 @@ export async function finalizeInactiveAiConversations(hoursWithoutReply = 24): P
   return Number(result.rowCount || 0);
 }
 
+export async function finalizeInactiveAssignedConversations(hoursWithoutReply = 24): Promise<number> {
+  await ensureConversationWorkflowSchema();
+  const result = await pool.query(
+    `
+    WITH stale AS (
+      SELECT c.id
+      FROM conversations c
+      JOIN LATERAL (
+        SELECT
+          m.from_me,
+          COALESCE(m.sent_at, m.created_at) AS last_message_at
+        FROM messages m
+        WHERE m.conversation_id = c.id
+          AND m.message_type <> 'protocolMessage'
+        ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.created_at DESC
+        LIMIT 1
+      ) lm ON true
+      WHERE c.service_status = 'in_progress'
+        AND c.assigned_user_id IS NOT NULL
+        AND lm.from_me = true
+        AND lm.last_message_at <= NOW() - ($1::int * INTERVAL '1 hour')
+    )
+    UPDATE conversations c
+    SET
+      service_status = 'finalized',
+      assigned_user_id = NULL,
+      finalized_at = NOW(),
+      updated_at = NOW()
+    FROM stale
+    WHERE c.id = stale.id
+    `,
+    [Math.max(1, Number(hoursWithoutReply || 24))],
+  );
+
+  return Number(result.rowCount || 0);
+}
+
 export async function getConversationAccess(conversationId: string): Promise<{
   id: string;
   service_status: "pending" | "in_progress" | "finalized";
